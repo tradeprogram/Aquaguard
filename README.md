@@ -373,25 +373,26 @@ api_server.py                  # FastAPI, 전 모듈 import
 
 ---
 
-## 10. 팀 & 역할 (3인, 독립 개발)
+## 10. 팀 & 역할 (4인, 2026-08-27 개편)
 
 | 트랙 | 담당 | 소유 모듈 | 핵심 산출물 |
 |------|------|-----------|-------------|
 | ① 예측모델·위성 | 김민석 | A, B | 데이터 파이프라인(6~9월), `f(dNBR,Δt)`, LDAPS 편차보정, 신뢰구간 |
-| ② 대응로직·데이터통합 | 나정우 | C, D, E, G, H | 벡터데이터, 위험가중 A* 라우팅, 피해비용, 시민 역검증 |
-| ③ 오케스트레이션·UI·3D | 하수범 | O, UI, UI-3D | 상태머신·원클릭승인, 대시보드, deck.gl+V-World 3D, What-if 시뮬레이터, 산청 데모 |
+| ② 대응로직·데이터통합 | 나정우 | C, D, G, H | 도로침수 규칙엔진, 노출자산 오버레이, 피해비용, 시민 역검증 (Module E는 ④로 이관) |
+| ③ 오케스트레이션·UI·3D | 하수범 | O, UI, UI-3D | 상태머신·원클릭승인, 대시보드, MapLibre+VWorld 3D 지도(건물/도로/교량 실데이터, 토사·침수 시뮬레이터) — **대부분 완성**, 이후 통합·데모 총괄 |
+| ④ 대피경로·고립분석 (신규) | 동현 | E (확장판) | 네이버/카카오 길찾기로 대피소 도달가능성, 도로망 그래프 기반 고립마을 자동탐지 — **독창성 축 4** |
 
-담당자가 바뀌어도 이 표와 §5~6 계약만 유지되면 재구성 가능.
+담당자가 바뀌어도 이 표와 §5~6(+ [HANDOFF.md](HANDOFF.md) §6·§7) 계약만 유지되면 재구성 가능. **Module E가 트랙②→④로 이관된 이유**: 네이버/카카오 API 연동 + 그래프 분석이 더해지면서 독립 서브시스템 규모로 커졌기 때문(상세: [HANDOFF.md §6·§7](HANDOFF.md)).
 
-## 11. 2주 로드맵
+## 11. 2주 로드맵 (4인 체제 갱신판)
 
-| 구간 | ① 예측모델 | ② 대응로직 | ③ 오케스트레이션/UI |
-|------|-----------|-----------|---------------------|
-| Day 1 | 3인 §5~6 리뷰, `contracts/` 확정·커밋 → 각자 착수 | 〃 | 〃 |
-| Day 2-5 | 500m/1.5km/10m 파이프라인, Module A 베이스라인(목업 InSAR) | Module C 규칙엔진, Module D(A/B example.json 입력), Module H 뼈대 | Next.js 스캐폴딩 + module_o.example.json으로 대시보드 뼈대, V-World API 연동 테스트 |
-| Day 6-9 | A/B 실데이터 학습·검증, 신뢰구간 산출·공유 | 실제 A/B output으로 D/E/G 전환, Module H를 precursor_flag와 실연동 | 실제 output 연동, 3D 레이어 구현, 원클릭 승인 화면 프로토타입 |
-| Day 10-12 | 산청 백테스트로 `golden_time_saved_min` 산출 | 산청 대피소/경로 실사례 검증 | 시간슬라이더·What-if 완성, `api_server.py` 통합, 버그픽스 |
-| Day 13-14 | 전원: 발표자료·기획서, 최종 리허설, 예상 질의응답 준비 | 〃 | 〃 |
+| 구간 | ① 예측모델(김민석) | ② 대응로직(나정우) | ③ 오케스트레이션/UI(하수범) | ④ 대피경로·고립분석(동현) |
+|------|-----------|-----------|---------------------|---------------------|
+| Day 1 | 넷이 §5~6(+§6·§7 HANDOFF) 리뷰, `contracts/` 확정 → 각자 착수 | 〃 | 〃 | 〃 + 카카오/네이버 API 키 본인 발급 |
+| Day 2-5 | 500m/1.5km/10m 파이프라인, Module A 베이스라인(목업 InSAR) | Module C 규칙엔진, Module D(A/B example.json 입력), Module H 뼈대 | Module O mock→real 스위치 점검, UI 안정화, 트랙 지원 | 대피경로 뼈대(손 대피소 후보 + 직선거리 근사) → 키 받으면 실연동 |
+| Day 6-9 | A/B 실데이터 학습·검증, 신뢰구간 산출·공유 | 실제 A/B output으로 D 전환, Module H를 precursor_flag와 실연동 | 트랙①②④ output 순차 실연동, 통합 테스트 | 고립마을 자동탐지(`networkx`, 기존 `/vworld/roads` 재사용) |
+| Day 10-12 | 산청 백테스트로 `golden_time_saved_min` 산출 | 산청 대피소/경로 실사례 검증 | §9 데모 풀 리허설, 3D 지도 폴리싱, `api_server.py` 최종 통합 | 대피경로·고립탐지 UI를 Module O/3D 지도에 연결(하수범과 Day 10 전후 협업) |
+| Day 13-14 | 전원: 발표자료·기획서, 최종 리허설, 예상 질의응답 준비 | 〃 | 〃 | 〃 |
 
 ## 12. 남은 TODO
 
@@ -411,11 +412,12 @@ api_server.py                  # FastAPI, 전 모듈 import
 
 각 트랙 담당자는 아래 문구를 그대로 복붙해서 각자 세션에 붙여넣을 것 (전문은 [ARCHITECTURE.md §13](ARCHITECTURE.md)):
 
-> 이 저장소의 README.md(또는 ARCHITECTURE.md)를 읽어라 — 배경(재해연쇄+골든타임 격차, 산청 사건)부터 반드시 이해한 뒤 §5~6(통합 규약·모듈 계약)으로 넘어가라. 다른 트랙의 내부 구현은 몰라도 된다 — 오직 `contracts/`의 example.json/schema.json이 네 모듈의 입출력 계약 전부다. Day 1엔 나머지 두 세션과 함께 `contracts/`를 먼저 확정하라.
+> 이 저장소의 README.md(또는 ARCHITECTURE.md)를 읽어라 — 배경(재해연쇄+골든타임 격차, 산청 사건)부터 반드시 이해한 뒤 §5~6(통합 규약·모듈 계약)으로 넘어가라. 다른 트랙의 내부 구현은 몰라도 된다 — 오직 `contracts/`의 example.json/schema.json이 네 모듈의 입출력 계약 전부다. Day 1엔 나머지 세 세션과 함께 `contracts/`를 먼저 확정하라.
 
 - **트랙①**: `module_a_landslide`, `module_b_flood`
-- **트랙②**: `module_c_urban_rule`, `module_d_exposure_overlay`, `module_e_routing`, `module_g_damage_cost`, `module_h_citizen_verification` — D/E/G/H는 `contracts/module_a.example.json`, `module_b.example.json`을 목업 삼아 트랙①을 기다리지 않고 개발
-- **트랙③**: `module_o_orchestrator`, `ui/`(대시보드+채팅+원클릭승인+3D) — A~H를 전부 `contracts/`의 example.json으로 목업 호출하는 파이프라인부터 굴려보고 실제 모듈로 하나씩 교체
+- **트랙②**: `module_c_urban_rule`, `module_d_exposure_overlay`, `module_g_damage_cost`, `module_h_citizen_verification` — D/G/H는 `contracts/module_a.example.json`, `module_b.example.json`을 목업 삼아 트랙①을 기다리지 않고 개발. **`module_e_routing`은 더 이상 이 트랙 소유가 아님 — 트랙④ 참조.**
+- **트랙③**: `module_o_orchestrator`, `ui/`(대시보드+채팅+원클릭승인+3D) — **대부분 이미 완성돼 있음**, 먼저 읽고 실행해볼 것. A~H를 전부 `contracts/`의 example.json으로 목업 호출하는 파이프라인부터 굴려보고 실제 모듈로 하나씩 교체
+- **트랙④ (신규)**: `module_e_routing`(확장판) — 네이버/카카오 길찾기 API로 대피 경로, 도로망 그래프로 고립마을 자동탐지. 상세 명세는 **[HANDOFF.md §6·§7](HANDOFF.md)을 그대로 따를 것** — 외부 API 키는 본인이 직접 발급받아야 함(계정 생성은 Claude Code가 대신 못 함)
 
 ---
 
