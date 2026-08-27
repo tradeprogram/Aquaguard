@@ -238,11 +238,17 @@ export default function Map3DPage() {
       }
 
       const updateBoundaries = () => {
-        const b = map.getBounds();
+        // HMR(핫 리로드)로 컴포넌트가 재마운트되면 이 setTimeout 콜백은 이미 정리된
+        // 옛 map 클로저를 참조할 수 있다 — 매번 mapRef.current로 살아있는 지도를 다시 읽는다.
+        const currentMap = mapRef.current;
+        if (!currentMap) return;
+        const b = currentMap.getBounds();
         getBoundaries([b.getWest(), b.getSouth(), b.getEast(), b.getNorth()])
           .then((byLevel) => {
+            const liveMap = mapRef.current;
+            if (!liveMap) return;
             for (const level of ["sido", "sigungu", "dong"] as AdminLevel[]) {
-              const source = map.getSource(`adm-${level}`) as GeoJSONSource | undefined;
+              const source = liveMap.getSource(`adm-${level}`) as GeoJSONSource | undefined;
               source?.setData(byLevel[level]);
             }
           })
@@ -276,7 +282,9 @@ export default function Map3DPage() {
       const seenBridgeIds = new Set<string | number>();
       const bridgeFeatures: Feature<Polygon | MultiPolygon>[] = [];
       const updateBridges = () => {
-        const raw = map.querySourceFeatures("osm_vectors", {
+        const currentMap = mapRef.current;
+        if (!currentMap) return;
+        const raw = currentMap.querySourceFeatures("osm_vectors", {
           sourceLayer: "transportation",
           filter: ["==", ["get", "brunnel"], "bridge"],
         }) as unknown as Feature<LineString>[];
@@ -295,7 +303,7 @@ export default function Map3DPage() {
           }
         }
 
-        const source = map.getSource("bridges") as GeoJSONSource | undefined;
+        const source = currentMap.getSource("bridges") as GeoJSONSource | undefined;
         source?.setData({
           type: "FeatureCollection",
           features: bridgeFeatures,
