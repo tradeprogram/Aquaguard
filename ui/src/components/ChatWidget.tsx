@@ -46,7 +46,7 @@ export default function ChatWidget() {
   return (
     <div className="fixed bottom-6 right-6 z-50 flex flex-col items-end gap-3">
       {open && (
-        <div className="flex h-[36rem] max-h-[85vh] w-[30rem] max-w-[90vw] flex-col overflow-hidden rounded-2xl border border-white/10 bg-slate-900/40 shadow-2xl backdrop-blur-xl">
+        <div className="flex h-[43.2rem] max-h-[85vh] w-[30rem] max-w-[90vw] flex-col overflow-hidden rounded-2xl border border-white/10 bg-slate-900/40 shadow-2xl backdrop-blur-xl">
           <div className="flex items-center justify-between border-b border-white/10 bg-slate-950/30 px-4 py-3 backdrop-blur-xl">
             <span className="text-base font-semibold text-sky-300">Aqua Guard.AI</span>
             <button
