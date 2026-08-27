@@ -1,10 +1,12 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Map as MapLibreMap, NavigationControl, type StyleSpecification } from "maplibre-gl";
+import { Map as MapLibreMap, NavigationControl, type GeoJSONSource, type StyleSpecification } from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import { GeoJsonLayer } from "@deck.gl/layers";
 import { MapboxOverlay } from "@deck.gl/mapbox";
+import buffer from "@turf/buffer";
+import type { Feature, FeatureCollection, LineString, Polygon, MultiPolygon } from "geojson";
 import { API_BASE, SANGCHEONG_DEMO_INPUT, getAlertGeojson, getAoi, triggerAlert } from "@/lib/api";
 import type { ModuleOEnvelope } from "@/lib/types";
 
@@ -39,9 +41,9 @@ const MAP_STYLE: StyleSpecification = {
       tileSize: 256,
       maxzoom: 19,
     },
-    // OSM 건물 폴리곤(OpenMapTiles 스키마, render_height/render_min_height 필드 보유) —
-    // 무료·키 불필요(OpenFreeMap). 프로덕션에서는 §2.6 건축물대장으로 교체.
-    buildings: {
+    // OSM 벡터(OpenMapTiles 스키마: building/transportation 등) — 무료·키 불필요(OpenFreeMap).
+    // 프로덕션에서는 §2.6 건축물대장·§2.6 도로망 표준노드링크로 교체.
+    osm_vectors: {
       type: "vector",
       url: "https://tiles.openfreemap.org/planet",
     },
@@ -49,10 +51,62 @@ const MAP_STYLE: StyleSpecification = {
   layers: [
     { id: "satellite", type: "raster", source: "satellite" },
     { id: "labels", type: "raster", source: "labels" },
+    // 도로 케이싱(어두운 밑깔개) — 위에 밝은 선을 얹으면 도로가 도드라져 보이는 카토그래피 기법
+    {
+      id: "roads-casing",
+      type: "line",
+      source: "osm_vectors",
+      "source-layer": "transportation",
+      minzoom: 11,
+      filter: ["!=", ["get", "brunnel"], "tunnel"],
+      layout: { "line-cap": "round", "line-join": "round" },
+      paint: {
+        "line-color": "#1e293b",
+        "line-width": [
+          "interpolate", ["linear"], ["zoom"],
+          11, ["match", ["get", "class"], ["motorway", "trunk"], 2, ["primary", "secondary"], 1.4, 0.8],
+          16, ["match", ["get", "class"], ["motorway", "trunk"], 9, ["primary", "secondary"], 6, ["tertiary", "minor"], 4, 2.5],
+        ],
+      },
+    },
+    {
+      id: "roads",
+      type: "line",
+      source: "osm_vectors",
+      "source-layer": "transportation",
+      minzoom: 11,
+      filter: ["!=", ["get", "brunnel"], "tunnel"],
+      layout: { "line-cap": "round", "line-join": "round" },
+      paint: {
+        "line-color": [
+          "match", ["get", "class"],
+          ["motorway", "trunk"], "#f59e0b",
+          ["primary", "secondary"], "#fde68a",
+          ["tertiary", "minor", "service"], "#e2e8f0",
+          "#cbd5e1",
+        ],
+        "line-width": [
+          "interpolate", ["linear"], ["zoom"],
+          11, ["match", ["get", "class"], ["motorway", "trunk"], 1.2, ["primary", "secondary"], 0.8, 0.4],
+          16, ["match", ["get", "class"], ["motorway", "trunk"], 6, ["primary", "secondary"], 4, ["tertiary", "minor"], 2.5, 1.2],
+        ],
+      },
+    },
+    // 터널: 점선 + 낮은 불투명도로 지하임을 표시
+    {
+      id: "roads-tunnel",
+      type: "line",
+      source: "osm_vectors",
+      "source-layer": "transportation",
+      minzoom: 11,
+      filter: ["==", ["get", "brunnel"], "tunnel"],
+      layout: { "line-cap": "round", "line-join": "round" },
+      paint: { "line-color": "#94a3b8", "line-dasharray": [2, 2], "line-width": 2, "line-opacity": 0.5 },
+    },
     {
       id: "buildings-3d",
       type: "fill-extrusion",
-      source: "buildings",
+      source: "osm_vectors",
       "source-layer": "building",
       minzoom: 13,
       paint: {
@@ -69,6 +123,11 @@ const MAP_STYLE: StyleSpecification = {
     },
   ],
 };
+
+const BRIDGE_DECK_HEIGHT_M = 8;
+const BRIDGE_DECK_BASE_M = 3;
+const BRIDGE_HALF_WIDTH_M = { motorway: 12, trunk: 10, primary: 8, secondary: 7 } as Record<string, number>;
+const DEFAULT_BRIDGE_HALF_WIDTH_M = 4;
 
 // 건물 압출은 AOI 한정이 아니라 전국(사실상 전세계) 벡터타일이라 아무 데서나 보인다 —
 // 건물 밀집지로 빠르게 이동해 확인할 수 있는 테스트 지점들
@@ -141,6 +200,57 @@ export default function Map3DPage() {
       });
       map.addLayer({ id: "hills", type: "hillshade", source: "terrain", paint: { "hillshade-exaggeration": 0.7 } });
       map.setTerrain({ source: "terrain", exaggeration: 1.3 });
+
+      // 교량(brunnel=='bridge')은 MapLibre line 레이어로는 지형 위에 그대로 드레이프될
+      // 뿐이라 실제로 "떠 있는" 느낌이 안 난다 — LineString을 폭만큼 버퍼링해 얇은
+      // 폴리곤으로 만들고 fill-extrusion으로 지면에서 띄워 올려 진짜 입체 교량 데크를 만든다.
+      map.addSource("bridges", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
+      map.addLayer({
+        id: "bridges-3d",
+        type: "fill-extrusion",
+        source: "bridges",
+        paint: {
+          "fill-extrusion-color": "#9ca3af",
+          "fill-extrusion-height": BRIDGE_DECK_HEIGHT_M,
+          "fill-extrusion-base": BRIDGE_DECK_BASE_M,
+          "fill-extrusion-opacity": 0.95,
+        },
+      });
+
+      const seenBridgeIds = new Set<string | number>();
+      const bridgeFeatures: Feature<Polygon | MultiPolygon>[] = [];
+      const updateBridges = () => {
+        const raw = map.querySourceFeatures("osm_vectors", {
+          sourceLayer: "transportation",
+          filter: ["==", ["get", "brunnel"], "bridge"],
+        }) as unknown as Feature<LineString>[];
+
+        for (const feat of raw) {
+          const key = feat.id ?? JSON.stringify(feat.geometry.coordinates);
+          if (seenBridgeIds.has(key)) continue;
+          seenBridgeIds.add(key);
+          const roadClass = (feat.properties?.class as string) ?? "";
+          const halfWidth = BRIDGE_HALF_WIDTH_M[roadClass] ?? DEFAULT_BRIDGE_HALF_WIDTH_M;
+          try {
+            const poly = buffer(feat, halfWidth, { units: "meters", steps: 4 });
+            if (poly) bridgeFeatures.push(poly);
+          } catch {
+            // 극단적으로 짧거나 기형인 geometry는 버퍼링이 실패할 수 있음 — 건너뜀
+          }
+        }
+
+        const source = map.getSource("bridges") as GeoJSONSource | undefined;
+        source?.setData({
+          type: "FeatureCollection",
+          features: bridgeFeatures,
+        } as FeatureCollection);
+      };
+
+      let idleTimer: ReturnType<typeof setTimeout> | undefined;
+      map.on("idle", () => {
+        clearTimeout(idleTimer);
+        idleTimer = setTimeout(updateBridges, 150);
+      });
 
       // interleaved:true는 deck.gl이 지형 depth와 맞물려 렌더링하도록 map.transform의
       // 내부 지형 API를 직접 읽는데, maplibre-gl v6(§AGENTS.md가 경고하는 대로 이전
@@ -304,8 +414,9 @@ export default function Map3DPage() {
             🖱 좌클릭 드래그: 이동 · 스크롤: 줌 · <span className="text-slate-300">우클릭(또는 Ctrl) 드래그: 회전/기울기</span>
           </p>
           <p className="mt-2 text-xs text-amber-300/70">
-            건물은 실제 높이(m)로 압출됨(OSM, 전국 적용). 산청 AOI는 산간마을이라 매핑이 드문드문
-            있음 — 프로덕션 전환 시 §2.6 건축물대장으로 교체 예정.
+            건물(실제 높이 압출)·도로망·교량(지면에서 띄운 데크)까지 전국 OSM 데이터로 입체화됨.
+            산청 AOI는 산간마을이라 매핑이 드문드문 있음 — 프로덕션 전환 시 §2.6 건축물대장/도로망
+            표준노드링크로 교체 예정.
           </p>
           <div className="mt-2 flex gap-1.5">
             {TEST_LOCATIONS.map((loc) => (

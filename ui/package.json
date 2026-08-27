@@ -12,6 +12,8 @@
     "@deck.gl/core": "^9.3.10",
     "@deck.gl/layers": "^9.3.10",
     "@deck.gl/mapbox": "^9.3.10",
+    "@turf/buffer": "^7.4.0",
+    "@turf/helpers": "^7.4.0",
     "maplibre-gl": "^5.24.0",
     "next": "16.3.3",
     "react": "19.2.8",
