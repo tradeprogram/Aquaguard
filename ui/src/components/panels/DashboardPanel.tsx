@@ -6,7 +6,22 @@ import type { ModuleOEnvelope } from "@/lib/types";
 import GoldenTimeCounter from "@/components/GoldenTimeCounter";
 import RiskCard from "@/components/RiskCard";
 
-export default function DashboardPanel({ onOpenApprove }: { onOpenApprove: () => void }) {
+// Module C(도로·지하차도 침수, 규칙기반 — 모델 아님)는 아직 Module O 파이프라인에
+// 연결 전이라 contracts/module_c.example.json(SC-UP-003, "위험")을 기준으로 손으로
+// 채워 넣은 예시 목록. alert_level ∈ 정상/주의/경계/위험(§5 Module C).
+const UNDERPASSES: { id: string; name: string; level: "정상" | "주의" | "경계" | "위험" }[] = [
+  { id: "SC-UP-003", name: "산청천 지하차도", level: "위험" },
+  { id: "SC-UP-011", name: "생비량로 지하차도", level: "주의" },
+  { id: "SC-RD-004", name: "경호강변 저지대 도로", level: "정상" },
+];
+const LEVEL_STYLE: Record<string, string> = {
+  정상: "bg-slate-800 text-slate-300",
+  주의: "bg-amber-900/60 text-amber-300",
+  경계: "bg-orange-900/60 text-orange-300",
+  위험: "bg-red-900/60 text-red-300",
+};
+
+export default function DashboardPanel() {
   const [envelope, setEnvelope] = useState<ModuleOEnvelope | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -64,19 +79,6 @@ export default function DashboardPanel({ onOpenApprove }: { onOpenApprove: () =>
 
           <GoldenTimeCounter data={data} />
 
-          <div className="flex items-center justify-between rounded-xl border border-white/10 bg-white/5 p-3">
-            <div>
-              <p className="text-xs text-slate-400">승인 상태 (원클릭 승인, §5 Module O)</p>
-              <p className="text-base font-semibold">{data.approval_status}</p>
-            </div>
-            <button
-              onClick={onOpenApprove}
-              className="rounded-lg border border-sky-700 px-3 py-1.5 text-xs text-sky-300 hover:bg-sky-950/50"
-            >
-              승인 화면으로 →
-            </button>
-          </div>
-
           <div className="grid grid-cols-1 gap-3">
             <RiskCard
               title="산사태 위험 (Module A)"
@@ -96,6 +98,32 @@ export default function DashboardPanel({ onOpenApprove }: { onOpenApprove: () =>
               confidenceInterval={alertPackage.flood.confidence_interval}
               hoursToCritical={alertPackage.flood.hours_to_critical}
             />
+          </div>
+
+          <div className="rounded-lg border border-dashed border-amber-800/40 bg-amber-950/10 p-3 text-[11px] text-amber-300/80">
+            🚧 Module C·D는 아직 Module O 파이프라인에 연결 전 — 아래는
+            contracts/module_c·d.example.json 기준 예시 데이터.
+          </div>
+
+          <div className="grid grid-cols-1 gap-3">
+            <div className="rounded-xl border border-white/10 bg-white/5 p-3">
+              <p className="text-xs text-slate-400">도로·지하차도 침수 (Module C, 규칙기반)</p>
+              <div className="mt-2 space-y-1.5">
+                {UNDERPASSES.map((u) => (
+                  <div key={u.id} className="flex items-center justify-between text-xs">
+                    <span className="text-slate-300">{u.name}</span>
+                    <span className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${LEVEL_STYLE[u.level]}`}>
+                      {u.level}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+            <div className="rounded-xl border border-white/10 bg-white/5 p-3">
+              <p className="text-xs text-slate-400">노출자산 (Module D)</p>
+              <p className="mt-1 text-base font-semibold">건물 3채 노출 · 농경지 4.2ha</p>
+              <p className="text-[11px] text-slate-500">주거 2 · 상가 1 — risk_prob 45~78%</p>
+            </div>
           </div>
 
           <div className="grid grid-cols-1 gap-3">

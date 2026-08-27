@@ -4,20 +4,27 @@ import { useState } from "react";
 import MapExplorer from "@/components/MapExplorer";
 import GlassPanel from "@/components/GlassPanel";
 import DashboardPanel from "@/components/panels/DashboardPanel";
-import ApprovePanel from "@/components/panels/ApprovePanel";
+import EvacuationPanel from "@/components/panels/EvacuationPanel";
+import IsolationPanel from "@/components/panels/IsolationPanel";
 import WhatifPanel from "@/components/panels/WhatifPanel";
 
-type PanelKey = "dashboard" | "approve" | "whatif";
+type PanelKey = "dashboard" | "evacuation" | "isolation" | "whatif";
 
+// 원클릭 승인(§5 Module O)은 지자체 담당자용 워크플로우라 시민 배포 화면에서는 뺐다
+// (코드/라우트는 /approve에 그대로 남아있음 — 관 쪽 UI가 따로 필요해지면 재사용).
+// 대신 이번에 늘어난 모듈(C/D는 대시보드 안에, E 확장·독창성 축4는 새 메뉴)을 죄다
+// 노출시켜서 프로토타입만 보고도 전체 기능 범위가 감이 오게 했다.
 const MENU: { key: PanelKey; label: string }[] = [
   { key: "dashboard", label: "대시보드" },
-  { key: "approve", label: "원클릭 승인" },
+  { key: "evacuation", label: "대피소 찾기" },
+  { key: "isolation", label: "고립마을 위험" },
   { key: "whatif", label: "What-if 시뮬레이터" },
 ];
 
 const PANEL_TITLE: Record<PanelKey, string> = {
   dashboard: "아쿠아가드 골든타임 대시보드",
-  approve: "원클릭 승인",
+  evacuation: "대피소 찾기",
+  isolation: "고립마을 위험 (독창성 축 4)",
   whatif: "What-if 예측 시뮬레이터",
 };
 
@@ -55,8 +62,9 @@ export default function HomePage() {
         <div className="pointer-events-none absolute inset-0 z-20 flex items-start justify-center pt-24">
           <div className="pointer-events-auto">
             <GlassPanel title={PANEL_TITLE[active]} onClose={() => setActive(null)}>
-              {active === "dashboard" && <DashboardPanel onOpenApprove={() => setActive("approve")} />}
-              {active === "approve" && <ApprovePanel />}
+              {active === "dashboard" && <DashboardPanel />}
+              {active === "evacuation" && <EvacuationPanel />}
+              {active === "isolation" && <IsolationPanel />}
               {active === "whatif" && <WhatifPanel />}
             </GlassPanel>
           </div>
