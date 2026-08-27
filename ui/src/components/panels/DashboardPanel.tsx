@@ -101,7 +101,7 @@ export default function DashboardPanel() {
           </div>
 
           <div className="rounded-lg border border-dashed border-amber-800/40 bg-amber-950/10 p-3 text-[11px] text-amber-300/80">
-            🚧 Module C·D는 아직 Module O 파이프라인에 연결 전 — 아래는
+            Module C·D는 아직 Module O 파이프라인에 연결 전 — 아래는
             contracts/module_c·d.example.json 기준 예시 데이터.
           </div>
 

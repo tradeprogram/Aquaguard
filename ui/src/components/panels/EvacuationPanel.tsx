@@ -28,7 +28,7 @@ export default function EvacuationPanel() {
       </p>
 
       <div className="rounded-lg border border-dashed border-amber-800/40 bg-amber-950/10 p-3 text-[11px] text-amber-300/80">
-        🚧 미리보기 — 카카오/네이버 길찾기 API 키 연동 전이라 아래 숫자는 실제 경로가 아니라
+        미리보기 — 카카오/네이버 길찾기 API 키 연동 전이라 아래 숫자는 실제 경로가 아니라
         직선거리 근사 기반 예시값이다(HANDOFF.md §6). 실제 키가 들어오면 이 화면 그대로 실데이터로
         교체된다.
       </div>
@@ -51,9 +51,15 @@ export default function EvacuationPanel() {
                 {s.feasible ? "도달 가능" : "도달 불가"}
               </span>
             </div>
-            <div className="mt-2 flex gap-4 text-xs text-slate-300">
-              <span>🚗 차량 {s.carMin.toFixed(1)}분</span>
-              <span>🚶 도보 {s.walkMin.toFixed(0)}분</span>
+            <div className="mt-2 flex gap-4 text-xs">
+              <span>
+                <span className="font-semibold text-sky-300">차량</span>{" "}
+                <span className="text-slate-300">{s.carMin.toFixed(1)}분</span>
+              </span>
+              <span>
+                <span className="font-semibold text-amber-300">도보</span>{" "}
+                <span className="text-slate-300">{s.walkMin.toFixed(0)}분</span>
+              </span>
               <span className="text-slate-500">수용인원 {s.capacity}명</span>
             </div>
             {!s.feasible && (

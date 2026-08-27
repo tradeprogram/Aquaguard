@@ -17,7 +17,7 @@ export default function IsolationPanel() {
       </p>
 
       <div className="rounded-lg border border-dashed border-fuchsia-800/40 bg-fuchsia-950/10 p-3 text-[11px] text-fuchsia-300/80">
-        🚧 개념 미리보기 — networkx 그래프 연결성 계산이 아직 구현 전이라(HANDOFF.md §7)
+        개념 미리보기 — networkx 그래프 연결성 계산이 아직 구현 전이라(HANDOFF.md §7)
         실시간 값이 아니다. 아래는 완성되면 어떤 화면이 나올지 보여주는 예시 시나리오.
       </div>
 
