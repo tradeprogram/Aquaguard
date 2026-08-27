@@ -1,10 +1,8 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Map as MapLibreMap, NavigationControl, type GeoJSONSource, type StyleSpecification } from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
-import { GeoJsonLayer } from "@deck.gl/layers";
-import { MapboxOverlay } from "@deck.gl/mapbox";
 import buffer from "@turf/buffer";
 import centroid from "@turf/centroid";
 import booleanPointInPolygon from "@turf/boolean-point-in-polygon";
@@ -12,24 +10,20 @@ import { lineString as turfLineString } from "@turf/helpers";
 import type { Feature, FeatureCollection, LineString, Polygon, MultiPolygon } from "geojson";
 import {
   API_BASE,
-  SANGCHEONG_DEMO_INPUT,
-  getAlertGeojson,
   getBoundaries,
   getVWorldBuildings,
   searchAdmin,
-  triggerAlert,
   type AdminLevel,
   type AdminSearchResult,
 } from "@/lib/api";
-import type { ModuleOEnvelope } from "@/lib/types";
 
-// 산청군 생비량면(§9 데모 AOI) — data/vector/adm_dong_5179.geojson 실측 centroid/ADM_CD
-const AOI_CENTER: [number, number] = [128.0559, 35.3505];
-const AOI_BOUNDS: [[number, number], [number, number]] = [
+// 산청군 생비량면 — data/vector/adm_dong_5179.geojson 실측 centroid. 초기 카메라 위치일
+// 뿐, 이제 이 페이지는 검색으로 어디든 이동할 수 있는 범용 3D 지도다(고정 AOI 아님).
+const INITIAL_CENTER: [number, number] = [128.0559, 35.3505];
+const INITIAL_BOUNDS: [[number, number], [number, number]] = [
   [128.00826, 35.30385],
   [128.1152, 35.39634],
 ];
-const AOI_ADM_CD = "38570390";
 
 // 지형(raster-dem)은 스타일 JSON에 선언하지 않고 'load' 이후 명령형으로 추가한다 — 아래 참조.
 // 위성영상: Esri World Imagery(무료, API 키 불필요, CORS 허용 확인됨). §2.3 1순위인
@@ -142,6 +136,12 @@ const MAP_STYLE: StyleSpecification = {
   ],
 };
 
+const ADM_LAYER_STYLE: Record<AdminLevel, { color: string; width: number; opacity: number }> = {
+  sido: { color: "#0ea5e9", width: 2.5, opacity: 0.6 },
+  sigungu: { color: "#38bdf8", width: 1.5, opacity: 0.55 },
+  dong: { color: "#38bdf8", width: 1, opacity: 0.45 },
+};
+
 const BRIDGE_DECK_HEIGHT_M = 8;
 const BRIDGE_DECK_BASE_M = 3;
 const BRIDGE_HALF_WIDTH_M = { motorway: 12, trunk: 10, primary: 8, secondary: 7 } as Record<string, number>;
@@ -149,7 +149,7 @@ const DEFAULT_BRIDGE_HALF_WIDTH_M = 4;
 
 // --- 토사 유실 / 침수 볼륨 시뮬레이터 ---
 // Module A/B가 아직 목업이라 risk_polygons/inundation_extent_5179 지오메트리가 없다
-// (contracts/module_a·b.example.json 참조) — 실제 예측값이 아니라 §9 데모 AOI(상능마을)
+// (contracts/module_a·b.example.json 참조) — 실제 예측값이 아니라 산청 상능마을
 // 지형에 맞춰 손으로 배치한 흐름 경로이고, 깊이는 슬라이더로 사용자가 직접 조작하는
 // what-if 값이다. 실제 물리모델이 아님을 항상 명시할 것(문서 §6 불확실성 표기 원칙).
 //
@@ -162,7 +162,7 @@ function metersToLonLat(origin: [number, number], dxM: number, dyM: number): [nu
   return [lon + dLon, lat + dLat];
 }
 
-// 산사태 지점(§9 데모 트리거 위치)에서 남동쪽 사면 아래로 흐르는 짧고 가파른 경로
+// 산청 상능마을(산사태 트리거 지점)에서 남동쪽 사면 아래로 흐르는 짧고 가파른 경로
 const DEBRIS_CENTERLINE_M: [number, number][] = [
   [0, 0],
   [140, -90],
@@ -226,36 +226,25 @@ function buildFlowBands(
   return out;
 }
 
-// 건물 압출은 AOI 한정이 아니라 전국(사실상 전세계) 벡터타일이라 아무 데서나 보인다 —
-// 건물 밀집지로 빠르게 이동해 확인할 수 있는 테스트 지점들
+// 건물 압출은 특정 AOI 한정이 아니라 전국(사실상 전세계) 벡터타일이라 아무 데서나
+// 보인다 — 건물 밀집지로 빠르게 이동해 확인할 수 있는 테스트 지점들
 const TEST_LOCATIONS: { label: string; center: [number, number]; zoom: number }[] = [
-  { label: "산청 (AOI)", center: AOI_CENTER, zoom: 12.5 },
+  { label: "산청 상능마을", center: INITIAL_CENTER, zoom: 12.5 },
   { label: "서울 강남", center: [127.0276, 37.4979], zoom: 16 },
   { label: "부산 해운대", center: [129.1603, 35.1587], zoom: 16 },
 ];
 
-interface TimelineEvent {
-  key: string;
-  label: string;
-  time: number;
-  who: "actual" | "agent";
-}
-
 export default function Map3DPage() {
   const mapContainer = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
-  const overlayRef = useRef<MapboxOverlay | null>(null);
   const simUpdateRef = useRef<((debrisM: number, floodM: number) => void) | null>(null);
+  const highlightUpdateRef = useRef<((code: string | null) => void) | null>(null);
 
-  const [alertGeojson, setAlertGeojson] = useState<GeoJSON.FeatureCollection | null>(null);
-  const [envelope, setEnvelope] = useState<ModuleOEnvelope | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [sliderPct, setSliderPct] = useState(0);
   const [mapReady, setMapReady] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState<AdminSearchResult[]>([]);
   const [searching, setSearching] = useState(false);
+  const [selectedRegion, setSelectedRegion] = useState<AdminSearchResult | null>(null);
   const [debrisDepth, setDebrisDepth] = useState(0);
   const [floodDepth, setFloodDepth] = useState(0);
   const [floodedBuildingCount, setFloodedBuildingCount] = useState<number | null>(null);
@@ -266,7 +255,7 @@ export default function Map3DPage() {
     const map = new MapLibreMap({
       container: mapContainer.current,
       style: MAP_STYLE,
-      center: AOI_CENTER,
+      center: INITIAL_CENTER,
       zoom: 12.5,
       pitch: 60,
       bearing: -20,
@@ -285,11 +274,9 @@ export default function Map3DPage() {
     map.addControl(new NavigationControl({ visualizePitch: true }), "top-right");
     // fitBounds는 bearing을 명시하지 않으면 0으로 되돌린다(공식 문서에 명시된 동작) —
     // 생성자에서 준 -20을 유지하려면 여기서도 다시 넘겨야 한다.
-    map.fitBounds(AOI_BOUNDS, { padding: 40, duration: 0, bearing: -20 });
+    map.fitBounds(INITIAL_BOUNDS, { padding: 40, duration: 0, bearing: -20 });
     mapRef.current = map;
 
-    // deck.gl interleaved 모드는 스타일이 완전히 로드된 뒤 overlay를 추가해야 한다 —
-    // load 이전에 addControl하면 렌더 파이프라인이 깨져 스타일/타일 로딩이 멈춘다.
     map.once("load", () => {
       // 지형(raster-dem)은 api_server.py의 /terrain-tiles 프록시를 거친다 — AWS
       // elevation-tiles-prod 버킷이 Access-Control-Allow-Origin을 안 보내서 브라우저가
@@ -306,13 +293,8 @@ export default function Map3DPage() {
 
       // 행정경계 3계층(사용자 제공 BND_ADM_DONG_PG 기반, 시도/시군구는 그 원본을
       // dissolve해서 생성 — 전국) — 뷰포트 bbox로 api_server.py의 /boundaries에서
-      // 그때그때 잘라 받는다(§4.1: 재투영은 여기 UI 출력 직전에만). 데모 AOI(생비량면)만
-      // 노란색으로 강조, 나머지는 계층별 굵기를 달리한 하늘색 경계선.
-      const ADM_LAYER_STYLE: Record<AdminLevel, { color: string; width: number; opacity: number }> = {
-        sido: { color: "#0ea5e9", width: 2.5, opacity: 0.6 },
-        sigungu: { color: "#38bdf8", width: 1.5, opacity: 0.55 },
-        dong: { color: "#38bdf8", width: 1, opacity: 0.45 },
-      };
+      // 그때그때 잘라 받는다(§4.1: 재투영은 여기 UI 출력 직전에만). 검색해서 선택한
+      // 지역만 노란색으로 강조 — highlightUpdateRef를 통해 동적으로 갱신됨(아래 참조).
       for (const level of ["sido", "sigungu", "dong"] as AdminLevel[]) {
         const style = ADM_LAYER_STYLE[level];
         map.addSource(`adm-${level}`, { type: "geojson", data: { type: "FeatureCollection", features: [] } });
@@ -321,12 +303,30 @@ export default function Map3DPage() {
           type: "line",
           source: `adm-${level}`,
           paint: {
-            "line-color": ["case", ["==", ["get", "code"], AOI_ADM_CD], "#facc15", style.color],
-            "line-width": ["case", ["==", ["get", "code"], AOI_ADM_CD], 3, style.width],
-            "line-opacity": ["case", ["==", ["get", "code"], AOI_ADM_CD], 0.9, style.opacity],
+            "line-color": style.color,
+            "line-width": style.width,
+            "line-opacity": style.opacity,
           },
         });
       }
+
+      highlightUpdateRef.current = (code: string | null) => {
+        const currentMap = mapRef.current;
+        if (!currentMap) return;
+        for (const level of ["sido", "sigungu", "dong"] as AdminLevel[]) {
+          const style = ADM_LAYER_STYLE[level];
+          const layerId = `adm-${level}-line`;
+          if (code === null) {
+            currentMap.setPaintProperty(layerId, "line-color", style.color);
+            currentMap.setPaintProperty(layerId, "line-width", style.width);
+            currentMap.setPaintProperty(layerId, "line-opacity", style.opacity);
+          } else {
+            currentMap.setPaintProperty(layerId, "line-color", ["case", ["==", ["get", "code"], code], "#facc15", style.color]);
+            currentMap.setPaintProperty(layerId, "line-width", ["case", ["==", ["get", "code"], code], 3, style.width]);
+            currentMap.setPaintProperty(layerId, "line-opacity", ["case", ["==", ["get", "code"], code], 0.95, style.opacity]);
+          }
+        }
+      };
 
       const updateBoundaries = () => {
         // HMR(핫 리로드)로 컴포넌트가 재마운트되면 이 setTimeout 콜백은 이미 정리된
@@ -347,6 +347,7 @@ export default function Map3DPage() {
             // 뷰포트 이동 중 흔한 일시적 실패 — 다음 moveend에서 다시 시도되므로 조용히 무시
           });
       };
+
       // VWorld 건물통합정보(§2.3 1순위) — OSM보다 훨씬 촘촘한 실제 건물 데이터.
       // fill-extrusion-height는 원본에 없는 값이라 height_m(층수×3m, api_server.py에서
       // 계산)을 쓴다 — 실측 높이가 아니라 통상값 근사임을 UI에 명시(§6).
@@ -480,8 +481,8 @@ export default function Map3DPage() {
         const currentMap = mapRef.current;
         if (!currentMap) return;
 
-        const debrisFeatures = debrisM > 0 ? buildFlowBands(AOI_CENTER, DEBRIS_CENTERLINE_M, 90, debrisM, DEBRIS_BANDS) : [];
-        const floodFeatures = floodM > 0 ? buildFlowBands(AOI_CENTER, FLOOD_CENTERLINE_M, 130, floodM, FLOOD_BANDS) : [];
+        const debrisFeatures = debrisM > 0 ? buildFlowBands(INITIAL_CENTER, DEBRIS_CENTERLINE_M, 90, debrisM, DEBRIS_BANDS) : [];
+        const floodFeatures = floodM > 0 ? buildFlowBands(INITIAL_CENTER, FLOOD_CENTERLINE_M, 130, floodM, FLOOD_BANDS) : [];
 
         (currentMap.getSource("debris-flow") as GeoJSONSource | undefined)?.setData({
           type: "FeatureCollection",
@@ -524,14 +525,6 @@ export default function Map3DPage() {
         }
       };
 
-      // interleaved:true는 deck.gl이 지형 depth와 맞물려 렌더링하도록 map.transform의
-      // 내부 지형 API를 직접 읽는데, maplibre-gl v6(§AGENTS.md가 경고하는 대로 이전
-      // 버전과 API가 다름)에서 deck.gl 9.3이 기대하는 형태와 어긋나 "Cannot read
-      // properties of undefined (reading 'elevation')"로 죽는다. 우리 레이어(선/점)는
-      // 지형에 깊이 오클루전될 필요가 없으니 기본(오버레이) 모드로 충분하다.
-      const overlay = new MapboxOverlay({ layers: [] });
-      map.addControl(overlay);
-      overlayRef.current = overlay;
       setMapReady(true);
     });
     map.on("error", (e) => console.error("[maplibre error]", e.error?.message ?? e));
@@ -545,13 +538,12 @@ export default function Map3DPage() {
       resizeObserver.disconnect();
       map.remove();
       mapRef.current = null;
-      overlayRef.current = null;
     };
   }, []);
 
-
   const flyTo = useCallback((center: [number, number], zoom: number) => {
     mapRef.current?.flyTo({ center, zoom, pitch: 60, bearing: -20, duration: 2000 });
+    setSelectedRegion(null);
   }, []);
 
   // 검색어 입력 300ms 디바운스 — 시/군/구/읍/면/동 이름 부분일치 (api_server.py /search)
@@ -583,104 +575,16 @@ export default function Map3DPage() {
       ],
       { padding: 60, bearing: -20, pitch: 60, duration: 1500 }
     );
+    setSelectedRegion(result);
     setSearchQuery("");
     setSearchResults([]);
   }, []);
 
-  const runDemo = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const env = await triggerAlert(SANGCHEONG_DEMO_INPUT);
-      setEnvelope(env);
-      const gj = await getAlertGeojson(SANGCHEONG_DEMO_INPUT.alert_id);
-      setAlertGeojson(gj);
-      setSliderPct(0);
-    } catch (e) {
-      setError(
-        `백엔드 연결 실패 — api_server.py가 떠 있는지 확인하세요. (${e instanceof Error ? e.message : String(e)})`
-      );
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  const events: TimelineEvent[] = useMemo(() => {
-    const d = envelope?.data;
-    if (!d) return [];
-    const toMs = (iso?: string) => (iso ? new Date(iso).getTime() : NaN);
-    return [
-      { key: "advisory", label: "산림청 대피 권고", time: toMs(d.timeline_actual.advisory), who: "actual" as const },
-      { key: "report_start", label: "주민 신고 시작", time: toMs(d.timeline_actual.report_start), who: "actual" as const },
-      { key: "detected", label: "에이전트 탐지 (Module A)", time: toMs(d.timeline_agent.detected), who: "agent" as const },
-      { key: "alert_sent", label: "에이전트 경보 발송", time: toMs(d.timeline_agent.alert_sent), who: "agent" as const },
-      { key: "warning_escalated", label: "관 경보 격상 (실제)", time: toMs(d.timeline_actual.warning_escalated), who: "actual" as const },
-    ].filter((e) => !Number.isNaN(e.time));
-  }, [envelope]);
-
-  const currentTime = useMemo(() => {
-    if (events.length === 0) return null;
-    const min = events[0].time;
-    const max = events[events.length - 1].time;
-    return min + ((max - min) * sliderPct) / 100;
-  }, [events, sliderPct]);
-
-  const reachedKeys = useMemo(
-    () => new Set(events.filter((e) => currentTime !== null && currentTime >= e.time).map((e) => e.key)),
-    [events, currentTime]
-  );
-
-  // deck.gl 레이어 재구성 — 슬라이더 시각에 도달한 이벤트에 따라 레이어를 단계적으로 노출
+  // 선택된 지역(검색으로 이동한 곳)이 바뀔 때마다 노란색 강조를 다시 그린다
   useEffect(() => {
-    if (!mapReady || !overlayRef.current) return;
-
-    const layers = [];
-
-    if (alertGeojson) {
-      const showRisk = events.length === 0 || reachedKeys.has("detected");
-      const showRoute = events.length === 0 || reachedKeys.has("alert_sent");
-
-      const filtered = {
-        type: "FeatureCollection" as const,
-        features: alertGeojson.features.filter((f) => {
-          const kind = f.properties?.kind;
-          if (kind === "risk_buffer_placeholder" || kind === "landslide_point") return showRisk;
-          if (kind === "route_placeholder" || kind === "shelter_point") return showRoute;
-          return true;
-        }),
-      };
-
-      layers.push(
-        new GeoJsonLayer({
-          id: "alert-features",
-          data: filtered,
-          pointType: "circle",
-          stroked: true,
-          filled: true,
-          extruded: false,
-          getFillColor: (f: GeoJSON.Feature) => {
-            const kind = f.properties?.kind;
-            if (kind === "landslide_point") return [239, 68, 68, 230];
-            if (kind === "risk_buffer_placeholder") return [239, 68, 68, 60];
-            if (kind === "shelter_point") return [52, 211, 153, 230];
-            return [56, 189, 248, 200];
-          },
-          getLineColor: (f: GeoJSON.Feature) => {
-            const kind = f.properties?.kind;
-            if (kind === "route_placeholder") return [56, 189, 248, 220];
-            return [255, 255, 255, 180];
-          },
-          getLineWidth: (f: GeoJSON.Feature) => (f.properties?.kind === "route_placeholder" ? 3 : 1.5),
-          lineWidthUnits: "pixels",
-          getPointRadius: (f: GeoJSON.Feature) => (f.properties?.kind === "landslide_point" ? 10 : 8),
-          pointRadiusUnits: "pixels",
-          pickable: true,
-        })
-      );
-    }
-
-    overlayRef.current.setProps({ layers });
-  }, [mapReady, alertGeojson, reachedKeys, events.length]);
+    if (!mapReady) return;
+    highlightUpdateRef.current?.(selectedRegion?.code ?? null);
+  }, [mapReady, selectedRegion]);
 
   // 토사/침수 깊이 슬라이더가 바뀔 때마다 3D 볼륨 재계산
   useEffect(() => {
@@ -688,22 +592,18 @@ export default function Map3DPage() {
     simUpdateRef.current?.(debrisDepth, floodDepth);
   }, [mapReady, debrisDepth, floodDepth]);
 
-  const alertPackage = envelope?.data.alert_package;
-
   return (
     <div className="relative h-full min-h-[600px] w-full">
       <div ref={mapContainer} className="h-full w-full" />
 
       <div className="pointer-events-none absolute inset-x-0 top-0 flex justify-between p-4">
         <div className="pointer-events-auto max-w-sm rounded-xl border border-slate-800 bg-slate-950/85 p-4 backdrop-blur">
-          <h1 className="text-lg font-bold">3D 지도 — 산청군 생비량면 AOI</h1>
-
-          <div className="relative mt-2">
+          <div className="relative">
             <input
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="시/군/구/읍/면/동 검색 (예: 생비량면, 강남동)"
+              placeholder="시/군/구/읍/면/동 검색 (예: 산청군, 생비량면, 강남동)"
               className="w-full rounded-md border border-slate-700 bg-slate-900 px-2.5 py-1.5 text-xs text-slate-100 placeholder:text-slate-500 focus:border-sky-600 focus:outline-none"
             />
             {searching && <span className="absolute right-2 top-1.5 text-xs text-slate-500">검색 중…</span>}
@@ -734,10 +634,16 @@ export default function Map3DPage() {
             )}
           </div>
 
+          {selectedRegion && (
+            <p className="mt-2 text-xs">
+              <span className="rounded bg-amber-900/50 px-1.5 py-0.5 text-amber-300">노란 경계</span>{" "}
+              <span className="text-slate-300">{selectedRegion.full_name}</span>
+            </p>
+          )}
+
           <p className="mt-2 text-xs text-slate-400">
-            §5 Module UI-3D — MapLibre GL(지형) + deck.gl. 행정경계 시도/시군구/읍면동 3계층
-            (사용자 제공 데이터, 전국)을 뷰포트 기준으로 실시간 표시 — 노란 선이 데모 AOI(생비량면),
-            나머지는 계층별 굵기로 구분. 위험/경로 지오메트리는 §5 명시대로 목업 단계 placeholder입니다.
+            §5 Module UI-3D — MapLibre GL(지형) + 행정경계 시도/시군구/읍면동 3계층(사용자 제공
+            데이터, 전국)을 뷰포트 기준으로 실시간 표시. 검색해서 선택한 지역만 노란색으로 강조됩니다.
           </p>
           <p className="mt-2 text-xs text-slate-500">
             🖱 좌클릭 드래그: 이동 · 스크롤: 줌 · <span className="text-slate-300">우클릭(또는 Ctrl) 드래그: 회전/기울기</span>
@@ -757,101 +663,53 @@ export default function Map3DPage() {
               </button>
             ))}
           </div>
-          <button
-            onClick={runDemo}
-            disabled={loading}
-            className="mt-3 w-full rounded-lg bg-sky-600 px-3 py-2 text-sm font-medium text-white hover:bg-sky-500 disabled:opacity-50"
-          >
-            {loading ? "실행 중…" : "산청 시나리오 실행"}
-          </button>
-          {error && <p className="mt-2 text-xs text-red-300">{error}</p>}
         </div>
 
-        <div className="pointer-events-auto flex flex-col gap-3">
-          {alertPackage && (
-            <div className="max-w-xs rounded-xl border border-slate-800 bg-slate-950/85 p-4 text-xs backdrop-blur">
-              <p className="text-slate-400">산사태 위험확률</p>
-              <p className="text-xl font-bold text-red-300">{(alertPackage.landslide.landslide_prob * 100).toFixed(0)}%</p>
-              <p className="mt-2 text-slate-400">대피소 · ETA</p>
-              <p className="text-sm text-emerald-300">
-                {"shelter_id" in alertPackage.shelter_route ? alertPackage.shelter_route.shelter_id : "—"} ·{" "}
-                {"eta_min" in alertPackage.shelter_route ? `${alertPackage.shelter_route.eta_min?.toFixed(1)}분` : "—"}
-              </p>
-            </div>
-          )}
+        <div className="pointer-events-auto w-64 rounded-xl border border-slate-800 bg-slate-950/85 p-4 text-xs backdrop-blur">
+          <p className="font-semibold text-slate-200">토사 유실 · 침수 시뮬레이터</p>
+          <p className="mt-1 text-amber-300/70">
+            실제 예측값 아님 — Module A/B 실모델 연동 전 what-if 깊이 슬라이더 (§6 불확실성 표기 원칙, 산청 상능마을 기준).
+          </p>
 
-          <div className="w-64 rounded-xl border border-slate-800 bg-slate-950/85 p-4 text-xs backdrop-blur">
-            <p className="font-semibold text-slate-200">토사 유실 · 침수 시뮬레이터</p>
-            <p className="mt-1 text-amber-300/70">
-              실제 예측값 아님 — Module A/B 실모델 연동 전 what-if 깊이 슬라이더 (§6 불확실성 표기 원칙).
-            </p>
-
-            <div className="mt-3">
-              <div className="flex items-center justify-between">
-                <span className="text-red-300">🟥 토사 깊이</span>
-                <span className="font-mono text-slate-300">{debrisDepth.toFixed(1)}m</span>
-              </div>
-              <input
-                type="range"
-                min={0}
-                max={4}
-                step={0.1}
-                value={debrisDepth}
-                onChange={(e) => setDebrisDepth(Number(e.target.value))}
-                className="mt-1 w-full accent-red-500"
-              />
-            </div>
-
-            <div className="mt-3">
-              <div className="flex items-center justify-between">
-                <span className="text-sky-300">🟦 침수 수위</span>
-                <span className="font-mono text-slate-300">{floodDepth.toFixed(1)}m</span>
-              </div>
-              <input
-                type="range"
-                min={0}
-                max={5}
-                step={0.1}
-                value={floodDepth}
-                onChange={(e) => setFloodDepth(Number(e.target.value))}
-                className="mt-1 w-full accent-sky-500"
-              />
-            </div>
-
-            {floodedBuildingCount !== null && (
-              <p className="mt-3 rounded-md bg-sky-950/50 px-2 py-1.5 text-sky-300">
-                침수 범위 안 건물 약 <span className="font-bold">{floodedBuildingCount}</span>개
-                {floodedBuildingCount === 0 && " (범위 안에 매핑된 OSM 건물 없음 — 산간 AOI 특성)"}
-              </p>
-            )}
-          </div>
-        </div>
-      </div>
-
-      {events.length > 0 && (
-        <div className="pointer-events-auto absolute inset-x-0 bottom-0 border-t border-slate-800 bg-slate-950/90 p-4 backdrop-blur">
-          <div className="mx-auto max-w-3xl">
-            <div className="mb-2 flex justify-between text-xs text-slate-400">
-              {events.map((e) => (
-                <span key={e.key} className={reachedKeys.has(e.key) ? (e.who === "agent" ? "text-sky-300" : "text-amber-300") : ""}>
-                  {new Date(e.time).toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" })} {e.label}
-                </span>
-              ))}
+          <div className="mt-3">
+            <div className="flex items-center justify-between">
+              <span className="text-red-300">🟥 토사 깊이</span>
+              <span className="font-mono text-slate-300">{debrisDepth.toFixed(1)}m</span>
             </div>
             <input
               type="range"
               min={0}
-              max={100}
-              value={sliderPct}
-              onChange={(e) => setSliderPct(Number(e.target.value))}
-              className="w-full accent-sky-500"
+              max={4}
+              step={0.1}
+              value={debrisDepth}
+              onChange={(e) => setDebrisDepth(Number(e.target.value))}
+              className="mt-1 w-full accent-red-500"
             />
-            <p className="mt-1 text-center text-xs text-slate-500">
-              시간 슬라이더 — 끌어서 재연: 에이전트(파란색)가 관의 실제 경보(주황색)보다 먼저 도달하는 걸 확인하세요
-            </p>
           </div>
+
+          <div className="mt-3">
+            <div className="flex items-center justify-between">
+              <span className="text-sky-300">🟦 침수 수위</span>
+              <span className="font-mono text-slate-300">{floodDepth.toFixed(1)}m</span>
+            </div>
+            <input
+              type="range"
+              min={0}
+              max={5}
+              step={0.1}
+              value={floodDepth}
+              onChange={(e) => setFloodDepth(Number(e.target.value))}
+              className="mt-1 w-full accent-sky-500"
+            />
+          </div>
+
+          {floodedBuildingCount !== null && (
+            <p className="mt-3 rounded-md bg-sky-950/50 px-2 py-1.5 text-sky-300">
+              침수 범위 안 건물 약 <span className="font-bold">{floodedBuildingCount}</span>개
+            </p>
+          )}
         </div>
-      )}
+      </div>
     </div>
   );
 }
