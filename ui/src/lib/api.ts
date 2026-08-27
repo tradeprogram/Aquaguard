@@ -83,6 +83,17 @@ export async function getAlertGeojson(alertId: string): Promise<GeoJSON.FeatureC
   return res.json();
 }
 
+export async function sendChatMessage(message: string): Promise<string> {
+  const res = await fetch(`${API_BASE}/chat`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ message }),
+  });
+  if (!res.ok) throw new Error(`chat failed: ${res.status}`);
+  const data: { reply: string } = await res.json();
+  return data.reply;
+}
+
 export async function approveAlert(
   alertId: string,
   decision: "승인" | "거부",

@@ -334,6 +334,54 @@ def get_vworld_roads(bbox: str) -> dict:
     return _vworld_get_feature(VWORLD_ROAD_LAYER, _parse_bbox(bbox))
 
 
+class ChatRequest(BaseModel):
+    message: str
+
+
+def _chat_reply(message: str) -> str:
+    """Aqua Guard.AI 챗봇 위젯용 규칙 기반 임시 응답기.
+
+    실제 LLM(예: Module O 상황 요약) 연동 전까지의 자리표시자 — 나중에 이 함수
+    본문만 그쪽 호출로 바꿔치면 프론트는 그대로 쓸 수 있다.
+    """
+    text = message.strip()
+    if not text:
+        return "무엇이 궁금하신가요? 골든타임, 대피소, 산사태·침수 시뮬레이터에 대해 물어보세요."
+    if "골든타임" in text:
+        return (
+            "골든타임은 재해 감지부터 주민 대피 완료까지 확보해야 하는 시간이에요. "
+            "대시보드 상단의 골든타임 카운터에서 현재 경보의 남은 시간을 확인할 수 있어요."
+        )
+    if "대피소" in text or "대피" in text:
+        return (
+            "지금은 사전 등록된 대피소 후보를 기준으로 안내하고 있어요. "
+            "차량/도보 이동시간까지 계산해주는 길찾기 연동은 아직 준비 중이에요."
+        )
+    if "산사태" in text or "토사" in text:
+        return (
+            "3D 지도의 '토사 깊이' 슬라이더로 토사 유실 예상 범위를 확인할 수 있어요. "
+            "다만 실제 예측 모델(Module A/B) 연동 전 what-if 값이에요."
+        )
+    if "침수" in text or "홍수" in text:
+        return (
+            "3D 지도의 '침수 수위' 슬라이더로 침수 예상 범위를 확인할 수 있어요. "
+            "마찬가지로 실제 예측 모델 연동 전 what-if 값이에요."
+        )
+    if "고립" in text:
+        return "그래프 연결성 분석 기반 고립마을 자동탐지 기능은 아직 개발 중이에요."
+    if "승인" in text:
+        return "'원클릭 승인' 메뉴에서 자동 승인 대기 중인 경보를 확인하고 승인/거부할 수 있어요."
+    return (
+        "저는 Aqua Guard.AI예요. 아직은 정해둔 답변만 드릴 수 있는 프로토타입이지만, "
+        "골든타임 / 대피소 / 산사태 / 침수 / 고립마을 / 승인 절차에 대해 물어보시면 안내해드릴게요."
+    )
+
+
+@app.post("/chat")
+def chat(req: ChatRequest) -> dict:
+    return {"reply": _chat_reply(req.message)}
+
+
 @app.get("/health")
 def health() -> dict:
     return {"status": "ok"}
