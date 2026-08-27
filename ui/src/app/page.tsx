@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import MapExplorer from "@/components/MapExplorer";
+import MapExplorer, { type EvacuationRoute } from "@/components/MapExplorer";
 import GlassPanel from "@/components/GlassPanel";
 import DashboardPanel from "@/components/panels/DashboardPanel";
 import EvacuationPanel from "@/components/panels/EvacuationPanel";
@@ -30,10 +30,13 @@ const PANEL_TITLE: Record<PanelKey, string> = {
 
 export default function HomePage() {
   const [active, setActive] = useState<PanelKey | null>(null);
+  // 대피소 찾기(§6.9)에서 고른 경로 — EvacuationPanel과 MapExplorer가 형제 컴포넌트라
+  // 여기서 상태를 끌어올려 양쪽에 내려준다(HANDOFF.md §6.9 "권장" 방식).
+  const [evacuationRoute, setEvacuationRoute] = useState<EvacuationRoute | null>(null);
 
   return (
     <div className="relative h-full w-full">
-      <MapExplorer />
+      <MapExplorer route={evacuationRoute} />
 
       {/* 지도가 메인 화면 — 메뉴는 더 이상 페이지를 이동시키지 않고 지도 위에
           글라스 톤 패널을 띄운다/닫는다(토글). 로고는 흰색 워드마크라 밝은 지도
@@ -63,7 +66,7 @@ export default function HomePage() {
           <div className="pointer-events-auto">
             <GlassPanel title={PANEL_TITLE[active]} onClose={() => setActive(null)}>
               {active === "dashboard" && <DashboardPanel />}
-              {active === "evacuation" && <EvacuationPanel />}
+              {active === "evacuation" && <EvacuationPanel onSelectRoute={setEvacuationRoute} />}
               {active === "isolation" && <IsolationPanel />}
               {active === "whatif" && <WhatifPanel />}
             </GlassPanel>

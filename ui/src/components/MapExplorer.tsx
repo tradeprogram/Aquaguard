@@ -239,7 +239,15 @@ const TEST_LOCATIONS: { label: string; center: [number, number]; zoom: number }[
   { label: "부산 해운대", center: [129.1603, 35.1587], zoom: 16 },
 ];
 
-export default function MapExplorer() {
+// EvacuationPanel(§6)에서 선택한 대피 경로 — 카카오/네이버 실경로 API 붙기 전까지는
+// 출발지→대피소 직선(하버사인 근사)만 표시한다(HANDOFF.md §6.9).
+export interface EvacuationRoute {
+  origin: [number, number]; // [lon, lat]
+  destination: [number, number]; // [lon, lat]
+  label: string;
+}
+
+export default function MapExplorer({ route = null }: { route?: EvacuationRoute | null } = {}) {
   const mapContainer = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
   const simUpdateRef = useRef<((debrisM: number, floodM: number) => void) | null>(null);
@@ -625,6 +633,30 @@ export default function MapExplorer() {
         }
       };
 
+      // 대피 경로(§6.9) — 지금은 직선거리 근사라 "실제 도로 경로 아님"이 시각적으로도
+      // 드러나게 점선으로 그린다. 실경로 API가 붙으면 LineString 좌표만 실제 폴리라인으로
+      // 바뀌고 이 레이어 자체는 그대로 재사용된다.
+      map.addSource("evacuation-route", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
+      map.addLayer({
+        id: "evacuation-route-line",
+        type: "line",
+        source: "evacuation-route",
+        layout: { "line-cap": "round", "line-join": "round" },
+        paint: { "line-color": "#22d3ee", "line-width": 5, "line-dasharray": [2, 1.5], "line-opacity": 0.9 },
+      });
+      map.addSource("evacuation-markers", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
+      map.addLayer({
+        id: "evacuation-markers-circle",
+        type: "circle",
+        source: "evacuation-markers",
+        paint: {
+          "circle-radius": 8,
+          "circle-color": ["match", ["get", "role"], "origin", "#38bdf8", "destination", "#f472b6", "#ffffff"],
+          "circle-stroke-width": 2,
+          "circle-stroke-color": "#0f172a",
+        },
+      });
+
       setMapReady(true);
     });
     map.on("error", (e) => console.error("[maplibre error]", e.error?.message ?? e));
@@ -691,6 +723,44 @@ export default function MapExplorer() {
     if (!mapReady) return;
     simUpdateRef.current?.(debrisDepth, floodDepth);
   }, [mapReady, debrisDepth, floodDepth]);
+
+  // 대피소 찾기 패널(EvacuationPanel)에서 고른 경로 — app/page.tsx가 상태를 끌어올려
+  // route prop으로 내려주는 구조(§6.9)라, 여기서는 그 prop이 바뀔 때마다 그리기만 한다.
+  useEffect(() => {
+    if (!mapReady) return;
+    const currentMap = mapRef.current;
+    if (!currentMap) return;
+    const routeSource = currentMap.getSource("evacuation-route") as GeoJSONSource | undefined;
+    const markerSource = currentMap.getSource("evacuation-markers") as GeoJSONSource | undefined;
+    if (!route) {
+      routeSource?.setData({ type: "FeatureCollection", features: [] });
+      markerSource?.setData({ type: "FeatureCollection", features: [] });
+      return;
+    }
+    const { origin, destination, label } = route;
+    routeSource?.setData({
+      type: "FeatureCollection",
+      features: [
+        { type: "Feature", properties: {}, geometry: { type: "LineString", coordinates: [origin, destination] } },
+      ],
+    } as FeatureCollection);
+    markerSource?.setData({
+      type: "FeatureCollection",
+      features: [
+        { type: "Feature", properties: { role: "origin" }, geometry: { type: "Point", coordinates: origin } },
+        { type: "Feature", properties: { role: "destination", label }, geometry: { type: "Point", coordinates: destination } },
+      ],
+    } as FeatureCollection);
+    const lons = [origin[0], destination[0]];
+    const lats = [origin[1], destination[1]];
+    currentMap.fitBounds(
+      [
+        [Math.min(...lons), Math.min(...lats)],
+        [Math.max(...lons), Math.max(...lats)],
+      ],
+      { padding: 120, pitch: 60, bearing: -20, duration: 1500 }
+    );
+  }, [mapReady, route]);
 
   return (
     <div className="relative h-full min-h-[600px] w-full">
