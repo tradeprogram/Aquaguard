@@ -29,10 +29,14 @@ VWORLD_API_KEY = os.environ.get("VWORLD_API_KEY")
 
 app = FastAPI(title="AquaGuard AI — api_server")
 
-# ui/(Next.js dev server, 기본 3000포트)에서 로컬 개발 중 호출할 수 있도록 허용
+# ui/(Next.js dev server, 기본 3000포트)에서 로컬 개발 중 호출할 수 있도록 허용 +
+# Vercel 배포 도메인(프로덕션 URL은 매번 같지만 프리뷰 배포마다 서브도메인이 바뀌므로
+# 정규식으로 *.vercel.app 전체를 허용 — 이 백엔드는 인증이 없어 오리진 제한이
+# 유일한 방어선은 아니지만, 최소한 임의 사이트의 크로스오리진 호출은 막아둔다).
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:3000"],
+    allow_origin_regex=r"https://.*\.vercel\.app",
     allow_methods=["*"],
     allow_headers=["*"],
 )

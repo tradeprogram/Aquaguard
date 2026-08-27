@@ -187,6 +187,29 @@ cd ui && npm run build && npm run lint   # 프론트 변경 시
 cd .. && python -m pytest module_o_orchestrator/tests/ -v   # 백엔드 변경 시
 ```
 
+### 4.1 배포 (2026-08-27 준비 시작 — 회의 때 프로토타입 감 잡기용, 아직 완료 안 됨)
+
+사용자 요청: "일단 회의할 때 감 잡게 배포하면서 보는 게 목표고 나중에 모듈 추가되고 뭐 추가되면 로컬에서 수정하고 최종적으로 배포할 것" — 즉 무거운 운영급 배포가 아니라, **한 번 연결해두면 이후 `git push`마다 자동 재배포되는** 가벼운 프리뷰용 배포. 프론트(Vercel)와 백엔드(Render)를 따로 호스팅한다 — Vercel은 Next.js 프론트만 서빙하고, 검색·건물·도로·챗봇 같은 기능은 별도로 호스팅한 `api_server.py`를 호출해야 동작한다.
+
+**프론트 — Vercel** (계정 연결은 사용자가 직접 해야 함, Claude Code가 로그인/계정생성 대행 불가):
+1. vercel.com → GitHub 계정으로 로그인 → `tradeprogram/Aquaguard` 저장소 Import
+2. **Root Directory를 `ui`로 지정** (Next.js 앱이 저장소 루트가 아니라 `ui/` 안에 있음) — 안 하면 빌드 실패
+3. 나머지 빌드 설정은 자동 감지된 기본값 그대로 Deploy
+4. 백엔드(Render) URL이 정해지면 Vercel 프로젝트 Settings → Environment Variables에 `NEXT_PUBLIC_API_BASE=https://<render-서비스명>.onrender.com` 추가 후 재배포(`ui/src/lib/api.ts`의 `API_BASE`가 이 값을 읽음, 없으면 `http://localhost:8000`로 폴백)
+
+**백엔드 — Render** (저장소 루트의 `render.yaml`이 이미 설정을 정의해뒀음, 계정 연결은 마찬가지로 사용자 몫):
+1. render.com → GitHub 계정으로 로그인 → New → Blueprint → `tradeprogram/Aquaguard` 선택 (저장소 루트의 `render.yaml`을 자동으로 읽어서 서비스 설정을 구성함)
+2. `VWORLD_API_KEY` 환경변수는 `render.yaml`에 `sync: false`로 표시돼 있어서 대시보드에서 수동으로 넣어야 함 — 값은 로컬 `.env` 파일에 있는 것과 동일(`.env`는 git-ignore라 저장소에는 없음)
+3. 무료 플랜은 일정 시간 요청이 없으면 슬립 상태가 되고 첫 요청 시 30~60초 콜드스타트가 걸림 — **회의 직전에 한 번 `/health`를 호출해서 깨워둘 것**
+4. 배포되면 URL(`https://aquaguard-api-XXXX.onrender.com` 형태)을 위 3번(Vercel 환경변수)에 넣어야 프론트가 실제로 연결됨
+
+**코드에서 이미 해둔 준비**(2026-08-27):
+- `api_server.py`의 CORS를 `http://localhost:3000` 고정에서 `https://*.vercel.app` 정규식 허용으로 확장(`allow_origin_regex`) — Vercel 프리뷰 배포마다 서브도메인이 바뀌어도 매번 코드 안 고쳐도 됨
+- `render.yaml` 추가 — `buildCommand: pip install -r requirements.txt`, `startCommand: uvicorn api_server:app --host 0.0.0.0 --port $PORT`, `healthCheckPath: /health`, region은 한국에서 제일 가까운 `singapore`
+- `data/vector/*.geojson`(§2 데이터 파이프라인)은 이미 전부 git에 커밋돼 있어 별도 데이터 업로드 없이 클론만으로 배포 가능(총 26MB, GitHub 용량 제한 안 걸림)
+
+**아직 안 된 것**: 실제 Vercel/Render 연결(사용자 액션 대기), 배포 URL 확정 후 서로 연결(위 3~4단계), 배포 후 실제 curl/브라우저 스모크 테스트.
+
 ---
 
 ## 5. 다음으로 무엇을 할지 (우선순위 제안)
