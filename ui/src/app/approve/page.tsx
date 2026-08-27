@@ -1,0 +1,161 @@
+"use client";
+
+import { Suspense, useCallback, useEffect, useState } from "react";
+import { useSearchParams } from "next/navigation";
+import { SANGCHEONG_DEMO_INPUT, approveAlert, getAlert } from "@/lib/api";
+import type { ModuleOEnvelope } from "@/lib/types";
+
+function useCountdown(createdAt?: string, timeoutMin?: number) {
+  const [remainingSec, setRemainingSec] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (!createdAt || timeoutMin === undefined) return;
+    const deadline = new Date(createdAt).getTime() + timeoutMin * 60_000;
+    const tick = () => setRemainingSec(Math.max(0, Math.round((deadline - Date.now()) / 1000)));
+    tick();
+    const id = setInterval(tick, 1000);
+    return () => clearInterval(id);
+  }, [createdAt, timeoutMin]);
+
+  return remainingSec;
+}
+
+function ApproveContent() {
+  const searchParams = useSearchParams();
+  const alertId = searchParams.get("alert_id") ?? SANGCHEONG_DEMO_INPUT.alert_id;
+
+  const [envelope, setEnvelope] = useState<ModuleOEnvelope | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+
+  const refresh = useCallback(async () => {
+    try {
+      const result = await getAlert(alertId);
+      setEnvelope(result);
+      setError(null);
+    } catch {
+      setError("이 alert_id의 경보를 찾을 수 없습니다 — 대시보드에서 먼저 시나리오를 실행하세요.");
+    }
+  }, [alertId]);
+
+  useEffect(() => {
+    // refresh()는 네트워크 응답 이후(await 뒤)에만 setState하므로 안전하지만,
+    // 정적 분석 규칙은 이를 구분하지 못해 명시적으로 예외 처리한다.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    refresh();
+    const id = setInterval(refresh, 3000);
+    return () => clearInterval(id);
+  }, [refresh]);
+
+  const remainingSec = useCountdown(envelope?.meta?.created_at, envelope?.meta?.auto_approve_timeout_min);
+
+  async function decide(decision: "승인" | "거부") {
+    setSubmitting(true);
+    try {
+      await approveAlert(alertId, decision, "official_demo");
+      await refresh();
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  const data = envelope?.data;
+  const alertPackage = data?.alert_package;
+  const pending = data?.approval_status === "대기";
+  const timedOut = remainingSec === 0;
+
+  return (
+    <div className="mx-auto max-w-2xl space-y-6 p-6">
+      <header>
+        <h1 className="text-2xl font-bold">원클릭 승인</h1>
+        <p className="text-sm text-slate-400">
+          §5 Module O — 지자체 담당자가 회의·서면 검토 없이 버튼 하나로 승인/보류. 사람의 최종 판단권은 유지하되 판단 시간을 몇 시간→몇 초로.
+        </p>
+      </header>
+
+      {error && (
+        <div className="rounded-lg border border-red-800/50 bg-red-950/30 p-4 text-sm text-red-300">{error}</div>
+      )}
+
+      {data && alertPackage && (
+        <>
+          <div
+            className={`rounded-xl border p-6 text-center ${
+              pending
+                ? timedOut
+                  ? "border-red-800/50 bg-red-950/30"
+                  : "border-amber-800/50 bg-amber-950/30"
+                : "border-emerald-800/50 bg-emerald-950/30"
+            }`}
+          >
+            <p className="text-sm opacity-80">현재 상태</p>
+            <p className="mt-1 text-3xl font-bold">{data.approval_status}</p>
+            {pending && remainingSec !== null && (
+              <p className="mt-2 text-sm">
+                {timedOut
+                  ? "타임아웃 도달 — 다음 조회 시 자동승인으로 전환됩니다"
+                  : `${Math.floor(remainingSec / 60)}분 ${remainingSec % 60}초 안에 응답하지 않으면 자동승인됩니다`}
+              </p>
+            )}
+          </div>
+
+          <div className="grid grid-cols-2 gap-4 rounded-xl border border-slate-800 bg-slate-900/50 p-4 text-sm">
+            <div>
+              <p className="text-slate-400">산사태 위험확률</p>
+              <p className="text-lg font-semibold">
+                {(alertPackage.landslide.landslide_prob * 100).toFixed(0)}%{" "}
+                <span className="text-xs font-normal text-slate-500">
+                  [{(alertPackage.landslide.confidence_interval[0] * 100).toFixed(0)}%,{" "}
+                  {(alertPackage.landslide.confidence_interval[1] * 100).toFixed(0)}%]
+                </span>
+              </p>
+            </div>
+            <div>
+              <p className="text-slate-400">하천범람 위험확률</p>
+              <p className="text-lg font-semibold">{(alertPackage.flood.flood_prob * 100).toFixed(0)}%</p>
+            </div>
+            <div>
+              <p className="text-slate-400">시민 역검증</p>
+              <p className="text-lg font-semibold">{data.citizen_verification.verification_status}</p>
+            </div>
+            <div>
+              <p className="text-slate-400">대피 시간 여유</p>
+              <p className="text-lg font-semibold">
+                {"time_feasible" in alertPackage.shelter_route
+                  ? alertPackage.shelter_route.time_feasible
+                    ? "충분"
+                    : "부족 ⚠"
+                  : "—"}
+              </p>
+            </div>
+          </div>
+
+          <div className="flex gap-3">
+            <button
+              onClick={() => decide("승인")}
+              disabled={!pending || submitting}
+              className="flex-1 rounded-lg bg-emerald-600 py-3 font-semibold text-white hover:bg-emerald-500 disabled:opacity-40"
+            >
+              승인
+            </button>
+            <button
+              onClick={() => decide("거부")}
+              disabled={!pending || submitting}
+              className="flex-1 rounded-lg bg-red-700 py-3 font-semibold text-white hover:bg-red-600 disabled:opacity-40"
+            >
+              거부
+            </button>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+export default function ApprovePage() {
+  return (
+    <Suspense fallback={<div className="p-6 text-slate-500">불러오는 중…</div>}>
+      <ApproveContent />
+    </Suspense>
+  );
+}

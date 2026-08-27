@@ -6,6 +6,28 @@
 
 ---
 
+## 빠른 시작 (트랙③ 프로토타입 — Module O + 대시보드, 전부 목업 모드)
+
+`module_o_orchestrator`가 A~H를 `contracts/`의 example.json으로 목업 호출하고, `ui/`의 Next.js 대시보드가 그 결과를 그린다. 팀원 모듈이 실제로 들어오면 `AQUAGUARD_MOCK_MODE=0`으로 바꾸는 것만으로 실제 모듈 호출로 전환된다(코드 변경 없음, `module_o_orchestrator/modules_client.py` 참조).
+
+```bash
+# 1) 백엔드 (FastAPI + Module O)
+pip install -r requirements.txt
+python -m uvicorn api_server:app --port 8000
+
+# 2) 프론트엔드 (다른 터미널)
+cd ui
+npm install
+npm run dev   # http://localhost:3000
+
+# 3) 테스트
+python -m pytest module_o_orchestrator/tests/ -v
+```
+
+대시보드(`/`)에서 "산청 시나리오 실행" → 골든타임 카운터·위험 패널이 뜸 → "승인 화면으로"(`/approve`)에서 원클릭 승인/타임아웃 카운트다운 확인 → `/whatif`에서 강수 슬라이더(현재는 목업이라 값 고정, 실모델 연동 시 즉시 반영).
+
+---
+
 ## 1. 왜 만드는가 (배경)
 
 2025년 여름 한반도는 한 시즌 안에 복합재해를 겪었다. 7/16~20 기록적 집중호우(다수 지역 누적 300mm 이상)로 전국 37명 사망, 12,921명 대피, 피해 총 1조 848억원(도로침수 778곳·토사유실 197건·하천시설 붕괴 403건·건축물침수 1,857건·농경지침수 73건).
