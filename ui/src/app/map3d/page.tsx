@@ -205,7 +205,13 @@ function buildFlowBands(
     try {
       const poly = buffer(line, width, { units: "meters", steps: 8 });
       if (poly) {
-        poly.properties = { depth: Math.max(depthM * band.depthFactor, 0.15), color: band.color };
+        // MapLibre의 fill-extrusion-color는 CSS 색상 문자열이 필요하다 — [r,g,b,a] 배열을
+        // GeoJSON 속성에 그대로 넣으면(deck.gl 스타일) 색상 평가가 실패해 색이 안 먹는다.
+        const [r, g, b, a] = band.color;
+        poly.properties = {
+          depth: Math.max(depthM * band.depthFactor, 0.15),
+          color: `rgba(${r}, ${g}, ${b}, ${a / 255})`,
+        };
         out.push(poly);
       }
     } catch {
