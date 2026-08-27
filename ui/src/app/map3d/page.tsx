@@ -16,18 +16,34 @@ const AOI_BOUNDS: [[number, number], [number, number]] = [
 ];
 
 // 지형(raster-dem)은 스타일 JSON에 선언하지 않고 'load' 이후 명령형으로 추가한다 — 아래 참조.
+// 위성영상: Esri World Imagery(무료, API 키 불필요, CORS 허용 확인됨). §2.3 1순위인
+// V-World API 키가 생기면 이 소스만 바꿔치기하면 된다.
 const MAP_STYLE: StyleSpecification = {
   version: 8,
   glyphs: "https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf",
   sources: {
-    osm: {
+    satellite: {
       type: "raster",
-      tiles: ["https://tile.openstreetmap.org/{z}/{x}/{y}.png"],
+      tiles: [
+        "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+      ],
       tileSize: 256,
-      attribution: "© OpenStreetMap contributors",
+      maxzoom: 19,
+      attribution: "Esri, Maxar, Earthstar Geographics",
+    },
+    labels: {
+      type: "raster",
+      tiles: [
+        "https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}",
+      ],
+      tileSize: 256,
+      maxzoom: 19,
     },
   },
-  layers: [{ id: "osm", type: "raster", source: "osm" }],
+  layers: [
+    { id: "satellite", type: "raster", source: "satellite" },
+    { id: "labels", type: "raster", source: "labels" },
+  ],
 };
 
 interface TimelineEvent {
@@ -61,6 +77,11 @@ export default function Map3DPage() {
       pitch: 60,
       bearing: -20,
       maxPitch: 85,
+      // 마우스로 자유롭게 회전/기울기(우클릭 또는 Ctrl+드래그) 조작 가능하도록 명시적으로 켬
+      dragRotate: true,
+      pitchWithRotate: true,
+      touchZoomRotate: true,
+      touchPitch: true,
     });
     map.addControl(new NavigationControl({ visualizePitch: true }), "top-right");
     // fitBounds는 bearing을 명시하지 않으면 0으로 되돌린다(공식 문서에 명시된 동작) —
@@ -237,6 +258,9 @@ export default function Map3DPage() {
           <p className="mt-1 text-xs text-slate-400">
             §5 Module UI-3D — MapLibre GL(지형) + deck.gl. 노란 선은 행정동 경계 실데이터(EPSG:5179 →
             4326 재투영), 나머지 위험/경로 지오메트리는 §5 명시대로 목업 단계 placeholder입니다.
+          </p>
+          <p className="mt-2 text-xs text-slate-500">
+            🖱 좌클릭 드래그: 이동 · 스크롤: 줌 · <span className="text-slate-300">우클릭(또는 Ctrl) 드래그: 회전/기울기</span>
           </p>
           <button
             onClick={runDemo}
