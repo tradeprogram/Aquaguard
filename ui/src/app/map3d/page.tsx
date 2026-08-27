@@ -70,6 +70,14 @@ const MAP_STYLE: StyleSpecification = {
   ],
 };
 
+// 건물 압출은 AOI 한정이 아니라 전국(사실상 전세계) 벡터타일이라 아무 데서나 보인다 —
+// 건물 밀집지로 빠르게 이동해 확인할 수 있는 테스트 지점들
+const TEST_LOCATIONS: { label: string; center: [number, number]; zoom: number }[] = [
+  { label: "산청 (AOI)", center: AOI_CENTER, zoom: 12.5 },
+  { label: "서울 강남", center: [127.0276, 37.4979], zoom: 16 },
+  { label: "부산 해운대", center: [129.1603, 35.1587], zoom: 16 },
+];
+
 interface TimelineEvent {
   key: string;
   label: string;
@@ -159,6 +167,10 @@ export default function Map3DPage() {
     getAoi("saengbiryang")
       .then(setAoi)
       .catch((e) => setError(`AOI 로드 실패: ${e instanceof Error ? e.message : String(e)}`));
+  }, []);
+
+  const flyTo = useCallback((center: [number, number], zoom: number) => {
+    mapRef.current?.flyTo({ center, zoom, pitch: 60, bearing: -20, duration: 2000 });
   }, []);
 
   const runDemo = useCallback(async () => {
@@ -287,9 +299,20 @@ export default function Map3DPage() {
             🖱 좌클릭 드래그: 이동 · 스크롤: 줌 · <span className="text-slate-300">우클릭(또는 Ctrl) 드래그: 회전/기울기</span>
           </p>
           <p className="mt-2 text-xs text-amber-300/70">
-            건물은 실제 높이(m)로 압출됨(OSM). 이 AOI는 산간마을이라 OSM 건물 매핑이 드문드문 있음 —
-            프로덕션 전환 시 §2.6 건축물대장으로 교체 예정.
+            건물은 실제 높이(m)로 압출됨(OSM, 전국 적용). 산청 AOI는 산간마을이라 매핑이 드문드문
+            있음 — 프로덕션 전환 시 §2.6 건축물대장으로 교체 예정.
           </p>
+          <div className="mt-2 flex gap-1.5">
+            {TEST_LOCATIONS.map((loc) => (
+              <button
+                key={loc.label}
+                onClick={() => flyTo(loc.center, loc.zoom)}
+                className="flex-1 rounded-md border border-slate-700 px-2 py-1 text-xs text-slate-300 hover:border-sky-600 hover:text-sky-300"
+              >
+                {loc.label}
+              </button>
+            ))}
+          </div>
           <button
             onClick={runDemo}
             disabled={loading}
