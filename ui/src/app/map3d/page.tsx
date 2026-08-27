@@ -6,6 +6,9 @@ import "maplibre-gl/dist/maplibre-gl.css";
 import { GeoJsonLayer } from "@deck.gl/layers";
 import { MapboxOverlay } from "@deck.gl/mapbox";
 import buffer from "@turf/buffer";
+import centroid from "@turf/centroid";
+import booleanPointInPolygon from "@turf/boolean-point-in-polygon";
+import { lineString as turfLineString } from "@turf/helpers";
 import type { Feature, FeatureCollection, LineString, Polygon, MultiPolygon } from "geojson";
 import {
   API_BASE,
@@ -139,6 +142,79 @@ const BRIDGE_DECK_BASE_M = 3;
 const BRIDGE_HALF_WIDTH_M = { motorway: 12, trunk: 10, primary: 8, secondary: 7 } as Record<string, number>;
 const DEFAULT_BRIDGE_HALF_WIDTH_M = 4;
 
+// --- 토사 유실 / 침수 볼륨 시뮬레이터 ---
+// Module A/B가 아직 목업이라 risk_polygons/inundation_extent_5179 지오메트리가 없다
+// (contracts/module_a·b.example.json 참조) — 실제 예측값이 아니라 §9 데모 AOI(상능마을)
+// 지형에 맞춰 손으로 배치한 흐름 경로이고, 깊이는 슬라이더로 사용자가 직접 조작하는
+// what-if 값이다. 실제 물리모델이 아님을 항상 명시할 것(문서 §6 불확실성 표기 원칙).
+//
+// 지역 미터 오프셋 → 위경도 근사 변환(적도 기준 111.32km/1°, 이 위도대에서 수백m~1km
+// 규모 흐름 시각화에는 충분한 정밀도).
+function metersToLonLat(origin: [number, number], dxM: number, dyM: number): [number, number] {
+  const [lon, lat] = origin;
+  const dLon = dxM / (111320 * Math.cos((lat * Math.PI) / 180));
+  const dLat = dyM / 110540;
+  return [lon + dLon, lat + dLat];
+}
+
+// 산사태 지점(§9 데모 트리거 위치)에서 남동쪽 사면 아래로 흐르는 짧고 가파른 경로
+const DEBRIS_CENTERLINE_M: [number, number][] = [
+  [0, 0],
+  [140, -90],
+  [300, -160],
+  [420, -280],
+];
+// 같은 계곡을 따라 더 길게 흘러가는 하천범람 경로(Module B 트리거 방향)
+const FLOOD_CENTERLINE_M: [number, number][] = [
+  [50, -250],
+  [180, -420],
+  [420, -560],
+  [700, -650],
+  [980, -700],
+];
+
+interface FlowBandSpec {
+  fractionOfWidth: number; // 바깥쪽부터 안쪽 순서
+  depthFactor: number; // 슬라이더 깊이값에 곱해지는 비율
+  color: [number, number, number, number];
+}
+// 바깥(옅은 노랑) → 안(진한 빨강): 토사, 바깥(옅은 하늘) → 안(진한 파랑): 침수
+const DEBRIS_BANDS: FlowBandSpec[] = [
+  { fractionOfWidth: 1.0, depthFactor: 0.3, color: [253, 224, 71, 200] },
+  { fractionOfWidth: 0.66, depthFactor: 0.6, color: [249, 115, 22, 220] },
+  { fractionOfWidth: 0.35, depthFactor: 1.0, color: [220, 38, 38, 235] },
+];
+const FLOOD_BANDS: FlowBandSpec[] = [
+  { fractionOfWidth: 1.0, depthFactor: 0.35, color: [125, 211, 252, 170] },
+  { fractionOfWidth: 0.66, depthFactor: 0.65, color: [56, 189, 248, 195] },
+  { fractionOfWidth: 0.35, depthFactor: 1.0, color: [29, 78, 216, 220] },
+];
+
+function buildFlowBands(
+  origin: [number, number],
+  centerlineM: [number, number][],
+  baseWidthM: number,
+  depthM: number,
+  bands: FlowBandSpec[]
+): Feature<Polygon | MultiPolygon>[] {
+  const linePts = centerlineM.map(([dx, dy]) => metersToLonLat(origin, dx, dy));
+  const line = turfLineString(linePts);
+  const out: Feature<Polygon | MultiPolygon>[] = [];
+  for (const band of bands) {
+    const width = (baseWidthM * band.fractionOfWidth) / 2;
+    try {
+      const poly = buffer(line, width, { units: "meters", steps: 8 });
+      if (poly) {
+        poly.properties = { depth: Math.max(depthM * band.depthFactor, 0.15), color: band.color };
+        out.push(poly);
+      }
+    } catch {
+      // 극단적인 슬라이더 값(0에 가까움) 등으로 버퍼링이 실패하면 그 밴드는 건너뜀
+    }
+  }
+  return out;
+}
+
 // 건물 압출은 AOI 한정이 아니라 전국(사실상 전세계) 벡터타일이라 아무 데서나 보인다 —
 // 건물 밀집지로 빠르게 이동해 확인할 수 있는 테스트 지점들
 const TEST_LOCATIONS: { label: string; center: [number, number]; zoom: number }[] = [
@@ -158,6 +234,7 @@ export default function Map3DPage() {
   const mapContainer = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
   const overlayRef = useRef<MapboxOverlay | null>(null);
+  const simUpdateRef = useRef<((debrisM: number, floodM: number) => void) | null>(null);
 
   const [alertGeojson, setAlertGeojson] = useState<GeoJSON.FeatureCollection | null>(null);
   const [envelope, setEnvelope] = useState<ModuleOEnvelope | null>(null);
@@ -168,6 +245,9 @@ export default function Map3DPage() {
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState<AdminSearchResult[]>([]);
   const [searching, setSearching] = useState(false);
+  const [debrisDepth, setDebrisDepth] = useState(0);
+  const [floodDepth, setFloodDepth] = useState(0);
+  const [floodedBuildingCount, setFloodedBuildingCount] = useState<number | null>(null);
 
   // 지도 초기화 (1회)
   useEffect(() => {
@@ -315,6 +395,83 @@ export default function Map3DPage() {
         clearTimeout(idleTimer);
         idleTimer = setTimeout(updateBridges, 150);
       });
+
+      // 토사 유실 / 침수 볼륨 — bridges와 동일한 이유로 deck.gl이 아니라 MapLibre 네이티브
+      // fill-extrusion을 쓴다: 지형 위에 실제로 떠서/파묻혀서 렌더링되려면(건물·도로와
+      // 제대로 깊이 오클루전되려면) 이미 검증된 이 패턴이 맞다. depth를 슬라이더로 조절하면
+      // 밴드(바깥 옅은색~안쪽 진한색)가 다시 계산돼 실시간으로 갱신된다.
+      map.addSource("debris-flow", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
+      map.addLayer({
+        id: "debris-flow-3d",
+        type: "fill-extrusion",
+        source: "debris-flow",
+        paint: {
+          "fill-extrusion-color": ["get", "color"],
+          "fill-extrusion-height": ["get", "depth"],
+          "fill-extrusion-base": 0,
+          "fill-extrusion-opacity": 0.88,
+        },
+      });
+      map.addSource("flood-water", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
+      map.addLayer({
+        id: "flood-water-3d",
+        type: "fill-extrusion",
+        source: "flood-water",
+        paint: {
+          "fill-extrusion-color": ["get", "color"],
+          "fill-extrusion-height": ["get", "depth"],
+          "fill-extrusion-base": 0,
+          "fill-extrusion-opacity": 0.8,
+        },
+      });
+
+      simUpdateRef.current = (debrisM: number, floodM: number) => {
+        const currentMap = mapRef.current;
+        if (!currentMap) return;
+
+        const debrisFeatures = debrisM > 0 ? buildFlowBands(AOI_CENTER, DEBRIS_CENTERLINE_M, 90, debrisM, DEBRIS_BANDS) : [];
+        const floodFeatures = floodM > 0 ? buildFlowBands(AOI_CENTER, FLOOD_CENTERLINE_M, 130, floodM, FLOOD_BANDS) : [];
+
+        (currentMap.getSource("debris-flow") as GeoJSONSource | undefined)?.setData({
+          type: "FeatureCollection",
+          features: debrisFeatures,
+        } as FeatureCollection);
+        (currentMap.getSource("flood-water") as GeoJSONSource | undefined)?.setData({
+          type: "FeatureCollection",
+          features: floodFeatures,
+        } as FeatureCollection);
+
+        // 침수 범위(가장 바깥 밴드) 안에 들어오는 렌더링된 건물 수를 세서 "몇 개 건물이
+        // 잠기는지"를 텍스트로도 보여준다 — 3D 볼륨 자체가 건물을 시각적으로 덮는 게
+        // 주된 증거이고, 이 카운트는 보조 지표(대략적인 수평 포함 여부 기준).
+        const outer = floodFeatures[0];
+        if (!outer) {
+          setFloodedBuildingCount(floodM > 0 ? 0 : null);
+          return;
+        }
+        try {
+          const coords = outer.geometry.type === "Polygon" ? outer.geometry.coordinates[0] : outer.geometry.coordinates[0][0];
+          const xs = coords.map((c) => currentMap.project(c as [number, number]).x);
+          const ys = coords.map((c) => currentMap.project(c as [number, number]).y);
+          const bbox: [[number, number], [number, number]] = [
+            [Math.min(...xs), Math.min(...ys)],
+            [Math.max(...xs), Math.max(...ys)],
+          ];
+          const rendered = currentMap.queryRenderedFeatures(bbox, { layers: ["buildings-3d"] });
+          let count = 0;
+          const seen = new Set<string | number>();
+          for (const f of rendered) {
+            const key = f.id ?? JSON.stringify(f.properties);
+            if (seen.has(key)) continue;
+            seen.add(key);
+            const c = centroid(f as unknown as Feature<Polygon | MultiPolygon>);
+            if (booleanPointInPolygon(c, outer)) count++;
+          }
+          setFloodedBuildingCount(count);
+        } catch {
+          setFloodedBuildingCount(null);
+        }
+      };
 
       // interleaved:true는 deck.gl이 지형 depth와 맞물려 렌더링하도록 map.transform의
       // 내부 지형 API를 직접 읽는데, maplibre-gl v6(§AGENTS.md가 경고하는 대로 이전
@@ -474,6 +631,12 @@ export default function Map3DPage() {
     overlayRef.current.setProps({ layers });
   }, [mapReady, alertGeojson, reachedKeys, events.length]);
 
+  // 토사/침수 깊이 슬라이더가 바뀔 때마다 3D 볼륨 재계산
+  useEffect(() => {
+    if (!mapReady) return;
+    simUpdateRef.current?.(debrisDepth, floodDepth);
+  }, [mapReady, debrisDepth, floodDepth]);
+
   const alertPackage = envelope?.data.alert_package;
 
   return (
@@ -554,17 +717,65 @@ export default function Map3DPage() {
           {error && <p className="mt-2 text-xs text-red-300">{error}</p>}
         </div>
 
-        {alertPackage && (
-          <div className="pointer-events-auto max-w-xs rounded-xl border border-slate-800 bg-slate-950/85 p-4 text-xs backdrop-blur">
-            <p className="text-slate-400">산사태 위험확률</p>
-            <p className="text-xl font-bold text-red-300">{(alertPackage.landslide.landslide_prob * 100).toFixed(0)}%</p>
-            <p className="mt-2 text-slate-400">대피소 · ETA</p>
-            <p className="text-sm text-emerald-300">
-              {"shelter_id" in alertPackage.shelter_route ? alertPackage.shelter_route.shelter_id : "—"} ·{" "}
-              {"eta_min" in alertPackage.shelter_route ? `${alertPackage.shelter_route.eta_min?.toFixed(1)}분` : "—"}
+        <div className="pointer-events-auto flex flex-col gap-3">
+          {alertPackage && (
+            <div className="max-w-xs rounded-xl border border-slate-800 bg-slate-950/85 p-4 text-xs backdrop-blur">
+              <p className="text-slate-400">산사태 위험확률</p>
+              <p className="text-xl font-bold text-red-300">{(alertPackage.landslide.landslide_prob * 100).toFixed(0)}%</p>
+              <p className="mt-2 text-slate-400">대피소 · ETA</p>
+              <p className="text-sm text-emerald-300">
+                {"shelter_id" in alertPackage.shelter_route ? alertPackage.shelter_route.shelter_id : "—"} ·{" "}
+                {"eta_min" in alertPackage.shelter_route ? `${alertPackage.shelter_route.eta_min?.toFixed(1)}분` : "—"}
+              </p>
+            </div>
+          )}
+
+          <div className="w-64 rounded-xl border border-slate-800 bg-slate-950/85 p-4 text-xs backdrop-blur">
+            <p className="font-semibold text-slate-200">토사 유실 · 침수 시뮬레이터</p>
+            <p className="mt-1 text-amber-300/70">
+              실제 예측값 아님 — Module A/B 실모델 연동 전 what-if 깊이 슬라이더 (§6 불확실성 표기 원칙).
             </p>
+
+            <div className="mt-3">
+              <div className="flex items-center justify-between">
+                <span className="text-red-300">🟥 토사 깊이</span>
+                <span className="font-mono text-slate-300">{debrisDepth.toFixed(1)}m</span>
+              </div>
+              <input
+                type="range"
+                min={0}
+                max={4}
+                step={0.1}
+                value={debrisDepth}
+                onChange={(e) => setDebrisDepth(Number(e.target.value))}
+                className="mt-1 w-full accent-red-500"
+              />
+            </div>
+
+            <div className="mt-3">
+              <div className="flex items-center justify-between">
+                <span className="text-sky-300">🟦 침수 수위</span>
+                <span className="font-mono text-slate-300">{floodDepth.toFixed(1)}m</span>
+              </div>
+              <input
+                type="range"
+                min={0}
+                max={5}
+                step={0.1}
+                value={floodDepth}
+                onChange={(e) => setFloodDepth(Number(e.target.value))}
+                className="mt-1 w-full accent-sky-500"
+              />
+            </div>
+
+            {floodedBuildingCount !== null && (
+              <p className="mt-3 rounded-md bg-sky-950/50 px-2 py-1.5 text-sky-300">
+                침수 범위 안 건물 약 <span className="font-bold">{floodedBuildingCount}</span>개
+                {floodedBuildingCount === 0 && " (범위 안에 매핑된 OSM 건물 없음 — 산간 AOI 특성)"}
+              </p>
+            )}
           </div>
-        )}
+        </div>
       </div>
 
       {events.length > 0 && (
