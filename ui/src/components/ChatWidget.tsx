@@ -93,7 +93,7 @@ export default function ChatWidget() {
               onClick={send}
               disabled={sending}
               aria-label="메시지 전송"
-              className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-white/20 bg-sky-500/30 text-white shadow-md backdrop-blur-sm transition-transform hover:scale-105 hover:bg-sky-400/40 disabled:opacity-50"
+              className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-sky-300/20 bg-sky-500/60 text-white shadow-md backdrop-blur-sm transition-transform hover:scale-105 hover:bg-sky-400/70 disabled:opacity-50"
             >
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="h-5 w-5">
                 <path d="M12 19V5M5 12l7-7 7 7" />
@@ -105,7 +105,7 @@ export default function ChatWidget() {
       <button
         onClick={() => setOpen((v) => !v)}
         aria-label="Aqua Guard.AI 챗봇 열기"
-        className="flex h-[4.5rem] w-[4.5rem] items-center justify-center rounded-full border border-white/20 bg-sky-500/30 text-xl font-bold text-white shadow-2xl ring-4 ring-sky-300/20 backdrop-blur-xl transition-transform hover:scale-105 hover:bg-sky-400/40"
+        className="flex h-[4.5rem] w-[4.5rem] items-center justify-center rounded-full border border-sky-300/20 bg-sky-500/60 text-xl font-bold text-white shadow-2xl ring-4 ring-sky-300/20 backdrop-blur-xl transition-transform hover:scale-105 hover:bg-sky-400/70"
       >
         AI
       </button>
