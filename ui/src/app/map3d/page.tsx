@@ -14,6 +14,7 @@ import {
   getBoundaries,
   searchAdmin,
   triggerAlert,
+  type AdminLevel,
   type AdminSearchResult,
 } from "@/lib/api";
 import type { ModuleOEnvelope } from "@/lib/types";
@@ -212,27 +213,38 @@ export default function Map3DPage() {
       map.addLayer({ id: "hills", type: "hillshade", source: "terrain", paint: { "hillshade-exaggeration": 0.7 } });
       map.setTerrain({ source: "terrain", exaggeration: 1.3 });
 
-      // 행정동 경계(사용자 제공 BND_ADM_DONG_PG, 전국) — 뷰포트 bbox로 api_server.py의
-      // /boundaries에서 그때그때 잘라 받는다(§4.1: 재투영은 여기 UI 출력 직전에만).
-      // 데모 AOI(생비량면)만 노란색으로 강조, 나머지는 얇은 하늘색 경계선.
-      map.addSource("adm-boundaries", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
-      map.addLayer({
-        id: "adm-boundaries-line",
-        type: "line",
-        source: "adm-boundaries",
-        paint: {
-          "line-color": ["case", ["==", ["get", "ADM_CD"], AOI_ADM_CD], "#facc15", "#38bdf8"],
-          "line-width": ["case", ["==", ["get", "ADM_CD"], AOI_ADM_CD], 3, 1],
-          "line-opacity": ["case", ["==", ["get", "ADM_CD"], AOI_ADM_CD], 0.9, 0.55],
-        },
-      });
+      // 행정경계 3계층(사용자 제공 BND_ADM_DONG_PG 기반, 시도/시군구는 그 원본을
+      // dissolve해서 생성 — 전국) — 뷰포트 bbox로 api_server.py의 /boundaries에서
+      // 그때그때 잘라 받는다(§4.1: 재투영은 여기 UI 출력 직전에만). 데모 AOI(생비량면)만
+      // 노란색으로 강조, 나머지는 계층별 굵기를 달리한 하늘색 경계선.
+      const ADM_LAYER_STYLE: Record<AdminLevel, { color: string; width: number; opacity: number }> = {
+        sido: { color: "#0ea5e9", width: 2.5, opacity: 0.6 },
+        sigungu: { color: "#38bdf8", width: 1.5, opacity: 0.55 },
+        dong: { color: "#38bdf8", width: 1, opacity: 0.45 },
+      };
+      for (const level of ["sido", "sigungu", "dong"] as AdminLevel[]) {
+        const style = ADM_LAYER_STYLE[level];
+        map.addSource(`adm-${level}`, { type: "geojson", data: { type: "FeatureCollection", features: [] } });
+        map.addLayer({
+          id: `adm-${level}-line`,
+          type: "line",
+          source: `adm-${level}`,
+          paint: {
+            "line-color": ["case", ["==", ["get", "code"], AOI_ADM_CD], "#facc15", style.color],
+            "line-width": ["case", ["==", ["get", "code"], AOI_ADM_CD], 3, style.width],
+            "line-opacity": ["case", ["==", ["get", "code"], AOI_ADM_CD], 0.9, style.opacity],
+          },
+        });
+      }
 
       const updateBoundaries = () => {
         const b = map.getBounds();
         getBoundaries([b.getWest(), b.getSouth(), b.getEast(), b.getNorth()])
-          .then((fc) => {
-            const source = map.getSource("adm-boundaries") as GeoJSONSource | undefined;
-            source?.setData(fc);
+          .then((byLevel) => {
+            for (const level of ["sido", "sigungu", "dong"] as AdminLevel[]) {
+              const source = map.getSource(`adm-${level}`) as GeoJSONSource | undefined;
+              source?.setData(byLevel[level]);
+            }
           })
           .catch(() => {
             // 뷰포트 이동 중 흔한 일시적 실패 — 다음 moveend에서 다시 시도되므로 조용히 무시
@@ -476,12 +488,23 @@ export default function Map3DPage() {
             {searchResults.length > 0 && (
               <ul className="absolute z-10 mt-1 max-h-48 w-full overflow-y-auto rounded-md border border-slate-700 bg-slate-900 shadow-lg">
                 {searchResults.map((r) => (
-                  <li key={r.adm_cd}>
+                  <li key={`${r.level}-${r.code}`}>
                     <button
                       onClick={() => goToSearchResult(r)}
-                      className="block w-full px-2.5 py-1.5 text-left text-xs text-slate-200 hover:bg-sky-950/60"
+                      className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-xs text-slate-200 hover:bg-sky-950/60"
                     >
-                      {r.adm_nm} <span className="text-slate-500">({r.adm_cd})</span>
+                      <span
+                        className={`shrink-0 rounded px-1 py-0.5 text-[10px] ${
+                          r.level === "sido"
+                            ? "bg-sky-900 text-sky-300"
+                            : r.level === "sigungu"
+                              ? "bg-emerald-900 text-emerald-300"
+                              : "bg-slate-800 text-slate-400"
+                        }`}
+                      >
+                        {r.level === "sido" ? "도" : r.level === "sigungu" ? "시군구" : "읍면동"}
+                      </span>
+                      <span className="truncate">{r.full_name}</span>
                     </button>
                   </li>
                 ))}
@@ -490,9 +513,9 @@ export default function Map3DPage() {
           </div>
 
           <p className="mt-2 text-xs text-slate-400">
-            §5 Module UI-3D — MapLibre GL(지형) + deck.gl. 행정동 경계(사용자 제공 데이터, 전국)를
-            뷰포트 기준으로 실시간 표시 — 노란 선이 데모 AOI(생비량면), 하늘색이 나머지. 위험/경로
-            지오메트리는 §5 명시대로 목업 단계 placeholder입니다.
+            §5 Module UI-3D — MapLibre GL(지형) + deck.gl. 행정경계 시도/시군구/읍면동 3계층
+            (사용자 제공 데이터, 전국)을 뷰포트 기준으로 실시간 표시 — 노란 선이 데모 AOI(생비량면),
+            나머지는 계층별 굵기로 구분. 위험/경로 지오메트리는 §5 명시대로 목업 단계 placeholder입니다.
           </p>
           <p className="mt-2 text-xs text-slate-500">
             🖱 좌클릭 드래그: 이동 · 스크롤: 줌 · <span className="text-slate-300">우클릭(또는 Ctrl) 드래그: 회전/기울기</span>

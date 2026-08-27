@@ -38,15 +38,21 @@ export async function getAlert(alertId: string): Promise<ModuleOEnvelope> {
   return res.json();
 }
 
+export type AdminLevel = "sido" | "sigungu" | "dong";
+
 export interface AdminSearchResult {
-  adm_cd: string;
-  adm_nm: string;
+  level: AdminLevel;
+  code: string;
+  name: string;
+  full_name: string;
   center: [number, number];
   bbox: [number, number, number, number];
 }
 
-// bbox: [minLon, minLat, maxLon, maxLat]
-export async function getBoundaries(bbox: [number, number, number, number]): Promise<GeoJSON.FeatureCollection> {
+export type BoundariesByLevel = Record<AdminLevel, GeoJSON.FeatureCollection>;
+
+// bbox: [minLon, minLat, maxLon, maxLat] — 시도/시군구/읍면동 3계층 모두 한 번에 받는다
+export async function getBoundaries(bbox: [number, number, number, number]): Promise<BoundariesByLevel> {
   const res = await fetch(`${API_BASE}/boundaries?bbox=${bbox.join(",")}`, { cache: "no-store" });
   if (!res.ok) throw new Error(`get boundaries failed: ${res.status}`);
   return res.json();

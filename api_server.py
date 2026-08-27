@@ -162,36 +162,39 @@ def get_alert_geojson(alert_id: str) -> dict:
     return {"type": "FeatureCollection", "features": features}
 
 
-ADM_DONG_GEOJSON = DATA_VECTOR_DIR / "adm_dong_5179.geojson"
-ADM_DONG_INDEX = DATA_VECTOR_DIR / "adm_dong_index.json"
-MAX_BOUNDARY_FEATURES = 500
+ADM_LEVELS = ("sido", "sigungu", "dong")
+ADM_GEOJSON_PATHS = {level: DATA_VECTOR_DIR / f"adm_{level}_5179.geojson" for level in ADM_LEVELS}
+ADM_SEARCH_INDEX_PATH = DATA_VECTOR_DIR / "adm_index.json"
+MAX_BOUNDARY_FEATURES_PER_LEVEL = 500
 
-_adm_dong_gdf_4326: gpd.GeoDataFrame | None = None
-_adm_dong_search_index: list[dict] | None = None
+_adm_gdf_4326_cache: dict[str, gpd.GeoDataFrame] = {}
+_adm_search_index: list[dict] | None = None
 
 
-def _get_adm_dong_gdf() -> gpd.GeoDataFrame:
-    """전국 행정동 경계(사용자 제공 BND_ADM_DONG_PG, 원본 EPSG:5186 → 5179 저장, §4.1 규약)를
-    프로세스 시작 후 최초 요청 시 한 번만 읽어 4326으로 캐시한다(§4.1: 재투영은 UI 출력 직전에만).
+def _get_adm_gdf(level: str) -> gpd.GeoDataFrame:
+    """전국 행정경계 3계층(사용자 제공 BND_ADM_DONG_PG를 §4.1 규약대로 EPSG:5179에 저장,
+    시군구·시도는 그 원본 지오메트리를 dissolve해서 만듦 — data/vector/README나 커밋
+    메시지 참조)을 프로세스 시작 후 최초 요청 시 한 번만 읽어 4326으로 캐시한다
+    (§4.1: 재투영은 UI 출력 직전에만).
     """
-    global _adm_dong_gdf_4326
-    if _adm_dong_gdf_4326 is None:
-        gdf = gpd.read_file(ADM_DONG_GEOJSON)
-        _adm_dong_gdf_4326 = gdf.to_crs("EPSG:4326")
-    return _adm_dong_gdf_4326
+    if level not in _adm_gdf_4326_cache:
+        gdf = gpd.read_file(ADM_GEOJSON_PATHS[level])
+        _adm_gdf_4326_cache[level] = gdf.to_crs("EPSG:4326")
+    return _adm_gdf_4326_cache[level]
 
 
-def _get_adm_dong_search_index() -> list[dict]:
-    global _adm_dong_search_index
-    if _adm_dong_search_index is None:
-        with open(ADM_DONG_INDEX, encoding="utf-8") as f:
-            _adm_dong_search_index = json.load(f)
-    return _adm_dong_search_index
+def _get_adm_search_index() -> list[dict]:
+    global _adm_search_index
+    if _adm_search_index is None:
+        with open(ADM_SEARCH_INDEX_PATH, encoding="utf-8") as f:
+            _adm_search_index = json.load(f)
+    return _adm_search_index
 
 
 @app.get("/boundaries")
 def get_boundaries(bbox: str) -> dict:
-    """현재 지도 뷰포트에 걸리는 행정동 경계만 반환한다 (EPSG:4326).
+    """현재 지도 뷰포트에 걸리는 행정경계를 시도/시군구/읍면동 3계층 모두 반환한다
+    (EPSG:4326, {"sido": FeatureCollection, "sigungu": ..., "dong": ...}).
 
     bbox: "minLon,minLat,maxLon,maxLat" — 전국 데이터를 한 번에 안 내려주고 뷰포트
     기준으로 잘라주는 이유는 프론트가 나라 전체를 한 번에 로드하지 않게 하기 위함
@@ -202,29 +205,30 @@ def get_boundaries(bbox: str) -> dict:
     except ValueError:
         raise HTTPException(status_code=400, detail="bbox must be 'minLon,minLat,maxLon,maxLat'")
 
-    gdf = _get_adm_dong_gdf()
-    clipped = gdf.cx[minx:maxx, miny:maxy]
-    if len(clipped) > MAX_BOUNDARY_FEATURES:
-        clipped = clipped.iloc[:MAX_BOUNDARY_FEATURES]
-    return json.loads(clipped.to_json())
+    result: dict[str, dict] = {}
+    for level in ADM_LEVELS:
+        clipped = _get_adm_gdf(level).cx[minx:maxx, miny:maxy]
+        if len(clipped) > MAX_BOUNDARY_FEATURES_PER_LEVEL:
+            clipped = clipped.iloc[:MAX_BOUNDARY_FEATURES_PER_LEVEL]
+        result[level] = json.loads(clipped.to_json())
+    return result
 
 
 @app.get("/search")
 def search_admin(q: str) -> list[dict]:
-    """행정동 이름 검색(시/군/구/읍/면/동 등, 부분일치) — 검색창에서 지역 이동에 사용.
-
-    각 결과는 {adm_cd, adm_nm, center:[lon,lat], bbox:[minLon,minLat,maxLon,maxLat]} —
-    프론트는 bbox로 fitBounds하면 된다. 이름이 겹치는 지역(예: 여러 시/군의 "중앙동")은
-    행정동 코드(§ 8자리: 시도2+시군구3+읍면동3)만 다르고 상위 지명이 응답에 없다는
-    한계가 있음 — data/vector/adm_dong_index.json이 이 shapefile(읍면동 레벨)만 갖고
-    있어서 시/군/구 상위 레이어 명칭까지는 못 붙임(§10 TODO 후보).
+    """행정구역 이름 검색(도/광역시, 시/군/구, 읍/면/동 3계층 모두, 부분일치) — 검색창에서
+    지역 이동에 사용. 각 결과: {level, code, name, full_name, center:[lon,lat],
+    bbox:[minLon,minLat,maxLon,maxLat]}. full_name이 "경상남도 산청군 생비량면"처럼
+    상위 지명까지 포함돼 있어 동명이지(예: 여러 시/군의 "중앙동")를 구분할 수 있다 —
+    data/vector/adm_index.json이 사용자 제공 데이터의 코드 체계를 vuski/admdongkor
+    (동일 SGIS adm_cd 스킴, MIT 라이선스)와 매칭해 상위 지명을 붙인 결과.
     """
     q = q.strip()
     if not q:
         return []
-    index = _get_adm_dong_search_index()
-    matches = [row for row in index if q in row["adm_nm"]]
-    matches.sort(key=lambda r: (not r["adm_nm"].startswith(q), len(r["adm_nm"])))
+    index = _get_adm_search_index()
+    matches = [row for row in index if q in row["name"] or q in row["full_name"]]
+    matches.sort(key=lambda r: (not r["name"].startswith(q), len(r["full_name"])))
     return matches[:20]
 
 
