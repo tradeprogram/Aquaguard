@@ -108,12 +108,17 @@ export default function Map3DPage() {
       zoom: 12.5,
       pitch: 60,
       bearing: -20,
-      maxPitch: 85,
+      // 85° 근처의 극단적인 pitch는 지형(terrain) 활성화 상태에서 카메라 투영이
+      // 불안정해져 줌 중 "튕기는" 현상의 흔한 원인이라 안전한 값으로 낮춤
+      maxPitch: 70,
       // 마우스로 자유롭게 회전/기울기(우클릭 또는 Ctrl+드래그) 조작 가능하도록 명시적으로 켬
       dragRotate: true,
       pitchWithRotate: true,
       touchZoomRotate: true,
       touchPitch: true,
+      // 커서 위치 기준 줌은 지형 고도가 아직 로드 중일 때 그 지점의 고도값이 계속
+      // 바뀌면서 카메라가 재계산돼 튕기는 원인이 된다 — 화면 중심 기준으로 고정
+      scrollZoom: { around: "center" },
     });
     map.addControl(new NavigationControl({ visualizePitch: true }), "top-right");
     // fitBounds는 bearing을 명시하지 않으면 0으로 되돌린다(공식 문서에 명시된 동작) —
@@ -135,7 +140,7 @@ export default function Map3DPage() {
         maxzoom: 15,
       });
       map.addLayer({ id: "hills", type: "hillshade", source: "terrain", paint: { "hillshade-exaggeration": 0.7 } });
-      map.setTerrain({ source: "terrain", exaggeration: 1.6 });
+      map.setTerrain({ source: "terrain", exaggeration: 1.3 });
 
       // interleaved:true는 deck.gl이 지형 depth와 맞물려 렌더링하도록 map.transform의
       // 내부 지형 API를 직접 읽는데, maplibre-gl v6(§AGENTS.md가 경고하는 대로 이전
