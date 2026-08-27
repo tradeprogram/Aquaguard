@@ -1,6 +1,6 @@
 import type { ModuleOEnvelope } from "./types";
 
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:8000";
+export const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:8000";
 
 export interface TriggerInput {
   alert_id: string;

@@ -11,7 +11,8 @@ from pathlib import Path
 from typing import Literal
 
 import geopandas as gpd
-from fastapi import FastAPI, HTTPException
+import requests
+from fastapi import FastAPI, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -189,6 +190,23 @@ def get_aoi(name: str) -> dict:
     geojson = json.loads(gdf.to_crs("EPSG:4326").to_json())
     _AOI_CACHE[name] = geojson
     return geojson
+
+
+@app.get("/terrain-tiles/{z}/{x}/{y}.png")
+def get_terrain_tile(z: int, x: int, y: int) -> Response:
+    """AWS 공개 지형 타일(elevation-tiles-prod, terrarium 인코딩) 프록시.
+
+    브라우저가 직접 이 S3 버킷을 호출하면 Access-Control-Allow-Origin 헤더가
+    없어서 MapLibre가 지형 고도값을 읽지 못해(캔버스 오염) 3D 렌더링이 조용히
+    실패한다. 서버 간 호출은 CORS 제약이 없으므로 여기서 대신 가져와 우리
+    CORSMiddleware가 붙인 헤더로 돌려준다. V-World API 키가 생기면(§2.3 1순위)
+    이 프록시를 그쪽으로 바꿔치기하면 된다.
+    """
+    upstream = f"https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png"
+    resp = requests.get(upstream, timeout=10)
+    if resp.status_code != 200:
+        raise HTTPException(status_code=resp.status_code, detail="terrain tile fetch failed")
+    return Response(content=resp.content, media_type="image/png", headers={"Cache-Control": "public, max-age=86400"})
 
 
 @app.get("/health")

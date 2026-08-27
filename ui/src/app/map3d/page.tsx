@@ -5,7 +5,7 @@ import { Map as MapLibreMap, NavigationControl, type StyleSpecification } from "
 import "maplibre-gl/dist/maplibre-gl.css";
 import { GeoJsonLayer } from "@deck.gl/layers";
 import { MapboxOverlay } from "@deck.gl/mapbox";
-import { SANGCHEONG_DEMO_INPUT, getAlertGeojson, getAoi, triggerAlert } from "@/lib/api";
+import { API_BASE, SANGCHEONG_DEMO_INPUT, getAlertGeojson, getAoi, triggerAlert } from "@/lib/api";
 import type { ModuleOEnvelope } from "@/lib/types";
 
 // 산청군 생비량면(§9 데모 AOI) 중심 — data/vector/saengbiryang_myeon_5179.geojson 실측 centroid
@@ -15,6 +15,7 @@ const AOI_BOUNDS: [[number, number], [number, number]] = [
   [128.1152, 35.39634],
 ];
 
+// 지형(raster-dem)은 스타일 JSON에 선언하지 않고 'load' 이후 명령형으로 추가한다 — 아래 참조.
 const MAP_STYLE: StyleSpecification = {
   version: 8,
   glyphs: "https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf",
@@ -25,19 +26,8 @@ const MAP_STYLE: StyleSpecification = {
       tileSize: 256,
       attribution: "© OpenStreetMap contributors",
     },
-    terrain: {
-      type: "raster-dem",
-      tiles: ["https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png"],
-      tileSize: 256,
-      encoding: "terrarium",
-      maxzoom: 15,
-    },
   },
-  layers: [
-    { id: "osm", type: "raster", source: "osm" },
-    { id: "hills", type: "hillshade", source: "terrain", paint: { "hillshade-exaggeration": 0.7 } },
-  ],
-  terrain: { source: "terrain", exaggeration: 1.6 },
+  layers: [{ id: "osm", type: "raster", source: "osm" }],
 };
 
 interface TimelineEvent {
@@ -73,12 +63,27 @@ export default function Map3DPage() {
       maxPitch: 85,
     });
     map.addControl(new NavigationControl({ visualizePitch: true }), "top-right");
-    map.fitBounds(AOI_BOUNDS, { padding: 40, duration: 0 });
+    // fitBounds는 bearing을 명시하지 않으면 0으로 되돌린다(공식 문서에 명시된 동작) —
+    // 생성자에서 준 -20을 유지하려면 여기서도 다시 넘겨야 한다.
+    map.fitBounds(AOI_BOUNDS, { padding: 40, duration: 0, bearing: -20 });
     mapRef.current = map;
 
     // deck.gl interleaved 모드는 스타일이 완전히 로드된 뒤 overlay를 추가해야 한다 —
     // load 이전에 addControl하면 렌더 파이프라인이 깨져 스타일/타일 로딩이 멈춘다.
     map.once("load", () => {
+      // 지형(raster-dem)은 api_server.py의 /terrain-tiles 프록시를 거친다 — AWS
+      // elevation-tiles-prod 버킷이 Access-Control-Allow-Origin을 안 보내서 브라우저가
+      // 직접 요청하면 고도 픽셀을 못 읽어(캔버스 오염) 지형이 조용히 렌더링되지 않는다.
+      map.addSource("terrain", {
+        type: "raster-dem",
+        tiles: [`${API_BASE}/terrain-tiles/{z}/{x}/{y}.png`],
+        tileSize: 256,
+        encoding: "terrarium",
+        maxzoom: 15,
+      });
+      map.addLayer({ id: "hills", type: "hillshade", source: "terrain", paint: { "hillshade-exaggeration": 0.7 } });
+      map.setTerrain({ source: "terrain", exaggeration: 1.6 });
+
       const overlay = new MapboxOverlay({ interleaved: true, layers: [] });
       map.addControl(overlay);
       overlayRef.current = overlay;
