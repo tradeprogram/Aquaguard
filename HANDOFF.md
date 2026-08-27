@@ -61,7 +61,7 @@ Next.js 16(App Router) + TypeScript + Tailwind v4. 페이지 4개:
 구성 요소:
 - **지형**: `api_server.py`의 `/terrain-tiles` 프록시를 통해 AWS 공개 지형 데이터(terrarium 인코딩) → `map.setTerrain()`
 - **위성영상**: Esri World Imagery (무료, 키 불필요) + Esri 지명 레이블 레이어
-- **건물**: OpenFreeMap 무료 벡터타일(OSM, OpenMapTiles 스키마) → `render_height`/`render_min_height`로 실제 높이 압출(`fill-extrusion`)
+- **건물**: VWorld 건물통합정보(§2.3 1순위, `LT_C_SPBD` 레이어, `/vworld/buildings` 프록시) — 층수×3m 근사 높이로 압출. VWorld 요청 실패 시에만 OpenFreeMap(OSM) 폴백으로 자동 전환(`buildings-3d-osm`, 산간지역은 매핑이 드문드문 — 산청 AOI bbox 기준 VWorld는 478개, OSM은 훨씬 적었음)
 - **도로망**: 같은 벡터타일의 `transportation` 소스레이어 → 도로 등급별 폭/색 스타일링, 터널은 점선
 - **교량**: `brunnel=='bridge'`인 도로를 `querySourceFeatures`로 실시간 조회 → `@turf/buffer`로 폭만큼 버퍼링 → `fill-extrusion`으로 지면에서 3~11m 띄운 "진짜 뜬" 데크 (단순 라인 색칠이 아님)
 - **행정경계 3계층**: 사용자가 준 `BND_ADM_DONG_PG`(읍면동 레벨) 원본을 코드 접두어로 dissolve해서 시군구/시도 경계까지 만듦(아래 §2 데이터 파이프라인 참조). 뷰포트 bbox로 실시간 갱신, 데모 AOI(생비량면)만 노란색.
@@ -85,6 +85,7 @@ Next.js 16(App Router) + TypeScript + Tailwind v4. 페이지 4개:
 2. Module A(`landslide_prob`/`amplification_factor`)나 Module B(`inundation_extent_5179`)가 실제로 연동되면, 지금의 하드코딩된 중심선/밴드 생성 로직을 실제 모듈 출력 기반으로 교체해야 함 — `contracts/module_a·b.example.json`은 아직 목업이라 지오메트리가 비어있음.
 3. Codex가 `api_server.py`/`geo.py`에서 서버사이드로 비슷한 걸(`debris_flow_demo`/`flood_volume_demo`, `ring_5179_to_lonlat`) 만들다가 중간에 날아간 적 있음(§3.7 "사이트 터진거" 사고, `git stash@{0}`에 보존돼 있음) — **두 접근을 합칠지, 프론트 전용으로 갈지 먼저 정리하고 시작할 것.** 서버사이드로 가면 5179 좌표계로 정확한 미터 버퍼링이 가능해서 더 정밀해지지만, 프론트 전용은 슬라이더 반응성이 빠르고 백엔드 충돌 위험이 없음.
 4. 진짜 CFD처럼 매끄러운 그라디언트(레퍼런스 이미지 수준)를 원하면 밴드 개수를 늘리거나(지금 3겹→5~8겹), MapLibre의 `fill-extrusion-vertical-gradient` 같은 페인트 속성을 써서 각 폴리곤 내부도 그라디언트로 보이게 다듬을 수 있음.
+5. **(해결됨)** "산청은 건물이 거의 안 뜬다"는 문제 — VWorld 건물통합정보 연동(§1.5, §2.2, 커밋 `abcb95a`)으로 해결. 이제 침수 볼륨이 실제 건물 478개와 정확히 겹쳐 보임. 3번 항목의 "백엔드 충돌 피하려고 프론트 전용으로 감" 전략은 이 커밋에서 `api_server.py`를 다시 건드리면서 깨졌으니, 이어서 작업할 때 Codex 상태를 다시 확인할 것(`git status`/`git log`).
 
 ---
 
@@ -155,6 +156,8 @@ sido['geometry'] = sido.geometry.simplify(600, preserve_topology=True)
 ---
 
 ## 4. 실행 방법 (처음부터)
+
+**VWorld API 키 필요**: `.env`(git-ignore됨, 절대 커밋 안 됨)에 `VWORLD_API_KEY=...` 한 줄이 있어야 `/vworld/buildings` 엔드포인트(§1.5, §2.2 참고)가 동작한다. 이 저장소를 새로 체크아웃하면 `.env`가 없으니, 사용자에게 키를 다시 물어보거나 www.vworld.kr에서 새로 발급받아 `C:\aquaguard\.env`에 넣을 것 (형식은 `.env.example` 같은 게 없으니 이 문서 참고). 없어도 서버는 뜨지만 `/vworld/buildings`가 503을 반환하고 프론트는 OSM 폴백(`buildings-3d-osm` 레이어, 산간지역은 매핑이 드문드문)으로 자동 전환된다.
 
 ```bash
 # 백엔드
