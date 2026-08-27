@@ -300,7 +300,7 @@ NAVER_MAPS_CLIENT_SECRET=...
 ### 6.8 신규 — 사용자 현재 위치를 출발지로 (2026-08-27 추가 요청, **완료**)
 지금까지의 `origin`은 전부 `SANGCHEONG_DEMO_INPUT`(데모용 고정 좌표)이었다. 실제 배포에서는 **접속한 사용자의 현재 위치**가 출발지여야 한다.
 
-> **완료(2026-08-27)**: `EvacuationPanel.tsx`의 "내 위치로 찾기" 버튼이 아래 1번대로 구현됨. 단 지금은 `/evacuation-route` 백엔드가 없어서 받은 좌표로 직접(하버사인) 거리를 계산해 화면에서 바로 보여준다 — 백엔드 연동은 아직임. 2번(폴백) 중 ①(지도 클릭)은 아직 없고 ②(검색창)는 이미 있던 기능으로 대체. 3번(에러 메시지)은 구현됨.
+> **완료(2026-08-27)**: `EvacuationPanel.tsx`의 "내 위치로 찾기" 버튼이 아래 1번대로 구현됨. 단 지금은 `/evacuation-route` 백엔드가 없어서 받은 좌표로 직접(하버사인) 거리를 계산해 화면에서 바로 보여준다 — 백엔드 연동은 아직임. 2번(폴백) 중 **①(지도 클릭)도 이제 구현됨** — "지도에서 선택" 버튼이 `MapExplorer`의 새 `pickOrigin`/`onOriginPicked` prop으로 다음 지도 클릭 한 번을 잡아 출발지로 쓴다(②는 원래 있던 검색창으로 대체). 3번(에러 메시지)도 구현됨. **참고**: 이 지도-클릭 부분은 이 세션의 sandboxed 브라우저 pane이 MapLibre `load` 이벤트에 끝내 도달하지 못해서(§3의 WebGL 컴포지팅 한계와 동일 원인, `mapReady`가 5초+ 지나도 계속 `false`) 실제 클릭 동작 자체는 이 세션에서 직접 확인 못 했다 — 코드는 다른 지도 기능들과 완전히 같은 패턴이라 실제 브라우저에서는 될 것으로 보이지만, 한 번 눌러서 확인해볼 것.
 
 1. **브라우저 Geolocation API**로 위치 요청: `navigator.geolocation.getCurrentPosition(success, error, { enableHighAccuracy: true, timeout: 8000 })`. 반환되는 `coords.longitude`/`coords.latitude`는 EPSG:4326 — `/evacuation-route`의 `origin: {lon, lat}`에 그대로 넣으면 된다(백엔드에서 5179로 변환).
 2. **중요한 제약**: Geolocation API는 **secure context(HTTPS 또는 localhost)에서만 동작**한다 — 배포 도메인이 HTTP면 조용히 실패하니 배포 전 HTTPS 확인 필수.
