@@ -26,7 +26,7 @@
 ### 1.2 Module O 오케스트레이터 (`module_o_orchestrator/`)
 - `orchestrator.py`: `run(input) -> envelope`. A/B 호출 → 임계치(`landslide_prob≥0.7` 또는 `flood_prob≥0.7`) 초과 시 D/E/G 순차 호출 → `precursor_flag`면 H 호출 → `golden_time_saved_min` 계산 → `AlertStore`에 등록.
 - `modules_client.py`: `AQUAGUARD_MOCK_MODE`(기본 `1`)로 목업/실제 모듈 호출을 스위칭. `MODULE_PACKAGES` 딕셔너리에 트랙①②의 실제 패키지명이 매핑돼 있음 — **트랙①②가 코드를 넣으면 이 파일 수정 없이 `AQUAGUARD_MOCK_MODE=0`만으로 실제 연동됨.**
-- `store.py`: 인메모리 `AlertStore`. 원클릭 승인 상태머신(`대기`/`승인`/`거부`/`자동승인(timeout)`), 오탐(`오탐판정`)이면 자동승인 안 함.
+- `store.py`: 인메모리 `AlertStore`. 원클릭 승인 상태머신(`대기`/`승인`/`거부`/`자동승인(timeout)`), 오탐(`오탐판정`)이면 자동승인 안 함. **2026-08-29부로 핵심 아키텍처에서 제외됨**(시민 직접배포 취지·법적 리스크, §9.5 참조) — 코드는 남아있으나 더 이상 신규 개발 대상 아님.
 - `geo.py`: EPSG:5179→4326 재투영 헬퍼(점/원). **§4.1 규약상 재투영은 UI 출력 직전에만** — 이 파일과 `api_server.py`의 지도 관련 엔드포인트가 그 유일한 지점.
 - `tests/test_orchestrator.py`: pytest 6개, 전부 통과 중. 문서에 나온 예시값(`golden_time_saved_min=197`)을 정확히 재현하는지까지 검증함.
 - 실행: `python -m pytest module_o_orchestrator/tests/ -v` (repo 루트에서)
@@ -467,7 +467,7 @@ Module A/B(트랙①) 담당이지만, 이 하나가 프로젝트 전체 약점�
 | "예측이 실제로 맞습니까?" | 핵심 A/B가 현재 mock | 산청 hold-out backtest, PR-AUC/Brier/공간 hit rate |
 | "산림청도 산불피해지를 위험도에 반영하는데 뭐가 다르죠?" | 독창성 축 하나를 바로 무너뜨릴 수 있음 | "예측 자체가 아니라 downstream 의사결정 체인" 비교도 (§0.1에 이미 반영) |
 | "화재지역과 7월 산사태 위치가 실제로 겹칩니까?" | 같은 '산청군'≠같은 사면·유역 | 3월 dNBR burn scar × 7월 landslide inventory 공간교차 (§9.3-2, 미검증) |
-| "공무원이 진짜 이 시스템으로 경보를 자동 발령할 수 있나요?" | 법·책임성 공격 | human-in-the-loop, advisory mode, audit log, SOP (§0.1에 이미 반영) |
+| "공무원이 진짜 이 시스템으로 경보를 자동 발령할 수 있나요?" | 법·책임성 공격 | ~~human-in-the-loop, advisory mode, audit log, SOP~~ — **2026-08-29부로 이 답이 더 이상 유효하지 않음.** 사용자가 "시민 직접배포 앱 취지에 안 맞고 위험도가 높다"는 이유로 지자체 담당자 승인 게이트("원클릭 승인")를 핵심 아키텍처에서 완전히 제외하기로 결정 — Module O는 이제 승인 대기 없이 시민 역검증(Module H)만으로 곧바로 경보격상·주민전파로 넘어간다(§5 Module O 상태머신 7단계로 축소, ARCHITECTURE.md 동일 반영). 관련 코드(`store.py`의 `AlertStore` 승인 상태머신, `POST /approve/{alert_id}`, `ApprovePanel.tsx`, `/approve` 라우트)는 아직 삭제 안 하고 남겨뒀다 — 문서·아키텍처에서만 제외, 코드 삭제 여부는 별도 확인 필요. **이 질문에 대한 새 답은 아직 미해결** — 승인 게이트가 없는 채로 법·책임성 공격에 어떻게 답할지 발표 전까지 반드시 정리할 것(예: 시민 역검증 신뢰도 임계치를 매우 보수적으로 잡기, 오탐 시 자동 정정 채널, 법률 자문). |
 | "이 화면의 숫자는 실제인가요, 데모인가요?" | 여러 핵심 값이 example JSON·placeholder | 모든 화면에 REAL/MODEL/SIMULATION provenance 표시 — **아직 미착수, UI 작업 후보** |
 
 ### 9.6 본선 10분 발표 구조 (나중에 발표자료 만들 사람 참고용)
