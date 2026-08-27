@@ -7,15 +7,24 @@ import { GeoJsonLayer } from "@deck.gl/layers";
 import { MapboxOverlay } from "@deck.gl/mapbox";
 import buffer from "@turf/buffer";
 import type { Feature, FeatureCollection, LineString, Polygon, MultiPolygon } from "geojson";
-import { API_BASE, SANGCHEONG_DEMO_INPUT, getAlertGeojson, getAoi, triggerAlert } from "@/lib/api";
+import {
+  API_BASE,
+  SANGCHEONG_DEMO_INPUT,
+  getAlertGeojson,
+  getBoundaries,
+  searchAdmin,
+  triggerAlert,
+  type AdminSearchResult,
+} from "@/lib/api";
 import type { ModuleOEnvelope } from "@/lib/types";
 
-// 산청군 생비량면(§9 데모 AOI) 중심 — data/vector/saengbiryang_myeon_5179.geojson 실측 centroid
+// 산청군 생비량면(§9 데모 AOI) — data/vector/adm_dong_5179.geojson 실측 centroid/ADM_CD
 const AOI_CENTER: [number, number] = [128.0559, 35.3505];
 const AOI_BOUNDS: [[number, number], [number, number]] = [
   [128.00826, 35.30385],
   [128.1152, 35.39634],
 ];
+const AOI_ADM_CD = "38570390";
 
 // 지형(raster-dem)은 스타일 JSON에 선언하지 않고 'load' 이후 명령형으로 추가한다 — 아래 참조.
 // 위성영상: Esri World Imagery(무료, API 키 불필요, CORS 허용 확인됨). §2.3 1순위인
@@ -149,13 +158,15 @@ export default function Map3DPage() {
   const mapRef = useRef<MapLibreMap | null>(null);
   const overlayRef = useRef<MapboxOverlay | null>(null);
 
-  const [aoi, setAoi] = useState<GeoJSON.FeatureCollection | null>(null);
   const [alertGeojson, setAlertGeojson] = useState<GeoJSON.FeatureCollection | null>(null);
   const [envelope, setEnvelope] = useState<ModuleOEnvelope | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [sliderPct, setSliderPct] = useState(0);
   const [mapReady, setMapReady] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchResults, setSearchResults] = useState<AdminSearchResult[]>([]);
+  const [searching, setSearching] = useState(false);
 
   // 지도 초기화 (1회)
   useEffect(() => {
@@ -200,6 +211,39 @@ export default function Map3DPage() {
       });
       map.addLayer({ id: "hills", type: "hillshade", source: "terrain", paint: { "hillshade-exaggeration": 0.7 } });
       map.setTerrain({ source: "terrain", exaggeration: 1.3 });
+
+      // 행정동 경계(사용자 제공 BND_ADM_DONG_PG, 전국) — 뷰포트 bbox로 api_server.py의
+      // /boundaries에서 그때그때 잘라 받는다(§4.1: 재투영은 여기 UI 출력 직전에만).
+      // 데모 AOI(생비량면)만 노란색으로 강조, 나머지는 얇은 하늘색 경계선.
+      map.addSource("adm-boundaries", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
+      map.addLayer({
+        id: "adm-boundaries-line",
+        type: "line",
+        source: "adm-boundaries",
+        paint: {
+          "line-color": ["case", ["==", ["get", "ADM_CD"], AOI_ADM_CD], "#facc15", "#38bdf8"],
+          "line-width": ["case", ["==", ["get", "ADM_CD"], AOI_ADM_CD], 3, 1],
+          "line-opacity": ["case", ["==", ["get", "ADM_CD"], AOI_ADM_CD], 0.9, 0.55],
+        },
+      });
+
+      const updateBoundaries = () => {
+        const b = map.getBounds();
+        getBoundaries([b.getWest(), b.getSouth(), b.getEast(), b.getNorth()])
+          .then((fc) => {
+            const source = map.getSource("adm-boundaries") as GeoJSONSource | undefined;
+            source?.setData(fc);
+          })
+          .catch(() => {
+            // 뷰포트 이동 중 흔한 일시적 실패 — 다음 moveend에서 다시 시도되므로 조용히 무시
+          });
+      };
+      updateBoundaries();
+      let moveendTimer: ReturnType<typeof setTimeout> | undefined;
+      map.on("moveend", () => {
+        clearTimeout(moveendTimer);
+        moveendTimer = setTimeout(updateBoundaries, 200);
+      });
 
       // 교량(brunnel=='bridge')은 MapLibre line 레이어로는 지형 위에 그대로 드레이프될
       // 뿐이라 실제로 "떠 있는" 느낌이 안 난다 — LineString을 폭만큼 버퍼링해 얇은
@@ -277,15 +321,42 @@ export default function Map3DPage() {
     };
   }, []);
 
-  // AOI 경계는 페이지 진입 시 바로 로드
-  useEffect(() => {
-    getAoi("saengbiryang")
-      .then(setAoi)
-      .catch((e) => setError(`AOI 로드 실패: ${e instanceof Error ? e.message : String(e)}`));
-  }, []);
 
   const flyTo = useCallback((center: [number, number], zoom: number) => {
     mapRef.current?.flyTo({ center, zoom, pitch: 60, bearing: -20, duration: 2000 });
+  }, []);
+
+  // 검색어 입력 300ms 디바운스 — 시/군/구/읍/면/동 이름 부분일치 (api_server.py /search)
+  useEffect(() => {
+    const q = searchQuery.trim();
+    if (!q) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- 입력이 비었을 때 즉시 목록을 비우는 동기 초기화
+      setSearchResults([]);
+      return;
+    }
+    setSearching(true);
+    const id = setTimeout(() => {
+      searchAdmin(q)
+        .then(setSearchResults)
+        .catch(() => setSearchResults([]))
+        .finally(() => setSearching(false));
+    }, 300);
+    return () => clearTimeout(id);
+  }, [searchQuery]);
+
+  const goToSearchResult = useCallback((result: AdminSearchResult) => {
+    const map = mapRef.current;
+    if (!map) return;
+    const [minLon, minLat, maxLon, maxLat] = result.bbox;
+    map.fitBounds(
+      [
+        [minLon, minLat],
+        [maxLon, maxLat],
+      ],
+      { padding: 60, bearing: -20, pitch: 60, duration: 1500 }
+    );
+    setSearchQuery("");
+    setSearchResults([]);
   }, []);
 
   const runDemo = useCallback(async () => {
@@ -337,20 +408,6 @@ export default function Map3DPage() {
 
     const layers = [];
 
-    if (aoi) {
-      layers.push(
-        new GeoJsonLayer({
-          id: "aoi",
-          data: aoi,
-          stroked: true,
-          filled: false,
-          getLineColor: [250, 204, 21, 220],
-          lineWidthUnits: "pixels",
-          getLineWidth: 2,
-        })
-      );
-    }
-
     if (alertGeojson) {
       const showRisk = events.length === 0 || reachedKeys.has("detected");
       const showRoute = events.length === 0 || reachedKeys.has("alert_sent");
@@ -395,7 +452,7 @@ export default function Map3DPage() {
     }
 
     overlayRef.current.setProps({ layers });
-  }, [mapReady, aoi, alertGeojson, reachedKeys, events.length]);
+  }, [mapReady, alertGeojson, reachedKeys, events.length]);
 
   const alertPackage = envelope?.data.alert_package;
 
@@ -406,9 +463,36 @@ export default function Map3DPage() {
       <div className="pointer-events-none absolute inset-x-0 top-0 flex justify-between p-4">
         <div className="pointer-events-auto max-w-sm rounded-xl border border-slate-800 bg-slate-950/85 p-4 backdrop-blur">
           <h1 className="text-lg font-bold">3D 지도 — 산청군 생비량면 AOI</h1>
-          <p className="mt-1 text-xs text-slate-400">
-            §5 Module UI-3D — MapLibre GL(지형) + deck.gl. 노란 선은 행정동 경계 실데이터(EPSG:5179 →
-            4326 재투영), 나머지 위험/경로 지오메트리는 §5 명시대로 목업 단계 placeholder입니다.
+
+          <div className="relative mt-2">
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="시/군/구/읍/면/동 검색 (예: 생비량면, 강남동)"
+              className="w-full rounded-md border border-slate-700 bg-slate-900 px-2.5 py-1.5 text-xs text-slate-100 placeholder:text-slate-500 focus:border-sky-600 focus:outline-none"
+            />
+            {searching && <span className="absolute right-2 top-1.5 text-xs text-slate-500">검색 중…</span>}
+            {searchResults.length > 0 && (
+              <ul className="absolute z-10 mt-1 max-h-48 w-full overflow-y-auto rounded-md border border-slate-700 bg-slate-900 shadow-lg">
+                {searchResults.map((r) => (
+                  <li key={r.adm_cd}>
+                    <button
+                      onClick={() => goToSearchResult(r)}
+                      className="block w-full px-2.5 py-1.5 text-left text-xs text-slate-200 hover:bg-sky-950/60"
+                    >
+                      {r.adm_nm} <span className="text-slate-500">({r.adm_cd})</span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+
+          <p className="mt-2 text-xs text-slate-400">
+            §5 Module UI-3D — MapLibre GL(지형) + deck.gl. 행정동 경계(사용자 제공 데이터, 전국)를
+            뷰포트 기준으로 실시간 표시 — 노란 선이 데모 AOI(생비량면), 하늘색이 나머지. 위험/경로
+            지오메트리는 §5 명시대로 목업 단계 placeholder입니다.
           </p>
           <p className="mt-2 text-xs text-slate-500">
             🖱 좌클릭 드래그: 이동 · 스크롤: 줌 · <span className="text-slate-300">우클릭(또는 Ctrl) 드래그: 회전/기울기</span>

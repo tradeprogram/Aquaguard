@@ -162,34 +162,70 @@ def get_alert_geojson(alert_id: str) -> dict:
     return {"type": "FeatureCollection", "features": features}
 
 
-_AOI_CACHE: dict[str, dict] = {}
+ADM_DONG_GEOJSON = DATA_VECTOR_DIR / "adm_dong_5179.geojson"
+ADM_DONG_INDEX = DATA_VECTOR_DIR / "adm_dong_index.json"
+MAX_BOUNDARY_FEATURES = 500
+
+_adm_dong_gdf_4326: gpd.GeoDataFrame | None = None
+_adm_dong_search_index: list[dict] | None = None
 
 
-@app.get("/aoi/{name}")
-def get_aoi(name: str) -> dict:
-    """행정동 경계 실데이터(data/vector/*_5179.geojson, EPSG:5179 원본)를 3D 지도용으로
-    EPSG:4326 재투영해 반환한다 — §4.1: 재투영은 UI 출력 직전에만.
-
-    지원: "saengbiryang" (§9 데모 AOI — 산청군 생비량면), "sancheong_gun" (군 전체, 맥락용)
+def _get_adm_dong_gdf() -> gpd.GeoDataFrame:
+    """전국 행정동 경계(사용자 제공 BND_ADM_DONG_PG, 원본 EPSG:5186 → 5179 저장, §4.1 규약)를
+    프로세스 시작 후 최초 요청 시 한 번만 읽어 4326으로 캐시한다(§4.1: 재투영은 UI 출력 직전에만).
     """
-    if name in _AOI_CACHE:
-        return _AOI_CACHE[name]
+    global _adm_dong_gdf_4326
+    if _adm_dong_gdf_4326 is None:
+        gdf = gpd.read_file(ADM_DONG_GEOJSON)
+        _adm_dong_gdf_4326 = gdf.to_crs("EPSG:4326")
+    return _adm_dong_gdf_4326
 
-    filenames = {
-        "saengbiryang": "saengbiryang_myeon_5179.geojson",
-        "sancheong_gun": "sancheong_gun_dong_5179.geojson",
-    }
-    if name not in filenames:
-        raise HTTPException(status_code=404, detail=f"unknown AOI '{name}', choose from {list(filenames)}")
 
-    path = DATA_VECTOR_DIR / filenames[name]
-    if not path.exists():
-        raise HTTPException(status_code=404, detail=f"{path} not found on disk")
+def _get_adm_dong_search_index() -> list[dict]:
+    global _adm_dong_search_index
+    if _adm_dong_search_index is None:
+        with open(ADM_DONG_INDEX, encoding="utf-8") as f:
+            _adm_dong_search_index = json.load(f)
+    return _adm_dong_search_index
 
-    gdf = gpd.read_file(path)
-    geojson = json.loads(gdf.to_crs("EPSG:4326").to_json())
-    _AOI_CACHE[name] = geojson
-    return geojson
+
+@app.get("/boundaries")
+def get_boundaries(bbox: str) -> dict:
+    """현재 지도 뷰포트에 걸리는 행정동 경계만 반환한다 (EPSG:4326).
+
+    bbox: "minLon,minLat,maxLon,maxLat" — 전국 데이터를 한 번에 안 내려주고 뷰포트
+    기준으로 잘라주는 이유는 프론트가 나라 전체를 한 번에 로드하지 않게 하기 위함
+    (§4.1 재투영 규약 + 성능). 검색으로 지역 이동한 뒤 moveend에서 다시 호출하면 됨.
+    """
+    try:
+        minx, miny, maxx, maxy = (float(v) for v in bbox.split(","))
+    except ValueError:
+        raise HTTPException(status_code=400, detail="bbox must be 'minLon,minLat,maxLon,maxLat'")
+
+    gdf = _get_adm_dong_gdf()
+    clipped = gdf.cx[minx:maxx, miny:maxy]
+    if len(clipped) > MAX_BOUNDARY_FEATURES:
+        clipped = clipped.iloc[:MAX_BOUNDARY_FEATURES]
+    return json.loads(clipped.to_json())
+
+
+@app.get("/search")
+def search_admin(q: str) -> list[dict]:
+    """행정동 이름 검색(시/군/구/읍/면/동 등, 부분일치) — 검색창에서 지역 이동에 사용.
+
+    각 결과는 {adm_cd, adm_nm, center:[lon,lat], bbox:[minLon,minLat,maxLon,maxLat]} —
+    프론트는 bbox로 fitBounds하면 된다. 이름이 겹치는 지역(예: 여러 시/군의 "중앙동")은
+    행정동 코드(§ 8자리: 시도2+시군구3+읍면동3)만 다르고 상위 지명이 응답에 없다는
+    한계가 있음 — data/vector/adm_dong_index.json이 이 shapefile(읍면동 레벨)만 갖고
+    있어서 시/군/구 상위 레이어 명칭까지는 못 붙임(§10 TODO 후보).
+    """
+    q = q.strip()
+    if not q:
+        return []
+    index = _get_adm_dong_search_index()
+    matches = [row for row in index if q in row["adm_nm"]]
+    matches.sort(key=lambda r: (not r["adm_nm"].startswith(q), len(r["adm_nm"])))
+    return matches[:20]
 
 
 @app.get("/terrain-tiles/{z}/{x}/{y}.png")

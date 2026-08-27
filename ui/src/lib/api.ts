@@ -38,9 +38,24 @@ export async function getAlert(alertId: string): Promise<ModuleOEnvelope> {
   return res.json();
 }
 
-export async function getAoi(name: "saengbiryang" | "sancheong_gun"): Promise<GeoJSON.FeatureCollection> {
-  const res = await fetch(`${API_BASE}/aoi/${name}`, { cache: "force-cache" });
-  if (!res.ok) throw new Error(`get AOI failed: ${res.status}`);
+export interface AdminSearchResult {
+  adm_cd: string;
+  adm_nm: string;
+  center: [number, number];
+  bbox: [number, number, number, number];
+}
+
+// bbox: [minLon, minLat, maxLon, maxLat]
+export async function getBoundaries(bbox: [number, number, number, number]): Promise<GeoJSON.FeatureCollection> {
+  const res = await fetch(`${API_BASE}/boundaries?bbox=${bbox.join(",")}`, { cache: "no-store" });
+  if (!res.ok) throw new Error(`get boundaries failed: ${res.status}`);
+  return res.json();
+}
+
+export async function searchAdmin(q: string): Promise<AdminSearchResult[]> {
+  if (!q.trim()) return [];
+  const res = await fetch(`${API_BASE}/search?q=${encodeURIComponent(q)}`, { cache: "no-store" });
+  if (!res.ok) throw new Error(`search failed: ${res.status}`);
   return res.json();
 }
 
