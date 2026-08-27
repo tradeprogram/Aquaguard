@@ -84,7 +84,12 @@ export default function Map3DPage() {
       map.addLayer({ id: "hills", type: "hillshade", source: "terrain", paint: { "hillshade-exaggeration": 0.7 } });
       map.setTerrain({ source: "terrain", exaggeration: 1.6 });
 
-      const overlay = new MapboxOverlay({ interleaved: true, layers: [] });
+      // interleaved:true는 deck.gl이 지형 depth와 맞물려 렌더링하도록 map.transform의
+      // 내부 지형 API를 직접 읽는데, maplibre-gl v6(§AGENTS.md가 경고하는 대로 이전
+      // 버전과 API가 다름)에서 deck.gl 9.3이 기대하는 형태와 어긋나 "Cannot read
+      // properties of undefined (reading 'elevation')"로 죽는다. 우리 레이어(선/점)는
+      // 지형에 깊이 오클루전될 필요가 없으니 기본(오버레이) 모드로 충분하다.
+      const overlay = new MapboxOverlay({ layers: [] });
       map.addControl(overlay);
       overlayRef.current = overlay;
       setMapReady(true);
