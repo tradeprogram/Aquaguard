@@ -26,7 +26,7 @@
 ### 1.2 Module O 오케스트레이터 (`module_o_orchestrator/`)
 - `orchestrator.py`: `run(input) -> envelope`. A/B 호출 → 임계치(`landslide_prob≥0.7` 또는 `flood_prob≥0.7`) 초과 시 D/E/G 순차 호출 → `precursor_flag`면 H 호출 → `golden_time_saved_min` 계산 → `AlertStore`에 등록.
 - `modules_client.py`: `AQUAGUARD_MOCK_MODE`(기본 `1`)로 목업/실제 모듈 호출을 스위칭. `MODULE_PACKAGES` 딕셔너리에 트랙①②의 실제 패키지명이 매핑돼 있음 — **트랙①②가 코드를 넣으면 이 파일 수정 없이 `AQUAGUARD_MOCK_MODE=0`만으로 실제 연동됨.**
-- `store.py`: 인메모리 `AlertStore`. 원클릭 승인 상태머신(`대기`/`승인`/`거부`/`자동승인(timeout)`), 오탐(`오탐판정`)이면 자동승인 안 함. **2026-08-29부로 핵심 아키텍처에서 제외됨**(시민 직접배포 취지·법적 리스크, §9.5 참조) — 코드는 남아있으나 더 이상 신규 개발 대상 아님.
+- `store.py`: 인메모리 `AlertStore`. 원클릭 승인 상태머신(`대기`/`승인`/`거부`/`자동승인(timeout)`), 오탐(`오탐판정`)이면 자동승인 안 함. **2026-08-28부로 관공서 모드 전용**(시민 모드는 이 상태머신을 안 거치고 곧바로 경보격상, §9.5 참조) — 여전히 활발히 쓰이는 코드, 삭제 대상 아님.
 - `geo.py`: EPSG:5179→4326 재투영 헬퍼(점/원). **§4.1 규약상 재투영은 UI 출력 직전에만** — 이 파일과 `api_server.py`의 지도 관련 엔드포인트가 그 유일한 지점.
 - `tests/test_orchestrator.py`: pytest 6개, 전부 통과 중. 문서에 나온 예시값(`golden_time_saved_min=197`)을 정확히 재현하는지까지 검증함.
 - 실행: `python -m pytest module_o_orchestrator/tests/ -v` (repo 루트에서)
@@ -50,8 +50,8 @@
 ### 1.4 Next.js 대시보드 (`ui/`) — 2026-08-27 지도-메인-화면 개편으로 구조 변경됨
 Next.js 16(App Router) + TypeScript + Tailwind v4.
 
-- `/` — **이제 3D 지도가 메인 화면**(`MapExplorer.tsx`, 아래 1.5). 좌상단 로고(네이비 박스) + 메뉴바(대시보드/대피소 찾기/고립마을 위험/What-if 시뮬레이터) — 누르면 페이지 이동 없이 지도 위에 **글라스 톤 패널**(`GlassPanel.tsx`, 화면 면적의 ~50%)이 뜨고 닫힘. 패널 내용물은 `ui/src/components/panels/`의 `DashboardPanel`/`EvacuationPanel`/`IsolationPanel`/`WhatifPanel`. 원클릭 승인은 시민 화면이라 메뉴에서 뺐음(아래 `/approve` 참조).
-- `/approve` — 원클릭 승인 화면, 실시간 타임아웃 카운트다운. **메뉴에서는 빠졌지만 라우트는 남아있음** — 관 대응용 UI가 따로 필요해지면 여기부터 다시 연결하면 됨(`ApprovePanel.tsx` 재사용).
+- `/` — **이제 3D 지도가 메인 화면**(`MapExplorer.tsx`, 아래 1.5). 좌상단 로고(네이비 박스) + 메뉴바 + 우상단 **시민 모드/관공서 모드 토글**(2026-08-28, `app/page.tsx`의 `mode` state) — 누르면 페이지 이동 없이 지도 위에 **글라스 톤 패널**(`GlassPanel.tsx`, 화면 면적의 ~50%)이 뜨고 닫힘. 메뉴는 모드별로 다름: 시민 모드는 위험 현황/대피소 찾기/고립마을 위험, 관공서 모드는 대시보드(전체)/모델 성능/What-if/원클릭 승인. 패널 내용물은 `ui/src/components/panels/`의 `DashboardPanel`(`mode` prop 받음)/`EvacuationPanel`/`IsolationPanel`/`WhatifPanel`/`ModelPerformancePanel`/`ApprovePanel`.
+- `/approve` — 원클릭 승인 화면(`ApprovePanel.tsx`), 실시간 타임아웃 카운트다운. 독립 라우트로도 남아있고(직접 링크·단독 테스트용), 2026-08-28부로 관공서 모드 메뉴 안에서도 `GlassPanel`로 감싸져 열림 — 같은 컴포넌트 재사용, 이중 유지보수 아님.
 - `/whatif` — What-if 강수 슬라이더 단독 페이지(직접 링크·테스트용, 평소엔 `/`의 메뉴 패널로 씀). 지금은 목업이라 값 고정 — 트랙①이 실제 Module A/B 붙이면 바로 반영됨.
 - `/map3d` — 3D 지도 단독 페이지(로고·메뉴 없이 지도만, 직접 링크·테스트용). 실제 지도 로직은 전부 `ui/src/components/MapExplorer.tsx`에 있고 이 라우트는 그걸 감싸는 얇은 래퍼일 뿐.
 
@@ -224,7 +224,7 @@ cd .. && python -m pytest module_o_orchestrator/tests/ -v   # 백엔드 변경 �
 5. `/whatif` 페이지의 강수 슬라이더는 아직 목업이라 값이 안 바뀜 — 실제 Module A/B 붙거나 데모용 합성 응답을 만들면 살아남.
 6. Module H(시민 신고 역검증) 트리거 UI가 아직 없음 — 지금은 `precursor_flag`가 목업이라 항상 `false`라 UI에서 확인 불가.
 7. 3D 지도 로직이 트랙별로 계속 커지고 있음(도로/건물/교량 전부 VWorld 실데이터로 교체, 지형 z15 이상에서 exaggeration 감쇠 등) — 8/27 지도-메인-화면 개편으로 `ui/src/app/map3d/page.tsx`의 로직이 `ui/src/components/MapExplorer.tsx`로 옮겨졌다(`map3d/page.tsx`는 이제 그걸 감싸는 얇은 래퍼). §1.5를 이 문서보다 코드와 `git log`로 항상 재확인할 것, 이 문서가 못 따라잡았을 수 있음.
-8. `app/page.tsx`(새 홈)가 이제 지도를 배경으로 깔고 메뉴(대시보드/모델 성능/대피소 찾기/고립마을 위험/What-if)를 누르면 지도 위 글라스 패널로 뜨는 구조다 — 원클릭 승인은 시민 화면에서 빠졌지만 `/approve` 라우트에는 그대로 남아있음(관 대응용). 새 패널 만들 때는 `GlassPanel.tsx`로 감싸고 `app/page.tsx`의 `MENU`/`PANEL_TITLE`에 등록하면 된다.
+8. `app/page.tsx`(새 홈)가 이제 지도를 배경으로 깔고 메뉴를 누르면 지도 위 글라스 패널로 뜨는 구조다 — **2026-08-28부로 메뉴가 시민 모드/관공서 모드로 분리됨**(`MENU`/`PANEL_TITLE`이 이제 `Record<Mode, ...>`). 원클릭 승인은 관공서 모드 메뉴에 이미 등록돼 있다. 새 패널 만들 때는 `GlassPanel.tsx`로 감싸고, 어느 모드 메뉴에 넣을지 정한 뒤 `app/page.tsx`의 `MENU[mode]`/`PANEL_TITLE[mode]`에 등록하면 된다.
 9. **(최우선급, 사용자가 명시적으로 요청, 2026-08-28)** 수해 모델 고도화 — 아래 **§8 전체** 참조. 모델 성능 시각화(§8.1)는 UI 목업까지 완료, 실시간 관측 데이터 연동(§8.2)은 외부 API 키(WAMIS 등)가 있어야 시작 가능 — 아직 미착수.
 10. **(최우선, 외부 리서치 반영, 2026-08-28)** 공모전 수상 전략 — 위 1~9번 항목보다 먼저 **아래 §9 전체**를 읽을 것. 서비스 개발 부문으로 트랙 정정 완료, 개발 리소스를 새 기능:검증 = 20:80으로 재배분, 산청 leakage-free 백테스트(§9.3)가 프로젝트 전체 최우선 단일 과제로 확정됨. 특히 위 1~1-1번(대피경로·고립마을)과 9번(수해모델)의 실제 우선순위가 이 §9의 S/A/B/C 티어(§9.2)로 재정렬됐으니 착수 전 대조할 것.
 
@@ -467,7 +467,7 @@ Module A/B(트랙①) 담당이지만, 이 하나가 프로젝트 전체 약점�
 | "예측이 실제로 맞습니까?" | 핵심 A/B가 현재 mock | 산청 hold-out backtest, PR-AUC/Brier/공간 hit rate |
 | "산림청도 산불피해지를 위험도에 반영하는데 뭐가 다르죠?" | 독창성 축 하나를 바로 무너뜨릴 수 있음 | "예측 자체가 아니라 downstream 의사결정 체인" 비교도 (§0.1에 이미 반영) |
 | "화재지역과 7월 산사태 위치가 실제로 겹칩니까?" | 같은 '산청군'≠같은 사면·유역 | 3월 dNBR burn scar × 7월 landslide inventory 공간교차 (§9.3-2, 미검증) |
-| "공무원이 진짜 이 시스템으로 경보를 자동 발령할 수 있나요?" | 법·책임성 공격 | ~~human-in-the-loop, advisory mode, audit log, SOP~~ — **2026-08-29부로 이 답이 더 이상 유효하지 않음.** 사용자가 "시민 직접배포 앱 취지에 안 맞고 위험도가 높다"는 이유로 지자체 담당자 승인 게이트("원클릭 승인")를 핵심 아키텍처에서 완전히 제외하기로 결정 — Module O는 이제 승인 대기 없이 시민 역검증(Module H)만으로 곧바로 경보격상·주민전파로 넘어간다(§5 Module O 상태머신 7단계로 축소, ARCHITECTURE.md 동일 반영). 관련 코드(`store.py`의 `AlertStore` 승인 상태머신, `POST /approve/{alert_id}`, `ApprovePanel.tsx`, `/approve` 라우트)는 아직 삭제 안 하고 남겨뒀다 — 문서·아키텍처에서만 제외, 코드 삭제 여부는 별도 확인 필요. **이 질문에 대한 새 답은 아직 미해결** — 승인 게이트가 없는 채로 법·책임성 공격에 어떻게 답할지 발표 전까지 반드시 정리할 것(예: 시민 역검증 신뢰도 임계치를 매우 보수적으로 잡기, 오탐 시 자동 정정 채널, 법률 자문). |
+| "공무원이 진짜 이 시스템으로 경보를 자동 발령할 수 있나요?" | 법·책임성 공격 | **2026-08-28부로 재해결됨.** 화면을 시민 모드/관공서 모드로 분리해 human-in-the-loop을 삭제가 아니라 **재배치**했다 — 관공서 모드에는 원클릭 승인(`ApprovePanel.tsx`, `store.py`의 `AlertStore` 상태머신, `POST /approve/{alert_id}`)이 그대로 살아있어 담당자가 버튼 하나로 승인/보류·audit log(`meta.created_at`/타임아웃)를 남길 수 있다. 시민 모드는 일반 시민이 재난 중 관 승인을 기다릴 이유가 없으므로 승인 대기 없이 시민 역검증(Module H)만으로 곧바로 경보격상·주민전파로 넘어간다(§5 Module O 상태머신 7단계). 예상 재질문 "그럼 시민 모드는 왜 승인이 없나?" → 시민 역검증 신뢰도 임계치를 보수적으로 잡고, 오탐 시 자동 정정 채널을 둔다는 답변 준비(법률 자문은 별도 확인 필요, 여전히 미착수). |
 | "이 화면의 숫자는 실제인가요, 데모인가요?" | 여러 핵심 값이 example JSON·placeholder | 모든 화면에 REAL/MODEL/SIMULATION provenance 표시 — **아직 미착수, UI 작업 후보** |
 
 ### 9.6 본선 10분 발표 구조 (나중에 발표자료 만들 사람 참고용)

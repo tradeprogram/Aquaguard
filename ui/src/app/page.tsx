@@ -8,30 +8,48 @@ import EvacuationPanel from "@/components/panels/EvacuationPanel";
 import IsolationPanel from "@/components/panels/IsolationPanel";
 import WhatifPanel from "@/components/panels/WhatifPanel";
 import ModelPerformancePanel from "@/components/panels/ModelPerformancePanel";
+import ApprovePanel from "@/components/panels/ApprovePanel";
 
-type PanelKey = "dashboard" | "evacuation" | "isolation" | "whatif" | "performance";
+type PanelKey = "dashboard" | "evacuation" | "isolation" | "whatif" | "performance" | "approve";
+type Mode = "citizen" | "gov";
 
-// 원클릭 승인(§5 Module O)은 지자체 담당자용 워크플로우라 시민 배포 화면에서는 뺐다
-// (코드/라우트는 /approve에 그대로 남아있음 — 관 쪽 UI가 따로 필요해지면 재사용).
-// 대신 이번에 늘어난 모듈(C/D는 대시보드 안에, E 확장·독창성 축4는 새 메뉴)을 죄다
-// 노출시켜서 프로토타입만 보고도 전체 기능 범위가 감이 오게 했다.
-const MENU: { key: PanelKey; label: string }[] = [
-  { key: "dashboard", label: "대시보드" },
-  { key: "performance", label: "모델 성능" },
-  { key: "evacuation", label: "대피소 찾기" },
-  { key: "isolation", label: "고립마을 위험" },
-  { key: "whatif", label: "What-if 시뮬레이터" },
-];
+// 시민용 기능(내 위치 기반 대피 안내)과 관공서용 기능(관 대응 비교·피해비용·모델 성능
+// 증빙·원클릭 승인)이 한 메뉴에 섞여 있으면 "이거 누구 쓰라고 만든 거야?"가 돼버린다.
+// 그래서 화면을 모드로 나눈다 — 기본은 시민 모드(배포 대상), 관공서 모드는 옆의
+// 작은 토글로만 들어간다. 대시보드는 두 모드 모두에 있지만 DashboardPanel이
+// mode를 받아 관 대응 비교(GoldenTimeCounter)·예상 피해비용(Module G)은 관공서
+// 모드에서만 보여준다 — 나머지(산사태·홍수 확률, 지하차도, 노출자산, 대피 경로)는
+// 시민에게도 그대로 유의미해서 공유한다.
+const MENU: Record<Mode, { key: PanelKey; label: string }[]> = {
+  citizen: [
+    { key: "dashboard", label: "위험 현황" },
+    { key: "evacuation", label: "대피소 찾기" },
+    { key: "isolation", label: "고립마을 위험" },
+  ],
+  gov: [
+    { key: "dashboard", label: "대시보드" },
+    { key: "performance", label: "모델 성능" },
+    { key: "whatif", label: "What-if 시뮬레이터" },
+    { key: "approve", label: "원클릭 승인" },
+  ],
+};
 
-const PANEL_TITLE: Record<PanelKey, string> = {
-  dashboard: "아쿠아가드 골든타임 대시보드",
-  performance: "모델 성능 검증 (Module A/B)",
-  evacuation: "대피소 찾기",
-  isolation: "고립마을 위험 (독창성 축 4)",
-  whatif: "What-if 예측 시뮬레이터",
+const PANEL_TITLE: Record<Mode, Partial<Record<PanelKey, string>>> = {
+  citizen: {
+    dashboard: "우리 동네 위험 현황",
+    evacuation: "대피소 찾기",
+    isolation: "고립마을 위험 (독창성 축 4)",
+  },
+  gov: {
+    dashboard: "아쿠아가드 골든타임 대시보드",
+    performance: "모델 성능 검증 (Module A/B)",
+    whatif: "What-if 예측 시뮬레이터",
+    approve: "원클릭 승인 (§5 Module O)",
+  },
 };
 
 export default function HomePage() {
+  const [mode, setMode] = useState<Mode>("citizen");
   const [active, setActive] = useState<PanelKey | null>(null);
   // 대피소 찾기(§6.9)에서 고른 경로 — EvacuationPanel과 MapExplorer가 형제 컴포넌트라
   // 여기서 상태를 끌어올려 양쪽에 내려준다(HANDOFF.md §6.9 "권장" 방식).
@@ -60,7 +78,7 @@ export default function HomePage() {
           <img src="/aquaguard-logo.png" alt="Aqua Guard.AI" width={554} height={125} className="h-7 w-auto" />
         </div>
         <div className="pointer-events-auto flex gap-1.5 rounded-xl border border-white/20 bg-slate-950/85 p-1.5 shadow-lg backdrop-blur-xl">
-          {MENU.map((item) => (
+          {MENU[mode].map((item) => (
             <button
               key={item.key}
               onClick={() => setActive((cur) => (cur === item.key ? null : item.key))}
@@ -72,13 +90,36 @@ export default function HomePage() {
             </button>
           ))}
         </div>
+
+        {/* 관공서 모드는 기본이 아니다 — 배지처럼 눈에 띄지 않게, 하지만 명확히 다른
+            색(호박색)으로 둬서 "지금 관공서 화면을 보고 있다"는 걸 착각하지 않게 한다. */}
+        <div className="pointer-events-auto ml-auto flex gap-1 rounded-xl border border-white/20 bg-slate-950/85 p-1 shadow-lg backdrop-blur-xl">
+          {(["citizen", "gov"] as const).map((m) => (
+            <button
+              key={m}
+              onClick={() => {
+                setMode(m);
+                setActive(null);
+              }}
+              className={`rounded-lg px-2.5 py-1.5 text-[11px] font-medium transition-colors ${
+                mode === m
+                  ? m === "gov"
+                    ? "bg-amber-500/70 text-white"
+                    : "bg-sky-500/70 text-white"
+                  : "text-slate-300 hover:bg-white/15 hover:text-white"
+              }`}
+            >
+              {m === "citizen" ? "시민 모드" : "관공서 모드"}
+            </button>
+          ))}
+        </div>
       </div>
 
       {active && (
         <div className="pointer-events-none absolute inset-0 z-20 flex items-start justify-center pt-24">
           <div className="pointer-events-auto">
-            <GlassPanel title={PANEL_TITLE[active]} onClose={() => setActive(null)}>
-              {active === "dashboard" && <DashboardPanel />}
+            <GlassPanel title={PANEL_TITLE[mode][active] ?? ""} onClose={() => setActive(null)}>
+              {active === "dashboard" && <DashboardPanel mode={mode} />}
               {active === "performance" && <ModelPerformancePanel />}
               {active === "evacuation" && (
                 <EvacuationPanel
@@ -89,6 +130,7 @@ export default function HomePage() {
               )}
               {active === "isolation" && <IsolationPanel />}
               {active === "whatif" && <WhatifPanel />}
+              {active === "approve" && <ApprovePanel />}
             </GlassPanel>
           </div>
         </div>
