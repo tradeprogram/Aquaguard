@@ -58,6 +58,12 @@ export async function getBoundaries(bbox: [number, number, number, number]): Pro
   return res.json();
 }
 
+export async function getVWorldBuildings(bbox: [number, number, number, number]): Promise<GeoJSON.FeatureCollection> {
+  const res = await fetch(`${API_BASE}/vworld/buildings?bbox=${bbox.join(",")}`, { cache: "no-store" });
+  if (!res.ok) throw new Error(`get vworld buildings failed: ${res.status}`);
+  return res.json();
+}
+
 export async function searchAdmin(q: string): Promise<AdminSearchResult[]> {
   if (!q.trim()) return [];
   const res = await fetch(`${API_BASE}/search?q=${encodeURIComponent(q)}`, { cache: "no-store" });

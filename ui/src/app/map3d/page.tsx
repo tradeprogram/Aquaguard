@@ -15,6 +15,7 @@ import {
   SANGCHEONG_DEMO_INPUT,
   getAlertGeojson,
   getBoundaries,
+  getVWorldBuildings,
   searchAdmin,
   triggerAlert,
   type AdminLevel,
@@ -117,11 +118,15 @@ const MAP_STYLE: StyleSpecification = {
       paint: { "line-color": "#94a3b8", "line-dasharray": [2, 2], "line-width": 2, "line-opacity": 0.5 },
     },
     {
-      id: "buildings-3d",
+      // OSM(OpenFreeMap) 건물 — 산간지역은 매핑이 드문드문이라 기본은 숨겨두고,
+      // VWorld 건물통합정보(§2.3 1순위, 아래 vworld-buildings-3d)로 교체한다.
+      // 폴백용으로 스타일에는 남겨둠(대한민국 밖이나 VWorld 요청 실패 시 대비).
+      id: "buildings-3d-osm",
       type: "fill-extrusion",
       source: "osm_vectors",
       "source-layer": "building",
       minzoom: 13,
+      layout: { visibility: "none" },
       paint: {
         "fill-extrusion-color": [
           "interpolate", ["linear"], ["get", "render_height"],
@@ -342,11 +347,51 @@ export default function Map3DPage() {
             // 뷰포트 이동 중 흔한 일시적 실패 — 다음 moveend에서 다시 시도되므로 조용히 무시
           });
       };
+      // VWorld 건물통합정보(§2.3 1순위) — OSM보다 훨씬 촘촘한 실제 건물 데이터.
+      // fill-extrusion-height는 원본에 없는 값이라 height_m(층수×3m, api_server.py에서
+      // 계산)을 쓴다 — 실측 높이가 아니라 통상값 근사임을 UI에 명시(§6).
+      map.addSource("vworld-buildings", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
+      map.addLayer({
+        id: "vworld-buildings-3d",
+        type: "fill-extrusion",
+        source: "vworld-buildings",
+        paint: {
+          "fill-extrusion-color": "#c9c3b3",
+          "fill-extrusion-height": ["get", "height_m"],
+          "fill-extrusion-base": 0,
+          "fill-extrusion-opacity": 0.9,
+        },
+      });
+
+      const updateVWorldBuildings = () => {
+        const currentMap = mapRef.current;
+        if (!currentMap) return;
+        // 건물 압출은 어차피 minzoom 13 근처에서만 의미가 있고, VWorld 쿼터도 아껴야
+        // 하니 많이 줌아웃된 상태에서는 요청하지 않는다.
+        if (currentMap.getZoom() < 13) return;
+        const b = currentMap.getBounds();
+        getVWorldBuildings([b.getWest(), b.getSouth(), b.getEast(), b.getNorth()])
+          .then((fc) => {
+            const liveMap = mapRef.current;
+            if (!liveMap) return;
+            (liveMap.getSource("vworld-buildings") as GeoJSONSource | undefined)?.setData(fc);
+          })
+          .catch(() => {
+            // 실패 시 OSM 폴백 레이어를 대신 보여준다
+            const liveMap = mapRef.current;
+            liveMap?.setLayoutProperty("buildings-3d-osm", "visibility", "visible");
+          });
+      };
+
       updateBoundaries();
+      updateVWorldBuildings();
       let moveendTimer: ReturnType<typeof setTimeout> | undefined;
       map.on("moveend", () => {
         clearTimeout(moveendTimer);
-        moveendTimer = setTimeout(updateBoundaries, 200);
+        moveendTimer = setTimeout(() => {
+          updateBoundaries();
+          updateVWorldBuildings();
+        }, 200);
       });
 
       // 교량(brunnel=='bridge')은 MapLibre line 레이어로는 지형 위에 그대로 드레이프될
@@ -463,7 +508,7 @@ export default function Map3DPage() {
             [Math.min(...xs), Math.min(...ys)],
             [Math.max(...xs), Math.max(...ys)],
           ];
-          const rendered = currentMap.queryRenderedFeatures(bbox, { layers: ["buildings-3d"] });
+          const rendered = currentMap.queryRenderedFeatures(bbox, { layers: ["vworld-buildings-3d", "buildings-3d-osm"] });
           let count = 0;
           const seen = new Set<string | number>();
           for (const f of rendered) {
@@ -698,9 +743,8 @@ export default function Map3DPage() {
             🖱 좌클릭 드래그: 이동 · 스크롤: 줌 · <span className="text-slate-300">우클릭(또는 Ctrl) 드래그: 회전/기울기</span>
           </p>
           <p className="mt-2 text-xs text-amber-300/70">
-            건물(실제 높이 압출)·도로망·교량(지면에서 띄운 데크)까지 전국 OSM 데이터로 입체화됨.
-            산청 AOI는 산간마을이라 매핑이 드문드문 있음 — 프로덕션 전환 시 §2.6 건축물대장/도로망
-            표준노드링크로 교체 예정.
+            건물은 브이월드 건물통합정보(§2.3 1순위, 국토교통부) 실데이터 — 층수×3m 근사 높이.
+            도로망·교량은 OSM 기반으로 입체화됨. 프로덕션 전환 시 §2.6 도로망 표준노드링크로 교체 예정.
           </p>
           <div className="mt-2 flex gap-1.5">
             {TEST_LOCATIONS.map((loc) => (

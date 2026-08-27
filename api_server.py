@@ -7,11 +7,13 @@ MODULE_PACKAGES를 통해 그대로 실제 모듈로 교체된다.
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Literal
 
 import geopandas as gpd
 import requests
+from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -20,7 +22,10 @@ from module_o_orchestrator import geo
 from module_o_orchestrator.orchestrator import DEFAULT_SHELTER_CANDIDATES, run as run_orchestrator
 from module_o_orchestrator.store import alert_store
 
+load_dotenv()  # .env(git-ignore됨)의 VWORLD_API_KEY 등을 os.environ으로 로드
+
 DATA_VECTOR_DIR = Path(__file__).resolve().parent / "data" / "vector"
+VWORLD_API_KEY = os.environ.get("VWORLD_API_KEY")
 
 app = FastAPI(title="AquaGuard AI — api_server")
 
@@ -247,6 +252,63 @@ def get_terrain_tile(z: int, x: int, y: int) -> Response:
     if resp.status_code != 200:
         raise HTTPException(status_code=resp.status_code, detail="terrain tile fetch failed")
     return Response(content=resp.content, media_type="image/png", headers={"Cache-Control": "public, max-age=86400"})
+
+
+VWORLD_BUILDING_LAYER = "LT_C_SPBD"  # 건물통합정보(국토교통부) — 브이월드 Data API 2.0
+METERS_PER_FLOOR = 3.0
+DEFAULT_BUILDING_HEIGHT_M = 4.0
+
+
+@app.get("/vworld/buildings")
+def get_vworld_buildings(bbox: str) -> dict:
+    """§2.3 1순위(V-World) 실제 건물 데이터. OpenFreeMap(OSM)은 산청 같은 산간지역에
+    매핑이 드문드문이라(§ 3D 지도 안내문 참조) 건물통합정보(LT_C_SPBD, 국토교통부)로
+    교체 — 한 AOI(생비량면 480m² bbox)에서만 478개 건물이 나올 만큼 촘촘하다.
+
+    bbox: "minLon,minLat,maxLon,maxLat". gro_flo_co(지상층수)를 3m/층으로 환산해
+    fill-extrusion-height용 height_m 필드를 만들어 붙여준다 — 원본은 층수만 있고
+    실제 높이(m)가 없어서 건축 통상값으로 근사(§6 불확실성 표기 원칙: 근사치임을 명시).
+    """
+    if not VWORLD_API_KEY:
+        raise HTTPException(status_code=503, detail="VWORLD_API_KEY not configured (.env)")
+    try:
+        minx, miny, maxx, maxy = (float(v) for v in bbox.split(","))
+    except ValueError:
+        raise HTTPException(status_code=400, detail="bbox must be 'minLon,minLat,maxLon,maxLat'")
+
+    resp = requests.get(
+        "http://api.vworld.kr/req/data",
+        params={
+            "service": "data",
+            "request": "GetFeature",
+            "data": VWORLD_BUILDING_LAYER,
+            "key": VWORLD_API_KEY,
+            "domain": "localhost",
+            "format": "json",
+            "size": 1000,
+            "geomFilter": f"BOX({minx},{miny},{maxx},{maxy})",
+        },
+        timeout=10,
+    )
+    resp.raise_for_status()
+    body = resp.json()
+    service = body.get("response", {})
+    if service.get("status") != "OK":
+        # NOT_FOUND(해당 영역에 건물 없음)는 정상적인 빈 결과로 취급
+        error = service.get("error", {})
+        if error.get("code") == "NOT_FOUND":
+            return {"type": "FeatureCollection", "features": []}
+        raise HTTPException(status_code=502, detail=f"VWorld error: {error}")
+
+    fc = service["result"]["featureCollection"]
+    for feature in fc.get("features", []):
+        props = feature.get("properties", {})
+        try:
+            floors = int(props.get("gro_flo_co") or 0)
+        except ValueError:
+            floors = 0
+        props["height_m"] = floors * METERS_PER_FLOOR if floors > 0 else DEFAULT_BUILDING_HEIGHT_M
+    return fc
 
 
 @app.get("/health")
