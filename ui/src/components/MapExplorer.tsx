@@ -696,7 +696,7 @@ export default function MapExplorer() {
     <div className="relative h-full min-h-[600px] w-full">
       <div ref={mapContainer} className="h-full w-full" />
 
-      <div className="pointer-events-none absolute inset-x-0 top-0 flex justify-between p-4 pt-20">
+      <div className="pointer-events-none absolute inset-x-0 top-0 flex items-start justify-between p-4 pt-20">
         <div className="pointer-events-auto flex flex-col items-start gap-2">
           <button
             onClick={() => setSearchOpen((v) => !v)}
