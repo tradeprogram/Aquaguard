@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { EvacuationRoute } from "@/components/MapExplorer";
 
 // Module E(대피소·경로 라우팅) 확장판 미리보기 — HANDOFF.md §6.
@@ -50,13 +50,36 @@ function haversineKm(a: [number, number], b: [number, number]): number {
 
 export default function EvacuationPanel({
   onSelectRoute,
+  onRequestMapPick,
+  mapPickedOrigin,
 }: {
   onSelectRoute?: (route: EvacuationRoute | null) => void;
+  // §6.8 폴백 ① — "지도에서 선택" 누르면 부모가 MapExplorer의 pickOrigin을 켜고,
+  // 사용자가 지도를 클릭하면 부모가 mapPickedOrigin으로 좌표를 내려준다.
+  onRequestMapPick?: () => void;
+  mapPickedOrigin?: [number, number] | null;
 }) {
   const [origin, setOrigin] = useState<[number, number] | null>(null);
   const [locating, setLocating] = useState(false);
   const [locError, setLocError] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [awaitingMapPick, setAwaitingMapPick] = useState(false);
+
+  useEffect(() => {
+    if (!mapPickedOrigin) return;
+    // 부모(MapExplorer)의 지도 클릭 이벤트로만 값이 바뀌는 외부 좌표라, 그걸 내부
+    // origin 상태에 동기화하는 것 자체가 이 effect의 목적이다.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setOrigin(mapPickedOrigin);
+    setLocError(null);
+    setAwaitingMapPick(false);
+  }, [mapPickedOrigin]);
+
+  const requestMapPick = () => {
+    setAwaitingMapPick(true);
+    setLocError(null);
+    onRequestMapPick?.();
+  };
 
   const locate = () => {
     if (!navigator.geolocation) {
@@ -107,17 +130,26 @@ export default function EvacuationPanel({
       </div>
 
       <div>
-        <button
-          onClick={locate}
-          disabled={locating}
-          className="w-full rounded-lg border border-sky-700 bg-sky-950/30 py-2 text-xs font-medium text-sky-300 hover:bg-sky-950/60 disabled:opacity-50"
-        >
-          {locating ? "위치 확인 중…" : origin ? "내 위치로 다시 찾기" : "내 위치로 찾기"}
-        </button>
+        <div className="flex gap-2">
+          <button
+            onClick={locate}
+            disabled={locating}
+            className="flex-1 rounded-lg border border-sky-700 bg-sky-950/30 py-2 text-xs font-medium text-sky-300 hover:bg-sky-950/60 disabled:opacity-50"
+          >
+            {locating ? "위치 확인 중…" : "내 위치로 찾기"}
+          </button>
+          <button
+            onClick={requestMapPick}
+            disabled={awaitingMapPick}
+            className="flex-1 rounded-lg border border-white/15 bg-white/5 py-2 text-xs font-medium text-slate-200 hover:bg-white/10 disabled:opacity-50"
+          >
+            {awaitingMapPick ? "지도를 클릭하세요…" : "지도에서 선택"}
+          </button>
+        </div>
         {locError && <p className="mt-2 text-xs text-red-300">{locError}</p>}
-        {origin && !locError && (
+        {origin && !locError && !awaitingMapPick && (
           <p className="mt-2 text-[11px] text-slate-500">
-            현재 위치 기준 직선거리 근사치로 다시 계산했어요 — 대피소를 눌러 지도에 경로를 표시하세요.
+            선택한 위치 기준 직선거리 근사치로 계산했어요 — 대피소를 눌러 지도에 경로를 표시하세요.
           </p>
         )}
       </div>

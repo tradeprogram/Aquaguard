@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { SANGCHEONG_DEMO_INPUT, approveAlert, getAlert } from "@/lib/api";
 import type { ModuleOEnvelope } from "@/lib/types";
+import { useSlowLoading } from "@/lib/useSlowLoading";
 
 function useCountdown(createdAt?: string, timeoutMin?: number) {
   const [remainingSec, setRemainingSec] = useState<number | null>(null);
@@ -23,23 +24,34 @@ export default function ApprovePanel({ alertId = SANGCHEONG_DEMO_INPUT.alert_id 
   const [envelope, setEnvelope] = useState<ModuleOEnvelope | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [initialLoading, setInitialLoading] = useState(true);
+  const { slow, start, stop } = useSlowLoading();
 
-  const refresh = useCallback(async () => {
-    try {
-      const result = await getAlert(alertId);
-      setEnvelope(result);
-      setError(null);
-    } catch {
-      setError("이 alert_id의 경보를 찾을 수 없습니다 — 대시보드에서 먼저 시나리오를 실행하세요.");
-    }
-  }, [alertId]);
+  const refresh = useCallback(
+    async (isInitial = false) => {
+      if (isInitial) start();
+      try {
+        const result = await getAlert(alertId);
+        setEnvelope(result);
+        setError(null);
+      } catch {
+        setError("이 alert_id의 경보를 찾을 수 없습니다 — 대시보드에서 먼저 시나리오를 실행하세요.");
+      } finally {
+        if (isInitial) {
+          stop();
+          setInitialLoading(false);
+        }
+      }
+    },
+    [alertId, start, stop]
+  );
 
   useEffect(() => {
     // refresh()는 네트워크 응답 이후(await 뒤)에만 setState하므로 안전하지만,
     // 정적 분석 규칙은 이를 구분하지 못해 명시적으로 예외 처리한다.
     // eslint-disable-next-line react-hooks/set-state-in-effect
-    refresh();
-    const id = setInterval(refresh, 3000);
+    refresh(true);
+    const id = setInterval(() => refresh(false), 3000);
     return () => clearInterval(id);
   }, [refresh]);
 
@@ -47,10 +59,12 @@ export default function ApprovePanel({ alertId = SANGCHEONG_DEMO_INPUT.alert_id 
 
   async function decide(decision: "승인" | "거부") {
     setSubmitting(true);
+    start();
     try {
       await approveAlert(alertId, decision, "official_demo");
       await refresh();
     } finally {
+      stop();
       setSubmitting(false);
     }
   }
@@ -66,6 +80,12 @@ export default function ApprovePanel({ alertId = SANGCHEONG_DEMO_INPUT.alert_id 
         §5 Module O — 지자체 담당자가 회의·서면 검토 없이 버튼 하나로 승인/보류. 사람의 최종 판단권은
         유지하되 판단 시간을 몇 시간→몇 초로.
       </p>
+
+      {initialLoading && (
+        <div className="rounded-xl border border-dashed border-white/10 p-8 text-center text-xs text-slate-500">
+          {slow ? "서버 깨우는 중… (최대 1분, 무료 호스팅이라 오래 쉬면 느려요)" : "불러오는 중…"}
+        </div>
+      )}
 
       {error && (
         <div className="rounded-lg border border-red-800/50 bg-red-950/30 p-3 text-xs text-red-300">{error}</div>
@@ -130,14 +150,14 @@ export default function ApprovePanel({ alertId = SANGCHEONG_DEMO_INPUT.alert_id 
               disabled={!pending || submitting}
               className="flex-1 rounded-lg bg-emerald-600 py-2.5 text-sm font-semibold text-white hover:bg-emerald-500 disabled:opacity-40"
             >
-              승인
+              {submitting && slow ? "서버 깨우는 중…" : "승인"}
             </button>
             <button
               onClick={() => decide("거부")}
               disabled={!pending || submitting}
               className="flex-1 rounded-lg bg-red-700 py-2.5 text-sm font-semibold text-white hover:bg-red-600 disabled:opacity-40"
             >
-              거부
+              {submitting && slow ? "서버 깨우는 중…" : "거부"}
             </button>
           </div>
         </>

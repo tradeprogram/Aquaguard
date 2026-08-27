@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { sendChatMessage } from "@/lib/api";
+import { useSlowLoading } from "@/lib/useSlowLoading";
 
 interface ChatMessage {
   role: "user" | "bot";
@@ -19,6 +20,7 @@ export default function ChatWidget() {
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
   const listRef = useRef<HTMLDivElement>(null);
+  const { slow, start, stop } = useSlowLoading();
 
   useEffect(() => {
     listRef.current?.scrollTo({ top: listRef.current.scrollHeight });
@@ -30,6 +32,7 @@ export default function ChatWidget() {
     setMessages((prev) => [...prev, { role: "user", text }]);
     setInput("");
     setSending(true);
+    start();
     try {
       const reply = await sendChatMessage(text);
       setMessages((prev) => [...prev, { role: "bot", text: reply }]);
@@ -39,6 +42,7 @@ export default function ChatWidget() {
         { role: "bot", text: "죄송해요, 지금은 응답을 가져올 수 없어요. 서버가 켜져 있는지 확인해주세요." },
       ]);
     } finally {
+      stop();
       setSending(false);
     }
   };
@@ -74,7 +78,7 @@ export default function ChatWidget() {
             {sending && (
               <div className="flex justify-start">
                 <div className="max-w-[85%] rounded-lg border border-white/10 bg-white/10 px-3 py-2 text-sm text-slate-400 backdrop-blur-sm">
-                  ···
+                  {slow ? "서버 깨우는 중… (최대 1분)" : "···"}
                 </div>
               </div>
             )}

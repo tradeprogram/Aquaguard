@@ -17,6 +17,7 @@ import {
   type AdminLevel,
   type AdminSearchResult,
 } from "@/lib/api";
+import { useSlowLoading } from "@/lib/useSlowLoading";
 
 // 산청군 생비량면 — data/vector/adm_dong_5179.geojson 실측 centroid. 초기 카메라 위치일
 // 뿐, 이제 이 페이지는 검색으로 어디든 이동할 수 있는 범용 3D 지도다(고정 AOI 아님).
@@ -247,7 +248,15 @@ export interface EvacuationRoute {
   label: string;
 }
 
-export default function MapExplorer({ route = null }: { route?: EvacuationRoute | null } = {}) {
+interface MapExplorerProps {
+  route?: EvacuationRoute | null;
+  // §6.8 폴백 ① — 위치 권한이 없어도 지도를 클릭해 출발지를 고를 수 있게. true인
+  // 동안 커서가 십자선으로 바뀌고, 다음 클릭 좌표를 onOriginPicked로 한 번 올려보낸다.
+  pickOrigin?: boolean;
+  onOriginPicked?: (lonLat: [number, number]) => void;
+}
+
+export default function MapExplorer({ route = null, pickOrigin = false, onOriginPicked }: MapExplorerProps = {}) {
   const mapContainer = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
   const simUpdateRef = useRef<((debrisM: number, floodM: number) => void) | null>(null);
@@ -258,6 +267,7 @@ export default function MapExplorer({ route = null }: { route?: EvacuationRoute 
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState<AdminSearchResult[]>([]);
   const [searching, setSearching] = useState(false);
+  const searchSlow = useSlowLoading();
   const [selectedRegion, setSelectedRegion] = useState<AdminSearchResult | null>(null);
   const [debrisDepth, setDebrisDepth] = useState(0);
   const [floodDepth, setFloodDepth] = useState(0);
@@ -687,13 +697,18 @@ export default function MapExplorer({ route = null }: { route?: EvacuationRoute 
       return;
     }
     setSearching(true);
+    searchSlow.start();
     const id = setTimeout(() => {
       searchAdmin(q)
         .then(setSearchResults)
         .catch(() => setSearchResults([]))
-        .finally(() => setSearching(false));
+        .finally(() => {
+          searchSlow.stop();
+          setSearching(false);
+        });
     }, 300);
     return () => clearTimeout(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- searchSlow.start/stop은 useSlowLoading이 매 렌더 새 함수를 반환하지 않게 안정적으로 관리
   }, [searchQuery]);
 
   const goToSearchResult = useCallback((result: AdminSearchResult) => {
@@ -762,6 +777,23 @@ export default function MapExplorer({ route = null }: { route?: EvacuationRoute 
     );
   }, [mapReady, route]);
 
+  // §6.8 폴백 ① — 지도 클릭으로 출발지 선택. pickOrigin이 켜져 있는 동안만 커서를
+  // 십자선으로 바꾸고 다음 클릭 한 번만 잡아서 부모(EvacuationPanel)로 올려보낸다.
+  useEffect(() => {
+    if (!mapReady || !pickOrigin) return;
+    const currentMap = mapRef.current;
+    if (!currentMap) return;
+    currentMap.getCanvas().style.cursor = "crosshair";
+    const handler = (e: { lngLat: { lng: number; lat: number } }) => {
+      onOriginPicked?.([e.lngLat.lng, e.lngLat.lat]);
+    };
+    currentMap.once("click", handler);
+    return () => {
+      currentMap.off("click", handler);
+      currentMap.getCanvas().style.cursor = "";
+    };
+  }, [mapReady, pickOrigin, onOriginPicked]);
+
   return (
     <div className="relative h-full min-h-[600px] w-full">
       <div ref={mapContainer} className="h-full w-full" />
@@ -789,7 +821,11 @@ export default function MapExplorer({ route = null }: { route?: EvacuationRoute 
                   placeholder="시/군/구/읍/면/동 검색 (예: 산청군, 생비량면, 강남동)"
                   className="w-full rounded-md border border-slate-700 bg-slate-900/60 px-2.5 py-1.5 text-xs text-slate-100 placeholder:text-slate-500 focus:border-sky-600 focus:outline-none"
                 />
-                {searching && <span className="absolute right-2 top-1.5 text-xs text-slate-500">검색 중…</span>}
+                {searching && (
+                  <span className="absolute right-2 top-1.5 text-xs text-slate-500">
+                    {searchSlow.slow ? "서버 깨우는 중…" : "검색 중…"}
+                  </span>
+                )}
                 {searchResults.length > 0 && (
                   <ul className="absolute z-10 mt-1 max-h-48 w-full overflow-y-auto rounded-md border border-slate-700 bg-slate-900 shadow-lg">
                     {searchResults.map((r) => (

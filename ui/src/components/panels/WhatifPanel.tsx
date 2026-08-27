@@ -3,15 +3,18 @@
 import { useState } from "react";
 import { SANGCHEONG_DEMO_INPUT, triggerAlert } from "@/lib/api";
 import type { ModuleOEnvelope } from "@/lib/types";
+import { useSlowLoading } from "@/lib/useSlowLoading";
 import RiskCard from "@/components/RiskCard";
 
 export default function WhatifPanel() {
   const [rainfall, setRainfall] = useState(250);
   const [envelope, setEnvelope] = useState<ModuleOEnvelope | null>(null);
   const [loading, setLoading] = useState(false);
+  const { slow, start, stop } = useSlowLoading();
 
   async function recompute() {
     setLoading(true);
+    start();
     try {
       // §5 Module UI-3D: 새 모델을 만들지 않고 Module A/B의 run()을 가상 강수값으로 재호출.
       // module_a_extra/module_b_extra는 orchestrator가 A/B 입력에 그대로 병합해 전달한다 —
@@ -25,6 +28,7 @@ export default function WhatifPanel() {
       });
       setEnvelope(result);
     } finally {
+      stop();
       setLoading(false);
     }
   }
@@ -61,7 +65,7 @@ export default function WhatifPanel() {
           disabled={loading}
           className="mt-4 w-full rounded-lg bg-sky-600 py-2 text-xs font-medium text-white hover:bg-sky-500 disabled:opacity-50"
         >
-          {loading ? "재계산 중…" : "Module A/B 재호출"}
+          {loading ? (slow ? "서버 깨우는 중… (최대 1분)" : "재계산 중…") : "Module A/B 재호출"}
         </button>
       </div>
 

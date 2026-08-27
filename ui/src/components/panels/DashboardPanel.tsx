@@ -1,8 +1,9 @@
 "use client";
 
 import { useState } from "react";
-import { SANGCHEONG_DEMO_INPUT, triggerAlert } from "@/lib/api";
+import { API_BASE, SANGCHEONG_DEMO_INPUT, triggerAlert } from "@/lib/api";
 import type { ModuleOEnvelope } from "@/lib/types";
+import { useSlowLoading } from "@/lib/useSlowLoading";
 import GoldenTimeCounter from "@/components/GoldenTimeCounter";
 import RiskCard from "@/components/RiskCard";
 
@@ -25,20 +26,27 @@ export default function DashboardPanel() {
   const [envelope, setEnvelope] = useState<ModuleOEnvelope | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const { slow, start, stop } = useSlowLoading();
 
   async function runDemo() {
     setLoading(true);
     setError(null);
+    start();
     try {
       const result = await triggerAlert(SANGCHEONG_DEMO_INPUT);
       setEnvelope(result);
     } catch (e) {
       setError(
-        `백엔드(api_server.py) 연결 실패 — "python -m uvicorn api_server:app --port 8000"로 먼저 띄워주세요. (${
-          e instanceof Error ? e.message : String(e)
-        })`
+        API_BASE.includes("localhost")
+          ? `백엔드(api_server.py) 연결 실패 — "python -m uvicorn api_server:app --port 8000"로 먼저 띄워주세요. (${
+              e instanceof Error ? e.message : String(e)
+            })`
+          : `백엔드 서버 연결 실패 — 무료 호스팅이라 오래 쉬었으면 깨어나는 데 시간이 걸릴 수 있어요. 잠시 후 다시 시도해주세요. (${
+              e instanceof Error ? e.message : String(e)
+            })`
       );
     } finally {
+      stop();
       setLoading(false);
     }
   }
@@ -55,7 +63,7 @@ export default function DashboardPanel() {
           disabled={loading}
           className="shrink-0 rounded-lg bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-500 disabled:opacity-50"
         >
-          {loading ? "실행 중…" : "산청 시나리오 실행"}
+          {loading ? (slow ? "서버 깨우는 중… (최대 1분)" : "실행 중…") : "산청 시나리오 실행"}
         </button>
       </div>
 

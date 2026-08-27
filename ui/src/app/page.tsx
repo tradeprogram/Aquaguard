@@ -33,10 +33,20 @@ export default function HomePage() {
   // 대피소 찾기(§6.9)에서 고른 경로 — EvacuationPanel과 MapExplorer가 형제 컴포넌트라
   // 여기서 상태를 끌어올려 양쪽에 내려준다(HANDOFF.md §6.9 "권장" 방식).
   const [evacuationRoute, setEvacuationRoute] = useState<EvacuationRoute | null>(null);
+  // §6.8 폴백 ① — "지도에서 선택" 모드와, 클릭으로 받은 좌표도 같은 방식으로 연결.
+  const [pickingOrigin, setPickingOrigin] = useState(false);
+  const [pickedOrigin, setPickedOrigin] = useState<[number, number] | null>(null);
 
   return (
     <div className="relative h-full w-full">
-      <MapExplorer route={evacuationRoute} />
+      <MapExplorer
+        route={evacuationRoute}
+        pickOrigin={pickingOrigin}
+        onOriginPicked={(coord) => {
+          setPickedOrigin(coord);
+          setPickingOrigin(false);
+        }}
+      />
 
       {/* 지도가 메인 화면 — 메뉴는 더 이상 페이지를 이동시키지 않고 지도 위에
           글라스 톤 패널을 띄운다/닫는다(토글). 로고는 흰색 워드마크라 밝은 지도
@@ -66,7 +76,13 @@ export default function HomePage() {
           <div className="pointer-events-auto">
             <GlassPanel title={PANEL_TITLE[active]} onClose={() => setActive(null)}>
               {active === "dashboard" && <DashboardPanel />}
-              {active === "evacuation" && <EvacuationPanel onSelectRoute={setEvacuationRoute} />}
+              {active === "evacuation" && (
+                <EvacuationPanel
+                  onSelectRoute={setEvacuationRoute}
+                  onRequestMapPick={() => setPickingOrigin(true)}
+                  mapPickedOrigin={pickedOrigin}
+                />
+              )}
               {active === "isolation" && <IsolationPanel />}
               {active === "whatif" && <WhatifPanel />}
             </GlassPanel>
