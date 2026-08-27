@@ -214,7 +214,7 @@ cd .. && python -m pytest module_o_orchestrator/tests/ -v   # 백엔드 변경 �
 
 ## 5. 다음으로 무엇을 할지 (우선순위 제안)
 
-1. **(최우선, 사용자가 명시적으로 요청, UI 목업만 있고 실제 로직 미착수)** 주민 대피 경로 기능(네이버/카카오 길찾기) — 아래 **§6 전체**가 이 작업의 상세 명세다. 다른 항목보다 먼저 이걸 읽고 시작할 것. `EvacuationPanel.tsx`(대피소 리스트)는 정적 목업으로 이미 메뉴에 들어가 있으니 그 파일을 실데이터로 바꾸는 작업부터 시작하면 됨 — §6.8(현재 위치)·§6.9(3D 지도 표시)가 가장 최근에 추가된 요구사항.
+1. **(최우선, 사용자가 명시적으로 요청, §6.8·6.9는 완료·나머지는 미착수)** 주민 대피 경로 기능(네이버/카카오 길찾기) — 아래 **§6 전체**가 이 작업의 상세 명세다. 다른 항목보다 먼저 이걸 읽고 시작할 것. **2026-08-27 진행**: `EvacuationPanel.tsx`가 이제 브라우저 Geolocation으로 실제 현재 위치를 받아 하버사인 직선거리 기반 차량/도보 시간을 계산하고(§6.8), 선택한 대피소까지 `MapExplorer.tsx`에 점선 경로+마커로 그려준다(§6.9, `app/page.tsx`가 상태를 끌어올려 `route` prop으로 연결 — `EvacuationRoute` 타입은 `MapExplorer.tsx`에서 export). **아직 남은 것**: 대피소 좌표 3곳(`SHELTERS` 배열)이 여전히 손으로 넣은 값이고(§6.2), 차량/도보 시간도 진짜 도로 API가 아니라 가정 속도(차량 30km/h, 도보 4km/h) 기반 직선거리 근사(§6.3)다 — 카카오/네이버 키 받으면 `/evacuation-route` 백엔드(§6.4)부터 실연동하면 됨.
 1-1. **(최우선, §6과 같은 우선순위 — 사용자가 "독창성 축"으로 직접 지목, UI는 개념 프리뷰만 있고 실제 알고리즘 미착수)** 고립마을 자동탐지(그래프 연결성 분석) — §6과 사실상 한 세트 기능이다. 아래 **§7 전체** 참조. `IsolationPanel.tsx`가 예시 시나리오만 보여주는 상태.
 2. **(완료)** ~~토사 유실 + 침수 시뮬레이션~~ — §1.5에 있음, 커밋 `4759d2a` 이후 여러 번 개선(색상 버그 `4ce6ef1`, 건물 부족 문제는 VWorld 연동 `abcb95a`로 해결).
 3. 트랙①②가 아직 안 왔으므로, 계속 목업 모드로 진행하되 `contracts/`가 실제로 맞는지 검증할 방법이 없다는 리스크를 사용자에게 상기시킬 것.
@@ -269,7 +269,7 @@ NAVER_MAPS_CLIENT_SECRET=...
 
 ### 6.5 프론트 구현 (`ui/src/components/panels/EvacuationPanel.tsx` + `ui/src/components/MapExplorer.tsx`)
 - 사이드 패널에 "대피소 찾기" 섹션 추가 — 지금 있는 토사/침수 슬라이더(`debrisDepth`/`floodDepth`) 값이 바뀔 때마다 이 패널도 다시 계산되게 연결(디바운스). **위험지역이 넓어지면 대피소가 실시간으로 "도달 가능"→"불가능"으로 바뀌는 걸 보여주는 게 골든타임 서사에 제일 강하게 먹힌다** — 사용자가 이미 이 페이지에서 반복해서 강조한 패턴(3D 볼륨이 실제 건물/도로와 겹치는 걸 보여주는 것과 같은 논리).
-- 대피소 후보 리스트(거리순), 각 항목에 🚗 차량 X분 / 🚶 도보 Y분, 수용인원, 도달가능 배지(초록/빨강) — `EvacuationPanel.tsx`에 이미 정적 목업으로 만들어져 있음, 실제로는 이 목록을 `/evacuation-route` 응답으로 교체.
+- 대피소 후보 리스트(거리순), 각 항목에 차량 X분 / 도보 Y분(색으로 구분, 이모지 없음), 수용인원, 도달가능 배지(초록/빨강) — `EvacuationPanel.tsx`에 이미 있음(§6.8 완료로 geolocation 기반 하버사인 근사까지는 붙어있음), 실제로는 이 계산 로직을 `/evacuation-route` 응답으로 교체.
 - 지도 위에 선택 대피소까지 실제 경로 라인 — 카카오/네이버가 반환하는 폴리라인 좌표를 그대로 GeoJSON LineString으로 그리면 됨(이미 5179→4326 재투영 패턴이 `module_o_orchestrator/geo.py`에 있으니 필요하면 참고, 단 카카오/네이버는 보통 4326으로 바로 응답하니 재투영 불필요할 가능성 높음 — 응답 스펙 직접 확인할 것)
 - "부족" 배지는 크고 명확하게 — 기존 `/map3d`의 debris/flood 경고 UI 톤 참고
 
@@ -297,23 +297,29 @@ NAVER_MAPS_CLIENT_SECRET=...
 4. `contracts/module_e` 확장 제안을 팀에 공유
 5. 아래 6.8(현재 위치)·6.9(3D 지도 표시·안내)로 "찾기"에서 "안내"로 완성
 
-### 6.8 신규 — 사용자 현재 위치를 출발지로 (2026-08-27 추가 요청)
+### 6.8 신규 — 사용자 현재 위치를 출발지로 (2026-08-27 추가 요청, **완료**)
 지금까지의 `origin`은 전부 `SANGCHEONG_DEMO_INPUT`(데모용 고정 좌표)이었다. 실제 배포에서는 **접속한 사용자의 현재 위치**가 출발지여야 한다.
+
+> **완료(2026-08-27)**: `EvacuationPanel.tsx`의 "내 위치로 찾기" 버튼이 아래 1번대로 구현됨. 단 지금은 `/evacuation-route` 백엔드가 없어서 받은 좌표로 직접(하버사인) 거리를 계산해 화면에서 바로 보여준다 — 백엔드 연동은 아직임. 2번(폴백) 중 ①(지도 클릭)은 아직 없고 ②(검색창)는 이미 있던 기능으로 대체. 3번(에러 메시지)은 구현됨.
 
 1. **브라우저 Geolocation API**로 위치 요청: `navigator.geolocation.getCurrentPosition(success, error, { enableHighAccuracy: true, timeout: 8000 })`. 반환되는 `coords.longitude`/`coords.latitude`는 EPSG:4326 — `/evacuation-route`의 `origin: {lon, lat}`에 그대로 넣으면 된다(백엔드에서 5179로 변환).
 2. **중요한 제약**: Geolocation API는 **secure context(HTTPS 또는 localhost)에서만 동작**한다 — 배포 도메인이 HTTP면 조용히 실패하니 배포 전 HTTPS 확인 필수.
 3. **폴백(반드시 필요, 조용히 넘어가지 말 것 — §6 불확실성 표기 원칙과 같은 톤)**: 사용자가 위치 권한을 거부하거나 실패하면 ① 지도 위 클릭으로 직접 출발지 지정, 또는 ② 지금 있는 `/search`(주소 검색창)로 동네 이름을 검색해 그 결과의 `center`를 출발지로 쓰는 두 가지 수동 입력 경로를 제공할 것. "위치를 가져올 수 없습니다 — 지도를 클릭하거나 주소를 검색해주세요" 같은 명시적 안내가 있어야 한다.
 4. UI 자리: `EvacuationPanel.tsx` 상단에 "내 위치로 찾기" 버튼 하나 + 위 폴백 두 가지를 같은 패널 안에 배치하는 게 가장 자연스럽다.
 
-### 6.9 신규 — 3D 지도 위 경로 표시 + 길 안내 (2026-08-27 추가 요청)
-현재 `EvacuationPanel.tsx`(사이드 글라스 패널)와 `MapExplorer.tsx`(3D 지도)는 `app/page.tsx`의 형제 컴포넌트로 **서로 분리돼 있다** — 8/27 지도-메인-화면 개편 때 이렇게 나뉘었다. 패널에서 고른 경로를 지도가 그리려면 둘을 연결해야 하는데, 방법은 둘 중 하나:
-- **(권장, 더 간단함)** 선택된 경로/출발지 상태를 `app/page.tsx`로 끌어올려서(`useState`) `MapExplorer`에 `activeRoute` 같은 prop으로 내려주고, `MapExplorer`가 그 prop이 바뀔 때마다 지도에 그리는 `useEffect`를 추가.
-- MapExplorer가 이미 여러 `useRef`(`simUpdateRef`, `highlightUpdateRef` 등)로 "외부에서 지도를 갱신하는 함수를 노출"하는 패턴을 쓰고 있으니, 같은 패턴으로 `routeUpdateRef`를 추가해도 됨(기존 코드 스타일과 더 일관됨).
+### 6.9 신규 — 3D 지도 위 경로 표시 + 길 안내 (2026-08-27 추가 요청, **완료(직선 근사 단계까지)**)
+현재 `EvacuationPanel.tsx`(사이드 글라스 패널)와 `MapExplorer.tsx`(3D 지도)는 `app/page.tsx`의 형제 컴포넌트로 **서로 분리돼 있다** — 8/27 지도-메인-화면 개편 때 이렇게 나뉘었다.
 
-지도에 그릴 것(기존 `bridges`/`debris-flow` GeoJSON 소스를 추가하던 것과 동일한 패턴 — `map.addSource` + `map.addLayer`):
-1. **경로 라인**: 카카오/네이버가 반환하는 폴리라인을 GeoJSON `LineString` `line` 레이어로. 기존 도로(`vworld-roads`)와 안 겹치게 굵고 눈에 띄는 색(예: 네온 그린·시안 계열 — 토사=빨강/침수=파랑/고립=마젠타와 안 겹치게).
-2. **출발지·도착지 마커**: `circle` 레이어 2개(또는 `Marker` 인스턴스) — 출발지는 사용자 아이콘 느낌, 도착지는 대피소 아이콘 느낌으로 구분.
-3. **카메라**: 경로 선택 시 `map.fitBounds(routeBbox, { padding, pitch: 60, bearing })`로 경로 전체가 보이게 이동(기존 `flyTo`/검색 결과 이동과 같은 패턴).
+> **완료(2026-08-27)**: 아래 "권장" 방식대로 구현됨 — `app/page.tsx`가 `evacuationRoute` 상태를 끌어올려 `MapExplorer`엔 `route` prop, `EvacuationPanel`엔 `onSelectRoute` 콜백으로 내려준다. `MapExplorer.tsx`가 `EvacuationRoute` 타입을 export하니 다른 곳에서 재사용 가능. 지도엔 `evacuation-route`(점선 시안색 라인, 아래 1번)·`evacuation-markers`(출발/도착 원형 마커, 2번) 두 소스가 추가됐고, 경로 선택 시 3번대로 카메라도 이동한다 — **다만 지금은 직선(하버사인) 좌표라 점선으로 그려서 "실제 도로 경로 아님"을 시각적으로도 표시함**. 카카오/네이버 실경로가 들어오면 `route.origin`/`route.destination` 대신 실제 폴리라인 좌표 배열을 넣도록만 바꾸면 되고, 레이어/이펙트 구조는 그대로 재사용된다.
+
+패널에서 고른 경로를 지도가 그리려면 둘을 연결해야 하는데, 방법은 둘 중 하나였다(실제로는 아래 첫 번째로 구현):
+- **(채택)** 선택된 경로/출발지 상태를 `app/page.tsx`로 끌어올려서(`useState`) `MapExplorer`에 `route` prop으로 내려주고, `MapExplorer`가 그 prop이 바뀔 때마다 지도에 그리는 `useEffect`를 추가.
+- MapExplorer가 이미 여러 `useRef`(`simUpdateRef`, `highlightUpdateRef` 등)로 "외부에서 지도를 갱신하는 함수를 노출"하는 패턴을 쓰고 있으니, 같은 패턴으로 `routeUpdateRef`를 추가하는 방법도 있었음(안 씀 — prop 방식이 이 기능 규모엔 더 간단했음).
+
+지도에 그린 것(기존 `bridges`/`debris-flow` GeoJSON 소스를 추가하던 것과 동일한 패턴 — `map.addSource` + `map.addLayer`):
+1. **경로 라인**: 지금은 직선 좌표 2점을 GeoJSON `LineString` `line` 레이어로, 점선(`line-dasharray`)+시안색(`#22d3ee`)으로 — 토사=빨강/침수=파랑/고립=마젠타와 안 겹침. 카카오/네이버 실경로가 들어오면 좌표 배열만 폴리라인으로 교체하고 점선을 실선으로 바꾸면 됨.
+2. **출발지·도착지 마커**: `circle` 레이어 하나에 `role` 속성(origin/destination)으로 색 분기(`#38bdf8`/`#f472b6`).
+3. **카메라**: 경로 선택 시 `map.fitBounds(...)`로 출발/도착 둘 다 보이게 이동(기존 `flyTo`/검색 결과 이동과 같은 패턴).
 
 **"길 안내"의 범위**: 카카오/네이버 웹 API 둘 다 턴바이턴 음성 안내는 앱 SDK/네이티브 상품 쪽이라 REST Directions API로는 보통 안 됨(가입 시점에 재확인할 것) — 이 프로젝트 MVP 범위는 "경로 시각화 + 총 소요시간/거리 표시 + 카메라 자동 이동"까지로 충분하다. 진행률 기반으로 카메라가 경로를 따라가는 애니메이션(진짜 내비게이션처럼)은 있으면 좋지만 우선순위 낮음(여유 있으면 §6.7의 5번 이후 확장 과제로).
 
