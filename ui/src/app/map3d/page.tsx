@@ -7,11 +7,12 @@ import buffer from "@turf/buffer";
 import centroid from "@turf/centroid";
 import booleanPointInPolygon from "@turf/boolean-point-in-polygon";
 import { lineString as turfLineString } from "@turf/helpers";
-import type { Feature, FeatureCollection, LineString, Polygon, MultiPolygon } from "geojson";
+import type { Feature, FeatureCollection, LineString, MultiLineString, Polygon, MultiPolygon } from "geojson";
 import {
   API_BASE,
   getBoundaries,
   getVWorldBuildings,
+  getVWorldRoads,
   searchAdmin,
   type AdminLevel,
   type AdminSearchResult,
@@ -59,15 +60,17 @@ const MAP_STYLE: StyleSpecification = {
   layers: [
     { id: "satellite", type: "raster", source: "satellite" },
     { id: "labels", type: "raster", source: "labels" },
-    // 도로 케이싱(어두운 밑깔개) — 위에 밝은 선을 얹으면 도로가 도드라져 보이는 카토그래피 기법
+    // OSM 도로 — z14까지만 있는 벡터타일이라 그보다 확대하면(예: 서울 z16 테스트 지점)
+    // 성긴 지오메트리가 늘어나 보이며 구불구불하게 뒤틀린다. 기본은 숨기고 VWorld
+    // 표준노드링크(§2.6, 아래 vworld-roads*)로 교체 — 실패했을 때만 폴백으로 노출.
     {
-      id: "roads-casing",
+      id: "roads-casing-osm",
       type: "line",
       source: "osm_vectors",
       "source-layer": "transportation",
       minzoom: 11,
       filter: ["!=", ["get", "brunnel"], "tunnel"],
-      layout: { "line-cap": "round", "line-join": "round" },
+      layout: { "line-cap": "round", "line-join": "round", visibility: "none" },
       paint: {
         "line-color": "#1e293b",
         "line-width": [
@@ -78,13 +81,13 @@ const MAP_STYLE: StyleSpecification = {
       },
     },
     {
-      id: "roads",
+      id: "roads-osm",
       type: "line",
       source: "osm_vectors",
       "source-layer": "transportation",
       minzoom: 11,
       filter: ["!=", ["get", "brunnel"], "tunnel"],
-      layout: { "line-cap": "round", "line-join": "round" },
+      layout: { "line-cap": "round", "line-join": "round", visibility: "none" },
       paint: {
         "line-color": [
           "match", ["get", "class"],
@@ -102,13 +105,13 @@ const MAP_STYLE: StyleSpecification = {
     },
     // 터널: 점선 + 낮은 불투명도로 지하임을 표시
     {
-      id: "roads-tunnel",
+      id: "roads-tunnel-osm",
       type: "line",
       source: "osm_vectors",
       "source-layer": "transportation",
       minzoom: 11,
       filter: ["==", ["get", "brunnel"], "tunnel"],
-      layout: { "line-cap": "round", "line-join": "round" },
+      layout: { "line-cap": "round", "line-join": "round", visibility: "none" },
       paint: { "line-color": "#94a3b8", "line-dasharray": [2, 2], "line-width": 2, "line-opacity": 0.5 },
     },
     {
@@ -386,20 +389,42 @@ export default function Map3DPage() {
           });
       };
 
-      updateBoundaries();
-      updateVWorldBuildings();
-      let moveendTimer: ReturnType<typeof setTimeout> | undefined;
-      map.on("moveend", () => {
-        clearTimeout(moveendTimer);
-        moveendTimer = setTimeout(() => {
-          updateBoundaries();
-          updateVWorldBuildings();
-        }, 200);
+      // VWorld 표준노드링크(§2.6) 도로 — OSM z14 한계로 뒤틀려 보이던 문제 해결.
+      map.addSource("vworld-roads", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
+      map.addLayer({
+        id: "vworld-roads-casing",
+        type: "line",
+        source: "vworld-roads",
+        layout: { "line-cap": "round", "line-join": "round" },
+        paint: {
+          "line-color": "#1e293b",
+          "line-width": ["match", ["get", "rd_rank_h"], "특별·광역시도", 7, "일반국도", 6, 4],
+        },
+      });
+      map.addLayer({
+        id: "vworld-roads",
+        type: "line",
+        source: "vworld-roads",
+        filter: ["!=", ["get", "rd_type_h"], "터널"],
+        layout: { "line-cap": "round", "line-join": "round" },
+        paint: {
+          "line-color": ["match", ["get", "rd_rank_h"], "특별·광역시도", "#f59e0b", "일반국도", "#fbbf24", "#e2e8f0"],
+          "line-width": ["match", ["get", "rd_rank_h"], "특별·광역시도", 5, "일반국도", 4, 2.5],
+        },
+      });
+      map.addLayer({
+        id: "vworld-roads-tunnel",
+        type: "line",
+        source: "vworld-roads",
+        filter: ["==", ["get", "rd_type_h"], "터널"],
+        layout: { "line-cap": "round", "line-join": "round" },
+        paint: { "line-color": "#94a3b8", "line-dasharray": [2, 2], "line-width": 3, "line-opacity": 0.5 },
       });
 
-      // 교량(brunnel=='bridge')은 MapLibre line 레이어로는 지형 위에 그대로 드레이프될
-      // 뿐이라 실제로 "떠 있는" 느낌이 안 난다 — LineString을 폭만큼 버퍼링해 얇은
-      // 폴리곤으로 만들고 fill-extrusion으로 지면에서 띄워 올려 진짜 입체 교량 데크를 만든다.
+      // 교량(brunnel=='bridge')/고가차도는 MapLibre line 레이어로는 지형 위에 그대로
+      // 드레이프될 뿐이라 실제로 "떠 있는" 느낌이 안 난다 — LineString을 폭만큼
+      // 버퍼링해 얇은 폴리곤으로 만들고 fill-extrusion으로 지면에서 띄워 올려 진짜
+      // 입체 교량 데크를 만든다.
       map.addSource("bridges", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
       map.addLayer({
         id: "bridges-3d",
@@ -413,41 +438,85 @@ export default function Map3DPage() {
         },
       });
 
-      const seenBridgeIds = new Set<string | number>();
-      const bridgeFeatures: Feature<Polygon | MultiPolygon>[] = [];
-      const updateBridges = () => {
+      // OSM brunnel 태그 기반 폴백(§ VWorld 요청 실패 시에만 사용) — 예전 로직 그대로 유지.
+      const updateBridgesFromOSM = () => {
         const currentMap = mapRef.current;
         if (!currentMap) return;
         const raw = currentMap.querySourceFeatures("osm_vectors", {
           sourceLayer: "transportation",
           filter: ["==", ["get", "brunnel"], "bridge"],
         }) as unknown as Feature<LineString>[];
-
+        const seen = new Set<string | number>();
+        const osmBridgeFeatures: Feature<Polygon | MultiPolygon>[] = [];
         for (const feat of raw) {
           const key = feat.id ?? JSON.stringify(feat.geometry.coordinates);
-          if (seenBridgeIds.has(key)) continue;
-          seenBridgeIds.add(key);
+          if (seen.has(key)) continue;
+          seen.add(key);
           const roadClass = (feat.properties?.class as string) ?? "";
           const halfWidth = BRIDGE_HALF_WIDTH_M[roadClass] ?? DEFAULT_BRIDGE_HALF_WIDTH_M;
           try {
             const poly = buffer(feat, halfWidth, { units: "meters", steps: 4 });
-            if (poly) bridgeFeatures.push(poly);
+            if (poly) osmBridgeFeatures.push(poly);
           } catch {
             // 극단적으로 짧거나 기형인 geometry는 버퍼링이 실패할 수 있음 — 건너뜀
           }
         }
-
-        const source = currentMap.getSource("bridges") as GeoJSONSource | undefined;
-        source?.setData({
+        (currentMap.getSource("bridges") as GeoJSONSource | undefined)?.setData({
           type: "FeatureCollection",
-          features: bridgeFeatures,
+          features: osmBridgeFeatures,
         } as FeatureCollection);
       };
 
-      let idleTimer: ReturnType<typeof setTimeout> | undefined;
-      map.on("idle", () => {
-        clearTimeout(idleTimer);
-        idleTimer = setTimeout(updateBridges, 150);
+      const updateVWorldRoads = () => {
+        const currentMap = mapRef.current;
+        if (!currentMap) return;
+        if (currentMap.getZoom() < 11) return;
+        const b = currentMap.getBounds();
+        getVWorldRoads([b.getWest(), b.getSouth(), b.getEast(), b.getNorth()])
+          .then((fc) => {
+            const liveMap = mapRef.current;
+            if (!liveMap) return;
+            (liveMap.getSource("vworld-roads") as GeoJSONSource | undefined)?.setData(fc);
+
+            // rd_type_h에 교량/고가차도가 명시돼 있어 OSM의 brunnel 태그보다 신뢰도
+            // 높게 판별 가능 — 두 종류 다 지면에서 띄운 데크로 그린다.
+            const bridgeFeatures: Feature<Polygon | MultiPolygon>[] = [];
+            for (const feat of fc.features as Feature<LineString | MultiLineString>[]) {
+              const type = feat.properties?.rd_type_h as string | undefined;
+              if (type !== "교량" && type !== "고가차도") continue;
+              try {
+                const poly = buffer(feat, 6, { units: "meters", steps: 4 });
+                if (poly) bridgeFeatures.push(poly);
+              } catch {
+                // 극단적으로 짧거나 기형인 geometry는 버퍼링이 실패할 수 있음 — 건너뜀
+              }
+            }
+            (liveMap.getSource("bridges") as GeoJSONSource | undefined)?.setData({
+              type: "FeatureCollection",
+              features: bridgeFeatures,
+            } as FeatureCollection);
+          })
+          .catch(() => {
+            // 실패 시 OSM 폴백 도로 레이어를 보여주고, 교량도 OSM brunnel 태그로 대체
+            const liveMap = mapRef.current;
+            for (const id of ["roads-osm", "roads-casing-osm", "roads-tunnel-osm"]) {
+              liveMap?.setLayoutProperty(id, "visibility", "visible");
+            }
+            updateBridgesFromOSM();
+          });
+      };
+
+      updateBoundaries();
+      updateVWorldBuildings();
+      updateVWorldRoads();
+      let moveendTimer: ReturnType<typeof setTimeout> | undefined;
+      map.on("moveend", () => {
+        clearTimeout(moveendTimer);
+        moveendTimer = setTimeout(() => {
+          updateBoundaries();
+          updateVWorldBuildings();
+          updateVWorldRoads();
+        }, 200);
       });
 
       // 토사 유실 / 침수 볼륨 — bridges와 동일한 이유로 deck.gl이 아니라 MapLibre 네이티브
@@ -651,8 +720,8 @@ export default function Map3DPage() {
             🖱 좌클릭 드래그: 이동 · 스크롤: 줌 · <span className="text-slate-300">우클릭(또는 Ctrl) 드래그: 회전/기울기</span>
           </p>
           <p className="mt-2 text-xs text-amber-300/70">
-            건물은 브이월드 건물통합정보(§2.3 1순위, 국토교통부) 실데이터 — 층수×3m 근사 높이.
-            도로망·교량은 OSM 기반으로 입체화됨. 프로덕션 전환 시 §2.6 도로망 표준노드링크로 교체 예정.
+            건물·도로 모두 브이월드 실데이터(§2.3, §2.6) — 건물은 건물통합정보(층수×3m 근사
+            높이), 도로는 국가교통정보센터 표준노드링크(교량·고가차도는 지면에서 띄운 데크).
           </p>
           <div className="mt-2 flex gap-1.5">
             {TEST_LOCATIONS.map((loc) => (

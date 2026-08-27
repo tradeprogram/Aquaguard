@@ -255,8 +255,49 @@ def get_terrain_tile(z: int, x: int, y: int) -> Response:
 
 
 VWORLD_BUILDING_LAYER = "LT_C_SPBD"  # 건물통합정보(국토교통부) — 브이월드 Data API 2.0
+VWORLD_ROAD_LAYER = "LT_L_MOCTLINK"  # 국가교통정보센터 표준노드링크(§2.6이 원래 지정한 소스)
 METERS_PER_FLOOR = 3.0
 DEFAULT_BUILDING_HEIGHT_M = 4.0
+VWORLD_PAGE_SIZE = 1000
+
+
+def _vworld_get_feature(data_layer: str, bbox: tuple[float, float, float, float]) -> dict:
+    """VWorld Data API 2.0 GetFeature 공통 호출. bbox=(minx,miny,maxx,maxy)."""
+    if not VWORLD_API_KEY:
+        raise HTTPException(status_code=503, detail="VWORLD_API_KEY not configured (.env)")
+    minx, miny, maxx, maxy = bbox
+    resp = requests.get(
+        "http://api.vworld.kr/req/data",
+        params={
+            "service": "data",
+            "request": "GetFeature",
+            "data": data_layer,
+            "key": VWORLD_API_KEY,
+            "domain": "localhost",
+            "format": "json",
+            "size": VWORLD_PAGE_SIZE,
+            "geomFilter": f"BOX({minx},{miny},{maxx},{maxy})",
+        },
+        timeout=10,
+    )
+    resp.raise_for_status()
+    body = resp.json()
+    service = body.get("response", {})
+    if service.get("status") != "OK":
+        # NOT_FOUND(해당 영역에 데이터 없음)는 정상적인 빈 결과로 취급
+        error = service.get("error", {})
+        if error.get("code") == "NOT_FOUND":
+            return {"type": "FeatureCollection", "features": []}
+        raise HTTPException(status_code=502, detail=f"VWorld error: {error}")
+    return service["result"]["featureCollection"]
+
+
+def _parse_bbox(bbox: str) -> tuple[float, float, float, float]:
+    try:
+        minx, miny, maxx, maxy = (float(v) for v in bbox.split(","))
+    except ValueError:
+        raise HTTPException(status_code=400, detail="bbox must be 'minLon,minLat,maxLon,maxLat'")
+    return minx, miny, maxx, maxy
 
 
 @app.get("/vworld/buildings")
@@ -269,38 +310,7 @@ def get_vworld_buildings(bbox: str) -> dict:
     fill-extrusion-height용 height_m 필드를 만들어 붙여준다 — 원본은 층수만 있고
     실제 높이(m)가 없어서 건축 통상값으로 근사(§6 불확실성 표기 원칙: 근사치임을 명시).
     """
-    if not VWORLD_API_KEY:
-        raise HTTPException(status_code=503, detail="VWORLD_API_KEY not configured (.env)")
-    try:
-        minx, miny, maxx, maxy = (float(v) for v in bbox.split(","))
-    except ValueError:
-        raise HTTPException(status_code=400, detail="bbox must be 'minLon,minLat,maxLon,maxLat'")
-
-    resp = requests.get(
-        "http://api.vworld.kr/req/data",
-        params={
-            "service": "data",
-            "request": "GetFeature",
-            "data": VWORLD_BUILDING_LAYER,
-            "key": VWORLD_API_KEY,
-            "domain": "localhost",
-            "format": "json",
-            "size": 1000,
-            "geomFilter": f"BOX({minx},{miny},{maxx},{maxy})",
-        },
-        timeout=10,
-    )
-    resp.raise_for_status()
-    body = resp.json()
-    service = body.get("response", {})
-    if service.get("status") != "OK":
-        # NOT_FOUND(해당 영역에 건물 없음)는 정상적인 빈 결과로 취급
-        error = service.get("error", {})
-        if error.get("code") == "NOT_FOUND":
-            return {"type": "FeatureCollection", "features": []}
-        raise HTTPException(status_code=502, detail=f"VWorld error: {error}")
-
-    fc = service["result"]["featureCollection"]
+    fc = _vworld_get_feature(VWORLD_BUILDING_LAYER, _parse_bbox(bbox))
     for feature in fc.get("features", []):
         props = feature.get("properties", {})
         try:
@@ -309,6 +319,19 @@ def get_vworld_buildings(bbox: str) -> dict:
             floors = 0
         props["height_m"] = floors * METERS_PER_FLOOR if floors > 0 else DEFAULT_BUILDING_HEIGHT_M
     return fc
+
+
+@app.get("/vworld/roads")
+def get_vworld_roads(bbox: str) -> dict:
+    """§2.6이 원래 지정한 도로망 소스 — 국가교통정보센터 표준노드링크(LT_L_MOCTLINK).
+
+    OpenFreeMap(OSM) 벡터타일은 transportation 레이어가 z14까지만 있어서, 그보다 확대한
+    화면(서울 강남처럼 z16 테스트 지점 포함)에서는 그 성긴 지오메트리가 늘어나 보이며
+    도로가 구불구불하게 뒤틀려 보인다 — 표준노드링크는 그 확대 배율에서도 실제 도로
+    형상 그대로 나온다. rd_type_h 필드에 "교량"/"고가차도"/"터널" 구분이 직접 있어서
+    OSM의 brunnel 태그보다 신뢰도 높게 교량 판별에 쓸 수 있다(프론트의 다리 압출 로직 참조).
+    """
+    return _vworld_get_feature(VWORLD_ROAD_LAYER, _parse_bbox(bbox))
 
 
 @app.get("/health")
