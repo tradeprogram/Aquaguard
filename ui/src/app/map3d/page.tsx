@@ -136,10 +136,12 @@ const MAP_STYLE: StyleSpecification = {
   ],
 };
 
+// 도로가 주황/노랑 계열이라 예전 하늘색 경계선이 묻혀서 초록 계열로 변경 —
+// 선택 강조(노랑)·도로(주황)·물(파랑)과 안 겹치는 색.
 const ADM_LAYER_STYLE: Record<AdminLevel, { color: string; width: number; opacity: number }> = {
-  sido: { color: "#0ea5e9", width: 2.5, opacity: 0.6 },
-  sigungu: { color: "#38bdf8", width: 1.5, opacity: 0.55 },
-  dong: { color: "#38bdf8", width: 1, opacity: 0.45 },
+  sido: { color: "#059669", width: 2.5, opacity: 0.75 },
+  sigungu: { color: "#10b981", width: 1.5, opacity: 0.7 },
+  dong: { color: "#34d399", width: 1, opacity: 0.55 },
 };
 
 const BRIDGE_DECK_HEIGHT_M = 8;
