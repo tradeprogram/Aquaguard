@@ -21,6 +21,8 @@
 ### 1.1 계약(contracts/) — Day 1 산출물
 `contracts/module_{a,b,c,d,e,g,h,o}.{example.json,schema.json}` — 문서 §5의 모듈별 입출력 예시를 그대로 옮긴 것. **다른 두 트랙이 아직 안 왔으므로 이 계약은 실제로 검증된 적이 없다** — 트랙①②가 실제 모듈을 만들면 이 계약과 어긋나는 부분이 나올 수 있음을 감안할 것. `Module O`의 `input` 스키마(`alert_id`/`trigger_location`/`timestamp`/`auto_approve_timeout_min`/`safety_margin_hours`)는 문서에 명시적 예시가 없어 트랙③이 추론해 넣은 값이라고 `contracts/README.md`에 명시해뒀다.
 
+`ui/src/lib/types.ts`에 Module C/D(`UnderpassAlert`/`ExposureData`, `AlertPackage.road_flooding`/`.exposure`)와 Module E 확장(`RouteModeEta`, `ShelterRouteData.modes`) TypeScript 타입을 미리 만들어뒀다(2026-08-27, 전부 optional) — 아직 실제 orchestrator 출력엔 없는 준비용이니, 실제 모듈 연동할 때 이 타입 그대로 쓰거나 필요하면 고쳐써도 됨.
+
 ### 1.2 Module O 오케스트레이터 (`module_o_orchestrator/`)
 - `orchestrator.py`: `run(input) -> envelope`. A/B 호출 → 임계치(`landslide_prob≥0.7` 또는 `flood_prob≥0.7`) 초과 시 D/E/G 순차 호출 → `precursor_flag`면 H 호출 → `golden_time_saved_min` 계산 → `AlertStore`에 등록.
 - `modules_client.py`: `AQUAGUARD_MOCK_MODE`(기본 `1`)로 목업/실제 모듈 호출을 스위칭. `MODULE_PACKAGES` 딕셔너리에 트랙①②의 실제 패키지명이 매핑돼 있음 — **트랙①②가 코드를 넣으면 이 파일 수정 없이 `AQUAGUARD_MOCK_MODE=0`만으로 실제 연동됨.**
