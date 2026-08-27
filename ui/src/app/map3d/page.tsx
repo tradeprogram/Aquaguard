@@ -296,18 +296,30 @@ export default function Map3DPage() {
       map.addLayer({ id: "hills", type: "hillshade", source: "terrain", paint: { "hillshade-exaggeration": 0.7 } });
 
       // DEM 소스가 z15까지밖에 없어서 그보다 확대(건물 단위 줌)하면 MapLibre가 같은
-      // 타일을 억지로 늘려 쓰다가 지형이 거대한 혹처럼 부풀어 보이는 왜곡이 생긴다
-      // (도로가 z14 오버줌에서 뒤틀리던 것과 같은 원인). 건물 스케일에서는 지형
-      // 굴곡이 의미도 없으니 그 줌 이상에서는 아예 꺼서 평평하게 만든다.
-      const TERRAIN_MAX_ZOOM = 15;
-      let terrainEnabled = false;
+      // 타일을 억지로 늘려 써야 한다 — 이때 벌어지는 "혹처럼 부풀어 보이는" 왜곡은
+      // exaggeration이 오버줌으로 생긴 타일 경계 스파이크까지 그대로 증폭해서
+      // 생긴다(도로가 z14 오버줌에서 뒤틀리던 것과 같은 근본 원인). 이전엔 아예
+      // 꺼버렸지만 그러면 건물 스케일로 들어가는 순간 산이 통째로 평평해져 버려서
+      // (사용자 리포트) 대신 z15를 넘는 만큼 exaggeration을 서서히 낮춘다 — 굴곡은
+      // 계속 보이되 왜곡의 세로 진폭만 줄여서 "찌그러짐"을 눈에 덜 띄게 만드는
+      // 절충. 0으로 완전히 죽이지 않고 바닥값(0.35)을 남겨 능선이 사라지진 않게 함.
+      const TERRAIN_TAPER_START_ZOOM = 15;
+      const TERRAIN_TAPER_END_ZOOM = 19;
+      const TERRAIN_MAX_EXAGGERATION = 1.3;
+      const TERRAIN_MIN_EXAGGERATION = 0.35;
+      let lastExaggeration: number | null = null;
       const syncTerrainForZoom = () => {
         const currentMap = mapRef.current;
         if (!currentMap) return;
-        const shouldEnable = currentMap.getZoom() <= TERRAIN_MAX_ZOOM;
-        if (shouldEnable === terrainEnabled) return;
-        terrainEnabled = shouldEnable;
-        currentMap.setTerrain(shouldEnable ? { source: "terrain", exaggeration: 1.3 } : null);
+        const zoom = currentMap.getZoom();
+        const t = Math.min(
+          1,
+          Math.max(0, (zoom - TERRAIN_TAPER_START_ZOOM) / (TERRAIN_TAPER_END_ZOOM - TERRAIN_TAPER_START_ZOOM))
+        );
+        const exaggeration = TERRAIN_MAX_EXAGGERATION - t * (TERRAIN_MAX_EXAGGERATION - TERRAIN_MIN_EXAGGERATION);
+        if (lastExaggeration !== null && Math.abs(exaggeration - lastExaggeration) < 0.02) return;
+        lastExaggeration = exaggeration;
+        currentMap.setTerrain({ source: "terrain", exaggeration });
       };
       syncTerrainForZoom();
       map.on("zoomend", syncTerrainForZoom);
