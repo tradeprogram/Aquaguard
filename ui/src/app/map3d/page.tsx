@@ -294,7 +294,23 @@ export default function Map3DPage() {
         maxzoom: 15,
       });
       map.addLayer({ id: "hills", type: "hillshade", source: "terrain", paint: { "hillshade-exaggeration": 0.7 } });
-      map.setTerrain({ source: "terrain", exaggeration: 1.3 });
+
+      // DEM 소스가 z15까지밖에 없어서 그보다 확대(건물 단위 줌)하면 MapLibre가 같은
+      // 타일을 억지로 늘려 쓰다가 지형이 거대한 혹처럼 부풀어 보이는 왜곡이 생긴다
+      // (도로가 z14 오버줌에서 뒤틀리던 것과 같은 원인). 건물 스케일에서는 지형
+      // 굴곡이 의미도 없으니 그 줌 이상에서는 아예 꺼서 평평하게 만든다.
+      const TERRAIN_MAX_ZOOM = 15;
+      let terrainEnabled = false;
+      const syncTerrainForZoom = () => {
+        const currentMap = mapRef.current;
+        if (!currentMap) return;
+        const shouldEnable = currentMap.getZoom() <= TERRAIN_MAX_ZOOM;
+        if (shouldEnable === terrainEnabled) return;
+        terrainEnabled = shouldEnable;
+        currentMap.setTerrain(shouldEnable ? { source: "terrain", exaggeration: 1.3 } : null);
+      };
+      syncTerrainForZoom();
+      map.on("zoomend", syncTerrainForZoom);
 
       // 행정경계 3계층(사용자 제공 BND_ADM_DONG_PG 기반, 시도/시군구는 그 원본을
       // dissolve해서 생성 — 전국) — 뷰포트 bbox로 api_server.py의 /boundaries에서
