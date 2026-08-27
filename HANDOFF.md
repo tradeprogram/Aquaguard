@@ -45,18 +45,21 @@
 
 실행: `pip install -r requirements.txt && python -m uvicorn api_server:app --port 8000`
 
-### 1.4 Next.js 대시보드 (`ui/`)
-Next.js 16(App Router) + TypeScript + Tailwind v4. 페이지 4개:
-- `/` — 메인 대시보드: "산청 시나리오 실행" 버튼, 골든타임 카운터, 위험/대피소/피해비용 패널
-- `/approve` — 원클릭 승인 화면, 실시간 타임아웃 카운트다운
-- `/whatif` — What-if 강수 슬라이더 (지금은 목업이라 값 고정 — 트랙①이 실제 Module A/B 붙이면 바로 반영됨)
-- `/map3d` — **3D 지도** (아래 1.5 참조, 가장 최근에 많이 작업한 부분)
+### 1.4 Next.js 대시보드 (`ui/`) — 2026-08-27 지도-메인-화면 개편으로 구조 변경됨
+Next.js 16(App Router) + TypeScript + Tailwind v4.
+
+- `/` — **이제 3D 지도가 메인 화면**(`MapExplorer.tsx`, 아래 1.5). 좌상단 로고(네이비 박스) + 메뉴바(대시보드/대피소 찾기/고립마을 위험/What-if 시뮬레이터) — 누르면 페이지 이동 없이 지도 위에 **글라스 톤 패널**(`GlassPanel.tsx`, 화면 면적의 ~50%)이 뜨고 닫힘. 패널 내용물은 `ui/src/components/panels/`의 `DashboardPanel`/`EvacuationPanel`/`IsolationPanel`/`WhatifPanel`. 원클릭 승인은 시민 화면이라 메뉴에서 뺐음(아래 `/approve` 참조).
+- `/approve` — 원클릭 승인 화면, 실시간 타임아웃 카운트다운. **메뉴에서는 빠졌지만 라우트는 남아있음** — 관 대응용 UI가 따로 필요해지면 여기부터 다시 연결하면 됨(`ApprovePanel.tsx` 재사용).
+- `/whatif` — What-if 강수 슬라이더 단독 페이지(직접 링크·테스트용, 평소엔 `/`의 메뉴 패널로 씀). 지금은 목업이라 값 고정 — 트랙①이 실제 Module A/B 붙이면 바로 반영됨.
+- `/map3d` — 3D 지도 단독 페이지(로고·메뉴 없이 지도만, 직접 링크·테스트용). 실제 지도 로직은 전부 `ui/src/components/MapExplorer.tsx`에 있고 이 라우트는 그걸 감싸는 얇은 래퍼일 뿐.
+
+챗봇 위젯(`ChatWidget.tsx`, 우측 하단 "AI" 버튼)은 모든 페이지에 공통으로 뜬다 — `/chat` 백엔드는 지금 규칙기반 키워드 응답(진짜 LLM 아님).
 
 실행: `cd ui && npm install && npm run dev` → http://localhost:3000
 빌드 검증: `npm run build && npm run lint` (매 변경마다 이걸로 검증해왔음, 계속 그렇게 할 것)
 
-### 1.5 3D 지도 (`ui/src/app/map3d/page.tsx`) — 가장 공들인 부분
-스택: MapLibre GL JS `5.24.0`(⚠️ 버전 중요, 아래 §3 참조) + deck.gl `9.3` + `@turf/buffer`.
+### 1.5 3D 지도 (`ui/src/components/MapExplorer.tsx`, `/`와 `/map3d` 둘 다 이걸 씀) — 가장 공들인 부분
+스택: MapLibre GL JS `5.24.0`(⚠️ 버전 중요, 아래 §3 참조) + `@turf/buffer`. **deck.gl은 세션 중 완전히 제거됐다** — 3D 지형·건물·교량·시뮬레이션 볼륨 전부 MapLibre 네이티브 `fill-extrusion`으로 통일(이유는 §3 트러블슈팅 로그).
 
 구성 요소:
 - **지형**: `api_server.py`의 `/terrain-tiles` 프록시를 통해 AWS 공개 지형 데이터(terrarium 인코딩) → `map.setTerrain()`
@@ -188,14 +191,15 @@ cd .. && python -m pytest module_o_orchestrator/tests/ -v   # 백엔드 변경 �
 
 ## 5. 다음으로 무엇을 할지 (우선순위 제안)
 
-1. **(최우선, 사용자가 명시적으로 요청, 아직 미착수)** 주민 대피 경로 기능(네이버/카카오 길찾기) — 아래 **§6 전체**가 이 작업의 상세 명세다. 다른 항목보다 먼저 이걸 읽고 시작할 것.
-1-1. **(최우선, §6과 같은 우선순위 — 사용자가 "독창성 축"으로 직접 지목, 아직 미착수)** 고립마을 자동탐지(그래프 연결성 분석) — §6과 사실상 한 세트 기능이다. 아래 **§7 전체** 참조.
+1. **(최우선, 사용자가 명시적으로 요청, UI 목업만 있고 실제 로직 미착수)** 주민 대피 경로 기능(네이버/카카오 길찾기) — 아래 **§6 전체**가 이 작업의 상세 명세다. 다른 항목보다 먼저 이걸 읽고 시작할 것. `EvacuationPanel.tsx`(대피소 리스트)는 정적 목업으로 이미 메뉴에 들어가 있으니 그 파일을 실데이터로 바꾸는 작업부터 시작하면 됨 — §6.8(현재 위치)·§6.9(3D 지도 표시)가 가장 최근에 추가된 요구사항.
+1-1. **(최우선, §6과 같은 우선순위 — 사용자가 "독창성 축"으로 직접 지목, UI는 개념 프리뷰만 있고 실제 알고리즘 미착수)** 고립마을 자동탐지(그래프 연결성 분석) — §6과 사실상 한 세트 기능이다. 아래 **§7 전체** 참조. `IsolationPanel.tsx`가 예시 시나리오만 보여주는 상태.
 2. **(완료)** ~~토사 유실 + 침수 시뮬레이션~~ — §1.5에 있음, 커밋 `4759d2a` 이후 여러 번 개선(색상 버그 `4ce6ef1`, 건물 부족 문제는 VWorld 연동 `abcb95a`로 해결).
 3. 트랙①②가 아직 안 왔으므로, 계속 목업 모드로 진행하되 `contracts/`가 실제로 맞는지 검증할 방법이 없다는 리스크를 사용자에게 상기시킬 것.
 4. §9 데모 시나리오(산청 타임라인 재연)를 위한 실제 리허설 — 지금은 각 기능이 개별적으로는 동작하지만, 처음부터 끝까지 이어지는 데모 스토리로 리허설된 적은 없음.
 5. `/whatif` 페이지의 강수 슬라이더는 아직 목업이라 값이 안 바뀜 — 실제 Module A/B 붙거나 데모용 합성 응답을 만들면 살아남.
 6. Module H(시민 신고 역검증) 트리거 UI가 아직 없음 — 지금은 `precursor_flag`가 목업이라 항상 `false`라 UI에서 확인 불가.
-7. `/map3d`가 트랙별로 계속 커지고 있음(도로/건물/교량 전부 VWorld 실데이터로 교체, 지형 z15 이상 비활성화 등) — §1.5를 이 문서보다 코드(`ui/src/app/map3d/page.tsx`)와 `git log`로 항상 재확인할 것, 이 문서가 못 따라잡았을 수 있음.
+7. 3D 지도 로직이 트랙별로 계속 커지고 있음(도로/건물/교량 전부 VWorld 실데이터로 교체, 지형 z15 이상에서 exaggeration 감쇠 등) — 8/27 지도-메인-화면 개편으로 `ui/src/app/map3d/page.tsx`의 로직이 `ui/src/components/MapExplorer.tsx`로 옮겨졌다(`map3d/page.tsx`는 이제 그걸 감싸는 얇은 래퍼). §1.5를 이 문서보다 코드와 `git log`로 항상 재확인할 것, 이 문서가 못 따라잡았을 수 있음.
+8. `app/page.tsx`(새 홈)가 이제 지도를 배경으로 깔고 메뉴(대시보드/대피소 찾기/고립마을 위험/What-if)를 누르면 지도 위 글라스 패널로 뜨는 구조다 — 원클릭 승인은 시민 화면에서 빠졌지만 `/approve` 라우트에는 그대로 남아있음(관 대응용). 새 패널 만들 때는 `GlassPanel.tsx`로 감싸고 `app/page.tsx`의 `MENU`/`PANEL_TITLE`에 등록하면 된다.
 
 ---
 
@@ -205,10 +209,12 @@ cd .. && python -m pytest module_o_orchestrator/tests/ -v   # 백엔드 변경 �
 
 이건 [ARCHITECTURE.md §5 Module E](ARCHITECTURE.md)(`module_e_routing`)에 이미 계약이 있는 기능이다. Module E의 "위험가중 A*" 알고리즘 서술은 **자체 구현 대신 네이버/카카오 길찾기 API로 대체**하기로 확정됐다 — 계약의 입출력 필드(`shelter_id`/`route_5179`/`eta_min`/`time_feasible`/`time_margin_min`/`fallback_used`)는 그대로 유지하되, 그 값을 만드는 내부 구현만 바뀌는 것.
 
-### 7.1 사용자가 먼저 해야 하는 것 (Claude Code가 대신 못 함 — 계정 생성 금지 정책)
+> **업데이트(2026-08-27, 추가 요청)**: "대피소 찾기는 UI에 입력한 내 현재 위치를 기반으로 최적경로를 찾아 3D 지도에 표시하면서 길을 안내해야 한다"는 요청이 추가됐다 — 즉 출발지(`origin`)가 지금처럼 고정된 데모 좌표(`SANGCHEONG_DEMO_INPUT`)가 아니라 **사용자의 실제 현재 위치**여야 하고, 선택한 경로가 사이드 패널 리스트뿐 아니라 **3D 지도 위에 실제로 그려져야** 한다. 사용자 본인도 "카카오/네이버 지도 API 연결하면 해결되겠지?"라고 예상 — 맞다, 아래 6.1의 API가 그대로 해결책이다. 상세는 아래 **6.8**·**6.9**(신규) 참조. 현재 `ui/src/components/panels/EvacuationPanel.tsx`(대피소 리스트, 목업)와 `ui/src/components/panels/IsolationPanel.tsx`(고립마을, 개념 프리뷰)가 이미 메뉴에 들어가 있으니 — 실제 구현은 새 화면을 만드는 게 아니라 이 두 파일 + `MapExplorer.tsx`를 연결하는 작업이다.
+
+### 6.1 사용자가 먼저 해야 하는 것 (Claude Code가 대신 못 함 — 계정 생성 금지 정책)
 아래 중 하나(또는 둘 다) API 키가 필요하다. **VWorld 키를 받았던 것과 같은 순서로 진행**하면 된다: 사용자에게 회원가입 링크를 안내 → 발급받은 키를 받아서 `.env`에 추가 → 실제 키로 몇 가지 엔드포인트를 curl로 찔러보며 정확한 요청 형식을 확인(VWorld 때 `LT_C_SPBD`/`LT_L_MOCTLINK` 레이어 코드를 이렇게 찾았음, §1.5·§3 참조) → 백엔드 프록시 구현.
 
-- **카카오모빌리티 길찾기 API** (추천, 가입이 더 간단함): [developers.kakao.com](https://developers.kakao.com) 가입 → 애플리케이션 생성 → "카카오내비"/"모빌리티" API 활성화 → REST API 키 발급. 무료 티어 있음(호출량 제한 있으니 developers.kakao.com에서 실제 한도 확인). **자동차 길찾기만 제공, 도보 길찾기 API는 없음** — 아래 7.3 참조.
+- **카카오모빌리티 길찾기 API** (추천, 가입이 더 간단함): [developers.kakao.com](https://developers.kakao.com) 가입 → 애플리케이션 생성 → "카카오내비"/"모빌리티" API 활성화 → REST API 키 발급. 무료 티어 있음(호출량 제한 있으니 developers.kakao.com에서 실제 한도 확인). **자동차 길찾기만 제공, 도보 길찾기 API는 없음** — 아래 6.3 참조.
 - **네이버 클라우드플랫폼(NCP) Directions API**: [ncloud.com](https://www.ncloud.com) 가입 → Maps > Directions 5/15 API 활성화 → Client ID/Secret 발급. 결제수단(카드) 등록이 필요할 수 있음(무료 크레딧 있는지 가입 시점에 확인). 이것도 **자동차 전용**.
 
 `.env`에 다음 중 확보한 것을 추가 (VWORLD_API_KEY와 같은 파일, 이미 git-ignore됨):
@@ -219,32 +225,32 @@ NAVER_MAPS_CLIENT_ID=...
 NAVER_MAPS_CLIENT_SECRET=...
 ```
 
-### 7.2 대피소 후보 데이터
+### 6.2 대피소 후보 데이터
 - 이상적: 안전Dream / 국가재난안전포털 API, 또는 공공데이터포털의 "전국 대피소 표준데이터"(무료). VWorld처럼 실제 키로 레이어/엔드포인트를 프로빙해서 정확한 스펙을 확인할 것 — 공개 문서만 믿지 말 것(이번 세션에서 VWorld 건물/도로 레이어 코드를 문서로는 못 찾고 실제 API 호출 응답으로 찾아냈다, §1.5 참조).
 - **이게 당장 없어도** 손으로 넣은 대피소 후보 2~3곳(위경도 좌표, 상능마을 근처)으로 나머지 파이프라인(경로탐색·UI)을 먼저 완성할 수 있다 — 데이터만 나중에 API로 교체하면 됨(이번 세션에서 건물/도로를 했던 것과 같은 패턴: 목업 → 실데이터 교체).
 
-### 7.3 도보 시간 처리 — 중요한 제약사항
+### 6.3 도보 시간 처리 — 중요한 제약사항
 카카오/네이버 둘 다 **공개 개발자 API로는 도보 길찾기를 제공하지 않는다** (자체 확인 필요 — 이 문서 작성 시점 기준 웹 검색으로는 못 찾음, 최신 상황 다시 확인할 것). 그래서:
 - **1차 구현**: 직선거리(하버사인 공식) ÷ 평균 도보속도(4km/h)로 근사. UI에 "실제 보행 경로 아님, 직선거리 근사치" 배지를 반드시 표시(§6 불확실성 표기 원칙과 동일한 원칙).
 - **업그레이드 경로**: OSRM 공개 데모 서버의 foot 프로파일, 또는 GraphHopper 무료 티어(별도 API 키) 등 OSM 기반 보행자 라우터로 교체 가능하도록 함수를 분리해둘 것 (`getWalkingRoute(origin, dest)` 같은 인터페이스로 추상화해서 나중에 구현체만 갈아끼우기 쉽게).
 
-### 7.4 백엔드 구현 (api_server.py에 추가할 것 — 지금 있는 `/vworld/*` 엔드포인트와 같은 패턴)
+### 6.4 백엔드 구현 (api_server.py에 추가할 것 — 지금 있는 `/vworld/*` 엔드포인트와 같은 패턴)
 1. `GET /shelters?bbox=...` — 대피소 후보 목록 (실데이터 or 손으로 넣은 fallback 리스트). VWorld 프록시들처럼 서버에서만 외부 키를 다루고 프론트에는 안 보낸다.
-2. `POST /evacuation-route` — 요청 바디: `{origin: {lon, lat}, hazard_polygon: GeoJSON Polygon}` (`hazard_polygon`은 지금 `/map3d`의 침수/토사 볼륨 폴리곤이나 나중에 실제 Module A/B `risk_polygons`를 그대로 재사용).
+2. `POST /evacuation-route` — 요청 바디: `{origin: {lon, lat}, hazard_polygon: GeoJSON Polygon}` (`hazard_polygon`은 지금 `/map3d`의 침수/토사 볼륨 폴리곤이나 나중에 실제 Module A/B `risk_polygons`를 그대로 재사용). **`origin`은 이제 고정 데모 좌표가 아니라 6.8에서 받는 사용자 현재 위치(또는 수동 입력 위치)다.**
    - 처리 순서 (문서 §5 Module E 알고리즘을 그대로 따름):
      1. `hazard_polygon` 안에 있는 대피소 후보 제외 (shapely `polygon.contains(point)` — geopandas 이미 의존성에 있음, 새 패키지 불필요)
      2. 남은 후보 각각 카카오/네이버 Directions API로 차량 경로·시간 요청 (서버 사이드 호출, `requests` 라이브러리 이미 있음)
-     3. 도보 시간은 §7.3 방식으로 계산
+     3. 도보 시간은 6.3 방식으로 계산
      4. `eta_min ≤ time_budget_hours×60` 만족하는 후보 중 최단시간 선택 (동률이면 수용인원 큰 쪽)
      5. 아무도 시간 내 도달 못하면 `fallback_used: true` + 가장 가까운 안전지대로 목적지 변경 + 경고 메시지 (§5 Module E: "생명안전상 가장 중요한 예외처리 — 절대 조용히 넘어가지 않는다")
 
-### 7.5 프론트 구현 (`ui/src/app/map3d/page.tsx`, 또는 이 페이지가 너무 커지면 새 컴포넌트로 분리 고려)
+### 6.5 프론트 구현 (`ui/src/components/panels/EvacuationPanel.tsx` + `ui/src/components/MapExplorer.tsx`)
 - 사이드 패널에 "대피소 찾기" 섹션 추가 — 지금 있는 토사/침수 슬라이더(`debrisDepth`/`floodDepth`) 값이 바뀔 때마다 이 패널도 다시 계산되게 연결(디바운스). **위험지역이 넓어지면 대피소가 실시간으로 "도달 가능"→"불가능"으로 바뀌는 걸 보여주는 게 골든타임 서사에 제일 강하게 먹힌다** — 사용자가 이미 이 페이지에서 반복해서 강조한 패턴(3D 볼륨이 실제 건물/도로와 겹치는 걸 보여주는 것과 같은 논리).
-- 대피소 후보 리스트(거리순), 각 항목에 🚗 차량 X분 / 🚶 도보 Y분, 수용인원, 도달가능 배지(초록/빨강)
+- 대피소 후보 리스트(거리순), 각 항목에 🚗 차량 X분 / 🚶 도보 Y분, 수용인원, 도달가능 배지(초록/빨강) — `EvacuationPanel.tsx`에 이미 정적 목업으로 만들어져 있음, 실제로는 이 목록을 `/evacuation-route` 응답으로 교체.
 - 지도 위에 선택 대피소까지 실제 경로 라인 — 카카오/네이버가 반환하는 폴리라인 좌표를 그대로 GeoJSON LineString으로 그리면 됨(이미 5179→4326 재투영 패턴이 `module_o_orchestrator/geo.py`에 있으니 필요하면 참고, 단 카카오/네이버는 보통 4326으로 바로 응답하니 재투영 불필요할 가능성 높음 — 응답 스펙 직접 확인할 것)
 - "부족" 배지는 크고 명확하게 — 기존 `/map3d`의 debris/flood 경고 UI 톤 참고
 
-### 7.6 계약(`contracts/module_e`) 확장 제안 — 3인 합의 필요, 임의로 바꾸지 말 것
+### 6.6 계약(`contracts/module_e`) 확장 제안 — 3인이 아니라 이제 4인 합의 필요, 임의로 바꾸지 말 것
 지금 `module_e.example.json`은 이동수단 하나(`eta_min`)만 있다. 차량/도보 둘 다 보여주려면 필드 확장이 필요한데, 제안 형태:
 ```json
 {
@@ -259,13 +265,34 @@ NAVER_MAPS_CLIENT_SECRET=...
   "fallback_used": false
 }
 ```
-**이건 제안일 뿐이다.** 문서 §4.3: "`contracts/` 변경은 Day 1 이후 3인 합의 없이 임의 수정 금지" — 트랙②(나정우, Module E 소유)와 트랙① 담당자에게 먼저 공유하고 합의된 뒤에 `contracts/module_e.example.json`/`module_e.schema.json`을 실제로 바꿀 것. 그 전까지는 이 확장 필드를 API 응답에만 임시로 붙여서 써도 됨(계약 파일 자체는 안 건드림).
+**이건 제안일 뿐이다.** 문서 §4.3: "`contracts/` 변경은 Day 1 이후 4인 합의 없이 임의 수정 금지"(2026-08-27 4인 체제 개편 이후, ARCHITECTURE.md §11 참조) — 지금 Module E 소유는 트랙④(동현)이니 나머지 세 트랙에 먼저 공유하고 합의된 뒤에 `contracts/module_e.example.json`/`module_e.schema.json`을 실제로 바꿀 것. 그 전까지는 이 확장 필드를 API 응답에만 임시로 붙여서 써도 됨(계약 파일 자체는 안 건드림).
 
-### 7.7 착수 순서 제안
+### 6.7 착수 순서 제안
 1. 외부 키 없이: 손으로 넣은 대피소 후보 2~3곳 + 직선거리 도보시간 근사만으로 UI 뼈대부터 완성 (지도에 후보 마커, 사이드 패널 리스트, 도달가능 배지)
 2. 카카오/네이버 키 받으면: 차량 경로만 실제 API로 교체 (`/evacuation-route` 백엔드 엔드포인트)
 3. 대피소 실데이터 API 연동 (있으면)
 4. `contracts/module_e` 확장 제안을 팀에 공유
+5. 아래 6.8(현재 위치)·6.9(3D 지도 표시·안내)로 "찾기"에서 "안내"로 완성
+
+### 6.8 신규 — 사용자 현재 위치를 출발지로 (2026-08-27 추가 요청)
+지금까지의 `origin`은 전부 `SANGCHEONG_DEMO_INPUT`(데모용 고정 좌표)이었다. 실제 배포에서는 **접속한 사용자의 현재 위치**가 출발지여야 한다.
+
+1. **브라우저 Geolocation API**로 위치 요청: `navigator.geolocation.getCurrentPosition(success, error, { enableHighAccuracy: true, timeout: 8000 })`. 반환되는 `coords.longitude`/`coords.latitude`는 EPSG:4326 — `/evacuation-route`의 `origin: {lon, lat}`에 그대로 넣으면 된다(백엔드에서 5179로 변환).
+2. **중요한 제약**: Geolocation API는 **secure context(HTTPS 또는 localhost)에서만 동작**한다 — 배포 도메인이 HTTP면 조용히 실패하니 배포 전 HTTPS 확인 필수.
+3. **폴백(반드시 필요, 조용히 넘어가지 말 것 — §6 불확실성 표기 원칙과 같은 톤)**: 사용자가 위치 권한을 거부하거나 실패하면 ① 지도 위 클릭으로 직접 출발지 지정, 또는 ② 지금 있는 `/search`(주소 검색창)로 동네 이름을 검색해 그 결과의 `center`를 출발지로 쓰는 두 가지 수동 입력 경로를 제공할 것. "위치를 가져올 수 없습니다 — 지도를 클릭하거나 주소를 검색해주세요" 같은 명시적 안내가 있어야 한다.
+4. UI 자리: `EvacuationPanel.tsx` 상단에 "내 위치로 찾기" 버튼 하나 + 위 폴백 두 가지를 같은 패널 안에 배치하는 게 가장 자연스럽다.
+
+### 6.9 신규 — 3D 지도 위 경로 표시 + 길 안내 (2026-08-27 추가 요청)
+현재 `EvacuationPanel.tsx`(사이드 글라스 패널)와 `MapExplorer.tsx`(3D 지도)는 `app/page.tsx`의 형제 컴포넌트로 **서로 분리돼 있다** — 8/27 지도-메인-화면 개편 때 이렇게 나뉘었다. 패널에서 고른 경로를 지도가 그리려면 둘을 연결해야 하는데, 방법은 둘 중 하나:
+- **(권장, 더 간단함)** 선택된 경로/출발지 상태를 `app/page.tsx`로 끌어올려서(`useState`) `MapExplorer`에 `activeRoute` 같은 prop으로 내려주고, `MapExplorer`가 그 prop이 바뀔 때마다 지도에 그리는 `useEffect`를 추가.
+- MapExplorer가 이미 여러 `useRef`(`simUpdateRef`, `highlightUpdateRef` 등)로 "외부에서 지도를 갱신하는 함수를 노출"하는 패턴을 쓰고 있으니, 같은 패턴으로 `routeUpdateRef`를 추가해도 됨(기존 코드 스타일과 더 일관됨).
+
+지도에 그릴 것(기존 `bridges`/`debris-flow` GeoJSON 소스를 추가하던 것과 동일한 패턴 — `map.addSource` + `map.addLayer`):
+1. **경로 라인**: 카카오/네이버가 반환하는 폴리라인을 GeoJSON `LineString` `line` 레이어로. 기존 도로(`vworld-roads`)와 안 겹치게 굵고 눈에 띄는 색(예: 네온 그린·시안 계열 — 토사=빨강/침수=파랑/고립=마젠타와 안 겹치게).
+2. **출발지·도착지 마커**: `circle` 레이어 2개(또는 `Marker` 인스턴스) — 출발지는 사용자 아이콘 느낌, 도착지는 대피소 아이콘 느낌으로 구분.
+3. **카메라**: 경로 선택 시 `map.fitBounds(routeBbox, { padding, pitch: 60, bearing })`로 경로 전체가 보이게 이동(기존 `flyTo`/검색 결과 이동과 같은 패턴).
+
+**"길 안내"의 범위**: 카카오/네이버 웹 API 둘 다 턴바이턴 음성 안내는 앱 SDK/네이티브 상품 쪽이라 REST Directions API로는 보통 안 됨(가입 시점에 재확인할 것) — 이 프로젝트 MVP 범위는 "경로 시각화 + 총 소요시간/거리 표시 + 카메라 자동 이동"까지로 충분하다. 진행률 기반으로 카메라가 경로를 따라가는 애니메이션(진짜 내비게이션처럼)은 있으면 좋지만 우선순위 낮음(여유 있으면 §6.7의 5번 이후 확장 과제로).
 
 ---
 
@@ -294,10 +321,10 @@ NAVER_MAPS_CLIENT_SECRET=...
 - 응답 제안: `{isolated_areas: GeoJSON FeatureCollection, isolated_building_count: N}`
 - `requirements.txt`에 `networkx` 추가 필요
 
-### 7.5 프론트 (ui/src/app/map3d/page.tsx)
+### 7.5 프론트 (`ui/src/components/MapExplorer.tsx` — 8/27 지도-메인-화면 개편으로 `app/map3d/page.tsx`에서 이 컴포넌트로 로직이 옮겨졌다, `app/map3d/page.tsx`는 이제 이걸 감싸는 얇은 래퍼일 뿐)
 - 침수/토사 슬라이더(`debrisDepth`/`floodDepth`) 변경 시 디바운스 호출(기존 `updateVWorldRoads` 등과 같은 패턴) → `isolated_areas`를 새 GeoJSON 소스에 `setData`
 - 시각화: **빨간색 pulse 애니메이션** 폴리곤(기존 토사=빨강/침수=파랑과 겹치지 않게 마젠타·자주 계열 검토) — MapLibre paint property를 `setInterval`로 주기적으로 바꾸거나 `line-opacity`/`fill-opacity` transition 활용
-- 사이드 패널에 "N개 건물 고립 위험" 카운터(기존 `floodedBuildingCount` 패턴 그대로 재사용 가능)
+- 사이드 패널(`ui/src/components/panels/IsolationPanel.tsx`, 지금은 개념 프리뷰 목업)에 "N개 건물 고립 위험" 카운터(기존 `floodedBuildingCount` 패턴 그대로 재사용 가능)
 - 가능하면 골든타임 시간슬라이더랑 연결해서 "T+N분에 이 마을이 고립됩니다" 같은 예측 문구까지 — 있으면 데모 임팩트 훨씬 커짐(우선순위 낮음, 여유 있으면)
 
 ### 7.6 착수 순서
