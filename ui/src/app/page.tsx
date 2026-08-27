@@ -1,165 +1,67 @@
 "use client";
 
 import { useState } from "react";
-import Link from "next/link";
-import { SANGCHEONG_DEMO_INPUT, triggerAlert } from "@/lib/api";
-import type { ModuleOEnvelope } from "@/lib/types";
-import GoldenTimeCounter from "@/components/GoldenTimeCounter";
-import RiskCard from "@/components/RiskCard";
+import MapExplorer from "@/components/MapExplorer";
+import GlassPanel from "@/components/GlassPanel";
+import DashboardPanel from "@/components/panels/DashboardPanel";
+import ApprovePanel from "@/components/panels/ApprovePanel";
+import WhatifPanel from "@/components/panels/WhatifPanel";
 
-export default function DashboardPage() {
-  const [envelope, setEnvelope] = useState<ModuleOEnvelope | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+type PanelKey = "dashboard" | "approve" | "whatif";
 
-  async function runDemo() {
-    setLoading(true);
-    setError(null);
-    try {
-      const result = await triggerAlert(SANGCHEONG_DEMO_INPUT);
-      setEnvelope(result);
-    } catch (e) {
-      setError(
-        `백엔드(api_server.py) 연결 실패 — "python -m uvicorn api_server:app --port 8000"로 먼저 띄워주세요. (${
-          e instanceof Error ? e.message : String(e)
-        })`
-      );
-    } finally {
-      setLoading(false);
-    }
-  }
+const MENU: { key: PanelKey; label: string }[] = [
+  { key: "dashboard", label: "대시보드" },
+  { key: "approve", label: "원클릭 승인" },
+  { key: "whatif", label: "What-if 시뮬레이터" },
+];
 
-  const data = envelope?.data;
-  const alertPackage = data?.alert_package;
+const PANEL_TITLE: Record<PanelKey, string> = {
+  dashboard: "아쿠아가드 골든타임 대시보드",
+  approve: "원클릭 승인",
+  whatif: "What-if 예측 시뮬레이터",
+};
+
+export default function HomePage() {
+  const [active, setActive] = useState<PanelKey | null>(null);
 
   return (
-    <div className="mx-auto max-w-5xl space-y-6 p-6">
-      <header className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold">아쿠아가드 골든타임 대시보드</h1>
-          <p className="text-sm text-slate-400">
-            2025.7.19 산청 산사태 재연 — Module O(§5) 목업 파이프라인
-          </p>
+    <div className="relative h-full w-full">
+      <MapExplorer />
+
+      {/* 지도가 메인 화면 — 메뉴는 더 이상 페이지를 이동시키지 않고 지도 위에
+          글라스 톤 패널을 띄운다/닫는다(토글). 로고는 흰색 워드마크라 밝은 지도
+          위에서 안 보이니 네이비 배경 박스에 넣어 항상 대비를 확보한다. */}
+      <div className="pointer-events-none absolute inset-x-0 top-0 z-20 flex items-center gap-3 p-4">
+        <div className="pointer-events-auto flex items-center rounded-xl border border-white/10 bg-[#0a1638] px-3 py-2 shadow-lg">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src="/aquaguard-logo.png" alt="Aqua Guard.AI" width={554} height={125} className="h-7 w-auto" />
         </div>
-        <button
-          onClick={runDemo}
-          disabled={loading}
-          className="rounded-lg bg-sky-600 px-4 py-2 text-sm font-medium text-white hover:bg-sky-500 disabled:opacity-50"
-        >
-          {loading ? "실행 중…" : "산청 시나리오 실행"}
-        </button>
-      </header>
-
-      {error && (
-        <div className="rounded-lg border border-red-800/50 bg-red-950/30 p-4 text-sm text-red-300">
-          {error}
-        </div>
-      )}
-
-      {!envelope && !error && (
-        <div className="rounded-xl border border-dashed border-slate-800 p-10 text-center text-slate-500">
-          위 버튼으로 시나리오를 실행하면 Module A~H(현재 목업) 결과와 골든타임 비교가 표시됩니다.
-        </div>
-      )}
-
-      {envelope && data && alertPackage && (
-        <>
-          {envelope.status !== "ok" && (
-            <div className="rounded-lg border border-amber-800/50 bg-amber-950/30 p-3 text-sm text-amber-300">
-              status: {envelope.status} (fallback_tier {envelope.fallback_tier}) — {envelope.warnings.join(", ")}
-            </div>
-          )}
-
-          <GoldenTimeCounter data={data} />
-
-          <div className="flex items-center justify-between rounded-xl border border-slate-800 bg-slate-900/50 p-4">
-            <div>
-              <p className="text-sm text-slate-400">승인 상태 (원클릭 승인, §5 Module O)</p>
-              <p className="text-lg font-semibold">{data.approval_status}</p>
-            </div>
-            <Link
-              href={`/approve?alert_id=${encodeURIComponent(SANGCHEONG_DEMO_INPUT.alert_id)}`}
-              className="rounded-lg border border-sky-700 px-4 py-2 text-sm text-sky-300 hover:bg-sky-950/50"
+        <div className="pointer-events-auto flex gap-1.5 rounded-xl border border-white/10 bg-slate-900/40 p-1.5 shadow-lg backdrop-blur-xl">
+          {MENU.map((item) => (
+            <button
+              key={item.key}
+              onClick={() => setActive((cur) => (cur === item.key ? null : item.key))}
+              className={`rounded-lg px-3 py-1.5 text-xs font-medium transition-colors ${
+                active === item.key ? "bg-sky-500/60 text-white" : "text-slate-300 hover:bg-white/10 hover:text-white"
+              }`}
             >
-              승인 화면으로 →
-            </Link>
-          </div>
+              {item.label}
+            </button>
+          ))}
+        </div>
+      </div>
 
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-            <RiskCard
-              title="산사태 위험 (Module A)"
-              prob={alertPackage.landslide.landslide_prob}
-              confidenceInterval={alertPackage.landslide.confidence_interval}
-              hoursToCritical={alertPackage.landslide.hours_to_critical}
-              source={alertPackage.landslide.source}
-              extra={
-                alertPackage.landslide.precursor_flag
-                  ? "InSAR 땅밀림 전조 감지됨 — 시민 역검증(Module H) 트리거"
-                  : undefined
-              }
-            />
-            <RiskCard
-              title="하천범람 위험 (Module B)"
-              prob={alertPackage.flood.flood_prob}
-              confidenceInterval={alertPackage.flood.confidence_interval}
-              hoursToCritical={alertPackage.flood.hours_to_critical}
-            />
+      {active && (
+        <div className="pointer-events-none absolute inset-0 z-20 flex items-start justify-center pt-24">
+          <div className="pointer-events-auto">
+            <GlassPanel title={PANEL_TITLE[active]} onClose={() => setActive(null)}>
+              {active === "dashboard" && <DashboardPanel onOpenApprove={() => setActive("approve")} />}
+              {active === "approve" && <ApprovePanel />}
+              {active === "whatif" && <WhatifPanel />}
+            </GlassPanel>
           </div>
-
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-            <div className="rounded-xl border border-slate-800 bg-slate-900/50 p-4">
-              <p className="text-sm text-slate-400">대피소 · 경로 (Module E)</p>
-              {"shelter_id" in alertPackage.shelter_route ? (
-                <>
-                  <p className="mt-1 text-lg font-semibold">
-                    {alertPackage.shelter_route.shelter_id ?? "대피소 없음"} · ETA{" "}
-                    {alertPackage.shelter_route.eta_min?.toFixed(1)}분
-                  </p>
-                  {!alertPackage.shelter_route.time_feasible && (
-                    <p className="mt-1 text-sm font-medium text-red-300">
-                      ⚠ 지정 대피소까지 시간이 부족합니다 — 가까운 안전지대로 즉시 이동하세요
-                    </p>
-                  )}
-                  {alertPackage.shelter_route.fallback_used && (
-                    <p className="text-xs text-amber-300">긴급 폴백 경로 사용됨</p>
-                  )}
-                </>
-              ) : (
-                <p className="mt-1 text-sm text-slate-500">임계치 미초과 — 라우팅 미실행</p>
-              )}
-            </div>
-            <div className="rounded-xl border border-slate-800 bg-slate-900/50 p-4">
-              <p className="text-sm text-slate-400">예상 피해비용 (Module G)</p>
-              {"estimated_cost_krw" in alertPackage.damage_cost ? (
-                <>
-                  <p className="mt-1 text-lg font-semibold">
-                    {(alertPackage.damage_cost.estimated_cost_krw / 1e8).toFixed(1)}억원
-                  </p>
-                  <p className="text-xs text-slate-500">{alertPackage.damage_cost.basis_citation}</p>
-                </>
-              ) : (
-                <p className="mt-1 text-sm text-slate-500">임계치 미초과 — 산정 미실행</p>
-              )}
-            </div>
-          </div>
-
-          <div className="rounded-xl border border-slate-800 bg-slate-900/50 p-4">
-            <p className="text-sm text-slate-400">시민 신고 역검증 (Module H)</p>
-            <p className="mt-1 text-lg font-semibold">{data.citizen_verification.verification_status}</p>
-            <p className="text-xs text-slate-500">
-              신뢰도 보정: {data.citizen_verification.confidence_adjustment >= 0 ? "+" : ""}
-              {(data.citizen_verification.confidence_adjustment * 100).toFixed(0)}%p
-            </p>
-          </div>
-        </>
+        </div>
       )}
-
-      <Link
-        href="/map3d"
-        className="block rounded-xl border border-dashed border-slate-700 p-4 text-center text-sm text-sky-300 hover:border-sky-700 hover:bg-sky-950/20"
-      >
-        3D 지도 보기 → (MapLibre + deck.gl, 산청군 생비량면 AOI)
-      </Link>
     </div>
   );
 }
