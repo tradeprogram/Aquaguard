@@ -11,9 +11,12 @@ export interface TriggerInput {
 }
 
 // §9 데모 시나리오: 2025.7.19 산청 산사태 재연
+// trigger_location은 contracts/module_a.example.json의 x_5179/y_5179(문서가 명시한
+// "예시 값", 실제 지리 위치 아님)와 달리, data/vector/saengbiryang_myeon_5179.geojson
+// (행정동 경계 실데이터, EPSG:5179)으로 확인한 산청군 생비량면 AOI 내부 실좌표다.
 export const SANGCHEONG_DEMO_INPUT: TriggerInput = {
   alert_id: "AL-20250719-0915",
-  trigger_location: { x_5179: 1090452.3, y_5179: 1662188.7 },
+  trigger_location: { x_5179: 1050511.5, y_5179: 1706245.2 },
   timestamp: "2025-07-19T08:00:00+09:00",
   auto_approve_timeout_min: 15,
   safety_margin_hours: 0.5,
@@ -32,6 +35,18 @@ export async function triggerAlert(input: TriggerInput): Promise<ModuleOEnvelope
 export async function getAlert(alertId: string): Promise<ModuleOEnvelope> {
   const res = await fetch(`${API_BASE}/alerts/${alertId}`, { cache: "no-store" });
   if (!res.ok) throw new Error(`get alert failed: ${res.status}`);
+  return res.json();
+}
+
+export async function getAoi(name: "saengbiryang" | "sancheong_gun"): Promise<GeoJSON.FeatureCollection> {
+  const res = await fetch(`${API_BASE}/aoi/${name}`, { cache: "force-cache" });
+  if (!res.ok) throw new Error(`get AOI failed: ${res.status}`);
+  return res.json();
+}
+
+export async function getAlertGeojson(alertId: string): Promise<GeoJSON.FeatureCollection> {
+  const res = await fetch(`${API_BASE}/alerts/${alertId}/geojson`, { cache: "no-store" });
+  if (!res.ok) throw new Error(`get alert geojson failed: ${res.status}`);
   return res.json();
 }
 

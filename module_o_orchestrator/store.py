@@ -18,6 +18,7 @@ class Alert:
     created_at: datetime
     auto_approve_timeout_min: int
     envelope: dict[str, Any]  # Module O의 전체 출력 envelope
+    trigger_input: dict[str, Any] = field(default_factory=dict)  # run()에 원래 넘어온 input (지도 재투영용)
     approval_status: ApprovalStatus = "대기"
     approver_id: str | None = None
 

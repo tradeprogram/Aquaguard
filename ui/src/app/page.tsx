@@ -154,9 +154,12 @@ export default function DashboardPage() {
         </>
       )}
 
-      <div className="rounded-xl border border-dashed border-slate-800 p-4 text-xs text-slate-500">
-        3D 지도(MapLibre + deck.gl, 상능마을 AOI)는 다음 단계에서 연결 예정 — §5 Module UI-3D 참조.
-      </div>
+      <Link
+        href="/map3d"
+        className="block rounded-xl border border-dashed border-slate-700 p-4 text-center text-sm text-sky-300 hover:border-sky-700 hover:bg-sky-950/20"
+      >
+        3D 지도 보기 → (MapLibre + deck.gl, 산청군 생비량면 AOI)
+      </Link>
     </div>
   );
 }

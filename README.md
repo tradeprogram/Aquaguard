@@ -24,7 +24,9 @@ npm run dev   # http://localhost:3000
 python -m pytest module_o_orchestrator/tests/ -v
 ```
 
-대시보드(`/`)에서 "산청 시나리오 실행" → 골든타임 카운터·위험 패널이 뜸 → "승인 화면으로"(`/approve`)에서 원클릭 승인/타임아웃 카운트다운 확인 → `/whatif`에서 강수 슬라이더(현재는 목업이라 값 고정, 실모델 연동 시 즉시 반영).
+대시보드(`/`)에서 "산청 시나리오 실행" → 골든타임 카운터·위험 패널이 뜸 → "승인 화면으로"(`/approve`)에서 원클릭 승인/타임아웃 카운트다운 확인 → `/whatif`에서 강수 슬라이더(현재는 목업이라 값 고정, 실모델 연동 시 즉시 반영) → `/map3d`에서 MapLibre+deck.gl 3D 지도(산청군 생비량면 행정동 경계 실데이터 + 골든타임 시간슬라이더).
+
+`/map3d`는 `data/vector/*_5179.geojson`(EPSG:5179, 행정동 경계 실데이터)를 `api_server.py`의 `/aoi/{name}` 엔드포인트가 EPSG:4326으로 재투영해 내려준다 — 새로 추가된 `geopandas`/`pyproj` 의존성이 `requirements.txt`에 포함돼 있다.
 
 ---
 

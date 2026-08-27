@@ -26,6 +26,14 @@ DEFAULT_TIMELINE_ACTUAL = {
     "warning_escalated": "2025-07-19T12:37:00+09:00",
 }
 
+# 데모 AOI(산청군 생비량면, data/vector/saengbiryang_myeon_5179.geojson) 폴리곤 내부의
+# 실좌표 — 호출측이 대피소 후보를 안 넘기면 데모용으로 이 값을 사용한다 (지도 표시용).
+# contracts/module_e.example.json의 x_5179/y_5179는 문서가 명시한 "예시 값"이라 실제
+# 지리 위치가 아니므로(§5), 여기서는 AOI 폴리곤 내부의 실제 좌표로 대체했다.
+DEFAULT_SHELTER_CANDIDATES = [
+    {"shelter_id": "S001", "x_5179": 1051711.5, "y_5179": 1707045.2, "capacity": 200}
+]
+
 
 def _envelope(status: str, fallback_tier: int, data: dict[str, Any], warnings: list[str]) -> dict[str, Any]:
     return {"status": status, "fallback_tier": fallback_tier, "data": data, "warnings": warnings}
@@ -94,7 +102,7 @@ def run(input: dict[str, Any]) -> dict[str, Any]:  # noqa: A002 - §4.2 규약�
                 {
                     "origin": trigger_location,
                     "risk_polygons": risk_polygons,
-                    "shelter_candidates": input.get("shelter_candidates", []),
+                    "shelter_candidates": input.get("shelter_candidates") or DEFAULT_SHELTER_CANDIDATES,
                     "road_graph_source": "standard_node_link_v1",
                     "time_budget_hours": time_budget_hours,
                 },
@@ -168,6 +176,7 @@ def run(input: dict[str, Any]) -> dict[str, Any]:  # noqa: A002 - §4.2 규약�
                 created_at=datetime.now(timestamp.tzinfo),
                 auto_approve_timeout_min=auto_approve_timeout_min,
                 envelope=envelope,
+                trigger_input=input,
             )
         )
         envelope["data"]["approval_status"] = alert_store.get(alert_id).resolve_status()

@@ -7,6 +7,7 @@ const LINKS = [
   { href: "/", label: "대시보드" },
   { href: "/approve", label: "원클릭 승인" },
   { href: "/whatif", label: "What-if 시뮬레이터" },
+  { href: "/map3d", label: "3D 지도" },
 ];
 
 export default function Nav() {
