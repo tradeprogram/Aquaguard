@@ -39,10 +39,34 @@ const MAP_STYLE: StyleSpecification = {
       tileSize: 256,
       maxzoom: 19,
     },
+    // OSM 건물 폴리곤(OpenMapTiles 스키마, render_height/render_min_height 필드 보유) —
+    // 무료·키 불필요(OpenFreeMap). 프로덕션에서는 §2.6 건축물대장으로 교체.
+    buildings: {
+      type: "vector",
+      url: "https://tiles.openfreemap.org/planet",
+    },
   },
   layers: [
     { id: "satellite", type: "raster", source: "satellite" },
     { id: "labels", type: "raster", source: "labels" },
+    {
+      id: "buildings-3d",
+      type: "fill-extrusion",
+      source: "buildings",
+      "source-layer": "building",
+      minzoom: 13,
+      paint: {
+        "fill-extrusion-color": [
+          "interpolate", ["linear"], ["get", "render_height"],
+          0, "#d6d3c9",
+          20, "#b8b39f",
+          60, "#8f8a73",
+        ],
+        "fill-extrusion-height": ["coalesce", ["get", "render_height"], 5],
+        "fill-extrusion-base": ["coalesce", ["get", "render_min_height"], 0],
+        "fill-extrusion-opacity": 0.9,
+      },
+    },
   ],
 };
 
@@ -261,6 +285,10 @@ export default function Map3DPage() {
           </p>
           <p className="mt-2 text-xs text-slate-500">
             🖱 좌클릭 드래그: 이동 · 스크롤: 줌 · <span className="text-slate-300">우클릭(또는 Ctrl) 드래그: 회전/기울기</span>
+          </p>
+          <p className="mt-2 text-xs text-amber-300/70">
+            건물은 실제 높이(m)로 압출됨(OSM). 이 AOI는 산간마을이라 OSM 건물 매핑이 드문드문 있음 —
+            프로덕션 전환 시 §2.6 건축물대장으로 교체 예정.
           </p>
           <button
             onClick={runDemo}
