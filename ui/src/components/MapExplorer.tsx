@@ -246,6 +246,7 @@ export default function MapExplorer() {
   const highlightUpdateRef = useRef<((code: string | null) => void) | null>(null);
 
   const [mapReady, setMapReady] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState<AdminSearchResult[]>([]);
   const [searching, setSearching] = useState(false);
@@ -696,75 +697,90 @@ export default function MapExplorer() {
       <div ref={mapContainer} className="h-full w-full" />
 
       <div className="pointer-events-none absolute inset-x-0 top-0 flex justify-between p-4 pt-20">
-        <div className="pointer-events-auto max-w-sm rounded-xl border border-slate-800 bg-slate-950/85 p-4 backdrop-blur">
-          <div className="relative">
-            <input
-              type="text"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="시/군/구/읍/면/동 검색 (예: 산청군, 생비량면, 강남동)"
-              className="w-full rounded-md border border-slate-700 bg-slate-900 px-2.5 py-1.5 text-xs text-slate-100 placeholder:text-slate-500 focus:border-sky-600 focus:outline-none"
-            />
-            {searching && <span className="absolute right-2 top-1.5 text-xs text-slate-500">검색 중…</span>}
-            {searchResults.length > 0 && (
-              <ul className="absolute z-10 mt-1 max-h-48 w-full overflow-y-auto rounded-md border border-slate-700 bg-slate-900 shadow-lg">
-                {searchResults.map((r) => (
-                  <li key={`${r.level}-${r.code}`}>
-                    <button
-                      onClick={() => goToSearchResult(r)}
-                      className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-xs text-slate-200 hover:bg-sky-950/60"
-                    >
-                      <span
-                        className={`shrink-0 rounded px-1 py-0.5 text-[10px] ${
-                          r.level === "sido"
-                            ? "bg-sky-900 text-sky-300"
-                            : r.level === "sigungu"
-                              ? "bg-emerald-900 text-emerald-300"
-                              : "bg-slate-800 text-slate-400"
-                        }`}
-                      >
-                        {r.level === "sido" ? "도" : r.level === "sigungu" ? "시군구" : "읍면동"}
-                      </span>
-                      <span className="truncate">{r.full_name}</span>
-                    </button>
-                  </li>
+        <div className="pointer-events-auto flex flex-col items-start gap-2">
+          <button
+            onClick={() => setSearchOpen((v) => !v)}
+            aria-label="주소 검색 열기/닫기"
+            className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full border border-sky-300/20 bg-sky-500/60 text-white shadow-lg backdrop-blur-xl transition-transform hover:scale-105 hover:bg-sky-400/70"
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="h-5 w-5">
+              <circle cx="11" cy="11" r="7" />
+              <path d="m21 21-4.3-4.3" />
+            </svg>
+          </button>
+
+          {searchOpen && (
+            <div className="max-w-sm rounded-xl border border-white/15 bg-slate-950/60 p-4 shadow-lg backdrop-blur-xl">
+              <div className="relative">
+                <input
+                  type="text"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  placeholder="시/군/구/읍/면/동 검색 (예: 산청군, 생비량면, 강남동)"
+                  className="w-full rounded-md border border-slate-700 bg-slate-900/60 px-2.5 py-1.5 text-xs text-slate-100 placeholder:text-slate-500 focus:border-sky-600 focus:outline-none"
+                />
+                {searching && <span className="absolute right-2 top-1.5 text-xs text-slate-500">검색 중…</span>}
+                {searchResults.length > 0 && (
+                  <ul className="absolute z-10 mt-1 max-h-48 w-full overflow-y-auto rounded-md border border-slate-700 bg-slate-900 shadow-lg">
+                    {searchResults.map((r) => (
+                      <li key={`${r.level}-${r.code}`}>
+                        <button
+                          onClick={() => goToSearchResult(r)}
+                          className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-xs text-slate-200 hover:bg-sky-950/60"
+                        >
+                          <span
+                            className={`shrink-0 rounded px-1 py-0.5 text-[10px] ${
+                              r.level === "sido"
+                                ? "bg-sky-900 text-sky-300"
+                                : r.level === "sigungu"
+                                  ? "bg-emerald-900 text-emerald-300"
+                                  : "bg-slate-800 text-slate-400"
+                            }`}
+                          >
+                            {r.level === "sido" ? "도" : r.level === "sigungu" ? "시군구" : "읍면동"}
+                          </span>
+                          <span className="truncate">{r.full_name}</span>
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+
+              {selectedRegion && (
+                <p className="mt-2 text-xs">
+                  <span className="rounded bg-amber-900/50 px-1.5 py-0.5 text-amber-300">노란 경계</span>{" "}
+                  <span className="text-slate-300">{selectedRegion.full_name}</span>
+                </p>
+              )}
+
+              <p className="mt-2 text-xs text-slate-400">
+                §5 Module UI-3D — MapLibre GL(지형) + 행정경계 시도/시군구/읍면동 3계층(사용자 제공
+                데이터, 전국)을 뷰포트 기준으로 실시간 표시. 검색해서 선택한 지역만 노란색으로 강조됩니다.
+              </p>
+              <p className="mt-2 text-xs text-slate-500">
+                🖱 좌클릭 드래그: 이동 · 스크롤: 줌 · <span className="text-slate-300">우클릭(또는 Ctrl) 드래그: 회전/기울기</span>
+              </p>
+              <p className="mt-2 text-xs text-amber-300/70">
+                건물·도로 모두 브이월드 실데이터(§2.3, §2.6) — 건물은 건물통합정보(층수×3m 근사
+                높이), 도로는 국가교통정보센터 표준노드링크(교량·고가차도는 지면에서 띄운 데크).
+              </p>
+              <div className="mt-2 flex gap-1.5">
+                {TEST_LOCATIONS.map((loc) => (
+                  <button
+                    key={loc.label}
+                    onClick={() => flyTo(loc.center, loc.zoom)}
+                    className="flex-1 rounded-md border border-slate-700 px-2 py-1 text-xs text-slate-300 hover:border-sky-600 hover:text-sky-300"
+                  >
+                    {loc.label}
+                  </button>
                 ))}
-              </ul>
-            )}
-          </div>
-
-          {selectedRegion && (
-            <p className="mt-2 text-xs">
-              <span className="rounded bg-amber-900/50 px-1.5 py-0.5 text-amber-300">노란 경계</span>{" "}
-              <span className="text-slate-300">{selectedRegion.full_name}</span>
-            </p>
+              </div>
+            </div>
           )}
-
-          <p className="mt-2 text-xs text-slate-400">
-            §5 Module UI-3D — MapLibre GL(지형) + 행정경계 시도/시군구/읍면동 3계층(사용자 제공
-            데이터, 전국)을 뷰포트 기준으로 실시간 표시. 검색해서 선택한 지역만 노란색으로 강조됩니다.
-          </p>
-          <p className="mt-2 text-xs text-slate-500">
-            🖱 좌클릭 드래그: 이동 · 스크롤: 줌 · <span className="text-slate-300">우클릭(또는 Ctrl) 드래그: 회전/기울기</span>
-          </p>
-          <p className="mt-2 text-xs text-amber-300/70">
-            건물·도로 모두 브이월드 실데이터(§2.3, §2.6) — 건물은 건물통합정보(층수×3m 근사
-            높이), 도로는 국가교통정보센터 표준노드링크(교량·고가차도는 지면에서 띄운 데크).
-          </p>
-          <div className="mt-2 flex gap-1.5">
-            {TEST_LOCATIONS.map((loc) => (
-              <button
-                key={loc.label}
-                onClick={() => flyTo(loc.center, loc.zoom)}
-                className="flex-1 rounded-md border border-slate-700 px-2 py-1 text-xs text-slate-300 hover:border-sky-600 hover:text-sky-300"
-              >
-                {loc.label}
-              </button>
-            ))}
-          </div>
         </div>
 
-        <div className="pointer-events-auto w-64 rounded-xl border border-slate-800 bg-slate-950/85 p-4 text-xs backdrop-blur">
+        <div className="pointer-events-auto w-64 rounded-xl border border-white/15 bg-slate-950/60 p-4 text-xs shadow-lg backdrop-blur-xl">
           <p className="font-semibold text-slate-200">토사 유실 · 침수 시뮬레이터</p>
           <p className="mt-1 text-amber-300/70">
             실제 예측값 아님 — Module A/B 실모델 연동 전 what-if 깊이 슬라이더 (§6 불확실성 표기 원칙, 산청 상능마을 기준).
