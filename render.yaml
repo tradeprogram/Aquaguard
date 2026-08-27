@@ -12,4 +12,8 @@ services:
         value: 3.12.7
       - key: VWORLD_API_KEY
         sync: false
+      # 아직 코드에서 안 쓰임 — 챗봇을 규칙기반(api_server.py _chat_reply)에서
+      # 실제 LLM으로 바꿀 때를 대비해 슬롯만 미리 마련. 값은 나중에 대시보드에서.
+      - key: GEMINI_API_KEY
+        sync: false
     healthCheckPath: /health

@@ -199,7 +199,7 @@ cd .. && python -m pytest module_o_orchestrator/tests/ -v   # 백엔드 변경 �
 
 **백엔드 — Render** (저장소 루트의 `render.yaml`이 이미 설정을 정의해뒀음, 계정 연결은 마찬가지로 사용자 몫):
 1. render.com → GitHub 계정으로 로그인 → New → Blueprint → `tradeprogram/Aquaguard` 선택 (저장소 루트의 `render.yaml`을 자동으로 읽어서 서비스 설정을 구성함)
-2. `VWORLD_API_KEY` 환경변수는 `render.yaml`에 `sync: false`로 표시돼 있어서 대시보드에서 수동으로 넣어야 함 — 값은 로컬 `.env` 파일에 있는 것과 동일(`.env`는 git-ignore라 저장소에는 없음)
+2. `VWORLD_API_KEY`(+ 나중에 쓸 `GEMINI_API_KEY`) 환경변수는 `render.yaml`에 `sync: false`로 표시돼 있어서 대시보드에서 수동으로 넣어야 함 — `VWORLD_API_KEY` 값은 로컬 `.env` 파일에 있는 것과 동일(`.env`는 git-ignore라 저장소에는 없음). `GEMINI_API_KEY`는 슬롯만 미리 마련해둔 것 — 아직 `api_server.py`의 `/chat`이 규칙기반(`_chat_reply`)이라 값을 넣어도 코드가 안 읽는다, 실제 LLM 연동 작업을 먼저 해야 함
 3. 무료 플랜은 일정 시간 요청이 없으면 슬립 상태가 되고 첫 요청 시 30~60초 콜드스타트가 걸림 — **회의 직전에 한 번 `/health`를 호출해서 깨워둘 것**
 4. 배포되면 URL(`https://aquaguard-api-XXXX.onrender.com` 형태)을 위 3번(Vercel 환경변수)에 넣어야 프론트가 실제로 연결됨
 
