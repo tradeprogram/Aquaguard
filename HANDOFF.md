@@ -62,8 +62,8 @@ Next.js 16(App Router) + TypeScript + Tailwind v4. 페이지 4개:
 - **지형**: `api_server.py`의 `/terrain-tiles` 프록시를 통해 AWS 공개 지형 데이터(terrarium 인코딩) → `map.setTerrain()`
 - **위성영상**: Esri World Imagery (무료, 키 불필요) + Esri 지명 레이블 레이어
 - **건물**: VWorld 건물통합정보(§2.3 1순위, `LT_C_SPBD` 레이어, `/vworld/buildings` 프록시) — 층수×3m 근사 높이로 압출. VWorld 요청 실패 시에만 OpenFreeMap(OSM) 폴백으로 자동 전환(`buildings-3d-osm`, 산간지역은 매핑이 드문드문 — 산청 AOI bbox 기준 VWorld는 478개, OSM은 훨씬 적었음)
-- **도로망**: 같은 벡터타일의 `transportation` 소스레이어 → 도로 등급별 폭/색 스타일링, 터널은 점선
-- **교량**: `brunnel=='bridge'`인 도로를 `querySourceFeatures`로 실시간 조회 → `@turf/buffer`로 폭만큼 버퍼링 → `fill-extrusion`으로 지면에서 3~11m 띄운 "진짜 뜬" 데크 (단순 라인 색칠이 아님)
+- **도로망**: VWorld 표준노드링크(§2.6, `LT_L_MOCTLINK` 레이어, `/vworld/roads` 프록시) — OSM(OpenFreeMap) `transportation` 벡터타일은 z14가 최대라 그보다 확대하면(서울 z16 테스트 지점 등) 지오메트리가 늘어나 보이며 뒤틀림("서울 도로가 구불구불하고 짜그러짐" 버그, 커밋 `020e86e`). VWorld는 그 배율에서도 실제 형상 그대로 나옴. 실패 시에만 OSM 폴백(`roads-osm`/`roads-casing-osm`/`roads-tunnel-osm`).
+- **교량**: VWorld 응답의 `rd_type_h` 필드가 `교량`/`고가차도`/`터널`/`일반도로`를 직접 구분해줘서(OSM `brunnel` 태그보다 신뢰도 높음), 교량·고가차도 구간만 `@turf/buffer`로 폭만큼 버퍼링 → `fill-extrusion`으로 지면에서 3~11m 띄운 "진짜 뜬" 데크 (단순 라인 색칠이 아님). VWorld 실패 시에만 OSM `brunnel` 태그 기반으로 폴백(`updateBridgesFromOSM`).
 - **행정경계 3계층**: 사용자가 준 `BND_ADM_DONG_PG`(읍면동 레벨) 원본을 코드 접두어로 dissolve해서 시군구/시도 경계까지 만듦(아래 §2 데이터 파이프라인 참조). 뷰포트 bbox로 실시간 갱신, 데모 AOI(생비량면)만 노란색.
 - **검색창**: 시/도/군/구/읍/면/동 이름 검색 → 결과 클릭 시 `fitBounds`로 이동
 - **골든타임 시간슬라이더**: `timeline_actual` vs `timeline_agent` 이벤트를 스크럽하면서, 에이전트 탐지/발송 시점을 지나야 위험/대피 레이어가 나타나도록 단계적 노출(관의 실제 대응보다 에이전트가 먼저 안다는 서사를 시각적으로 증명)
