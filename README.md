@@ -414,7 +414,7 @@ api_server.py                  # FastAPI, 전 모듈 import
 
 > 이 저장소의 README.md(또는 ARCHITECTURE.md)를 읽어라 — 배경(재해연쇄+골든타임 격차, 산청 사건)부터 반드시 이해한 뒤 §5~6(통합 규약·모듈 계약)으로 넘어가라. 다른 트랙의 내부 구현은 몰라도 된다 — 오직 `contracts/`의 example.json/schema.json이 네 모듈의 입출력 계약 전부다. Day 1엔 나머지 세 세션과 함께 `contracts/`를 먼저 확정하라.
 
-- **트랙①**: `module_a_landslide`, `module_b_flood`
+- **트랙①**: `module_a_landslide`, `module_b_flood`. **2026-08-28 추가**: 실제 학습 후엔 AUC/ROC·정밀도재현율·혼동행렬·산청/서울 사례별 시계열 예측값을 남길 것(트랙③이 받을 UI는 이미 완성 — `ModelPerformancePanel.tsx`), 실시간 강수·수위 데이터 연동도 검토 — 상세는 **[HANDOFF.md §8](HANDOFF.md)**
 - **트랙②**: `module_c_urban_rule`, `module_d_exposure_overlay`, `module_g_damage_cost`, `module_h_citizen_verification` — D/G/H는 `contracts/module_a.example.json`, `module_b.example.json`을 목업 삼아 트랙①을 기다리지 않고 개발. **`module_e_routing`은 더 이상 이 트랙 소유가 아님 — 트랙④ 참조.**
 - **트랙③**: `module_o_orchestrator`, `ui/`(대시보드+채팅+원클릭승인+3D) — **대부분 이미 완성돼 있음**, 먼저 읽고 실행해볼 것. A~H를 전부 `contracts/`의 example.json으로 목업 호출하는 파이프라인부터 굴려보고 실제 모듈로 하나씩 교체
 - **트랙④ (신규)**: `module_e_routing`(확장판) — 네이버/카카오 길찾기 API로 대피 경로, 도로망 그래프로 고립마을 자동탐지. 상세 명세는 **[HANDOFF.md §6·§7](HANDOFF.md)을 그대로 따를 것** — 외부 API 키는 본인이 직접 발급받아야 함(계정 생성은 Claude Code가 대신 못 함)
