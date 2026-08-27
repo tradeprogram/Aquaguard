@@ -236,6 +236,8 @@ UI 표기 시 신뢰도 배지를 A/B와 다르게(모델 아님을 명시).
 
 ### Module E — 대피소·경로 라우팅 (`module_e_routing`)
 
+> **구현 결정(2026-08-27)**: 자체 A* 대신 **네이버/카카오 길찾기 API**(차량)로 대체 확정, 도보는 직선거리 근사. 상세 명세·착수 순서는 **[HANDOFF.md §6](HANDOFF.md)** 참조.
+
 ```jsonc
 // input — time_budget_hours = Module O가 A/B의 hours_to_critical에서 안전여유(기본 0.5h)를 뺀 값
 { "origin": { "x_5179": 1090452.3, "y_5179": 1662188.7 },
@@ -400,6 +402,7 @@ api_server.py                  # FastAPI, 전 모듈 import
 6. Module H 푸시 알림 채널 결정(문자/앱푸시/카톡 알림톡 — 데모는 웹 대시보드 시뮬레이션 대체 가능)
 7. 원클릭 승인 `auto_approve_timeout_min` 기본값(15분) 데모에 맞춰 조정
 8. Module O `input` 스키마(위 §6 참고사항) 3인 합의로 확정
+9. Module E — 네이버/카카오 길찾기 API 연동으로 대피 경로 실구현 (최우선, 상세 명세는 [HANDOFF.md §6](HANDOFF.md))
 
 ---
 

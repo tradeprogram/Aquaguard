@@ -300,6 +300,8 @@ UI 표기 시 신뢰도 배지를 A/B와 다르게(모델 아님을 명시).
 
 ### Module E — 대피소·경로 라우팅 (`module_e_routing`)
 
+> **구현 결정(2026-08-27, 트랙③)**: 아래 "위험가중 A*" 알고리즘은 자체 구현 대신 **네이버/카카오 길찾기 API**(차량)로 대체하기로 확정. 입출력 계약(`shelter_id`/`route_5179`/`eta_min`/`time_feasible`/`time_margin_min`/`fallback_used`)은 그대로 유지. 도보 시간은 두 API 모두 공식 지원이 없어 직선거리 근사로 처리. 상세 구현 명세는 **[HANDOFF.md §6](HANDOFF.md)** 참조 — 착수 전 반드시 읽을 것.
+
 ```jsonc
 // input (전부 5179 미터) — time_budget_hours는 Module O가 A/B의 hours_to_critical에서
 // 안전여유(경보 인지·준비 시간 등, 기본 30분)를 뺀 뒤 전달
