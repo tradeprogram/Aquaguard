@@ -39,7 +39,7 @@ export default function HomePage() {
           글라스 톤 패널을 띄운다/닫는다(토글). 로고는 흰색 워드마크라 밝은 지도
           위에서 안 보이니 네이비 배경 박스에 넣어 항상 대비를 확보한다. */}
       <div className="pointer-events-none absolute inset-x-0 top-0 z-20 flex items-center gap-3 p-4">
-        <div className="pointer-events-auto flex items-center rounded-xl border border-white/10 bg-[#0a1638] px-3 py-2 shadow-lg">
+        <div className="pointer-events-auto flex items-center rounded-xl border border-white/10 bg-[#050b1f] px-3 py-2 shadow-lg">
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img src="/aquaguard-logo.png" alt="Aqua Guard.AI" width={554} height={125} className="h-7 w-auto" />
         </div>
