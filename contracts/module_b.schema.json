@@ -1,0 +1,60 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "module_b_flood",
+  "type": "object",
+  "properties": {
+    "input": {
+      "type": "object",
+      "required": ["reach_id", "static", "dynamic"],
+      "properties": {
+        "reach_id": { "type": "string" },
+        "static": {
+          "type": "object",
+          "required": ["drainage_area_km2", "river_order", "slope_pct"],
+          "properties": {
+            "drainage_area_km2": { "type": "number" },
+            "river_order": { "type": "integer" },
+            "slope_pct": { "type": "number" }
+          }
+        },
+        "dynamic": {
+          "type": "object",
+          "required": ["rainfall_cumulative_24h_mm", "river_level_m"],
+          "properties": {
+            "rainfall_cumulative_24h_mm": { "type": "array", "items": { "type": "number" } },
+            "river_level_m": { "type": "number" }
+          }
+        },
+        "sar_water_extent": { "type": ["object", "null"] }
+      }
+    },
+    "output": {
+      "type": "object",
+      "required": ["status", "fallback_tier", "data", "warnings"],
+      "properties": {
+        "status": { "type": "string", "enum": ["ok", "degraded", "error"] },
+        "fallback_tier": { "type": "integer", "enum": [1, 2, 3] },
+        "data": {
+          "type": "object",
+          "required": ["flood_prob", "confidence_interval", "hours_to_critical", "inundation_extent_5179"],
+          "properties": {
+            "flood_prob": { "type": "number", "minimum": 0, "maximum": 1 },
+            "confidence_interval": {
+              "type": "array", "items": { "type": "number", "minimum": 0, "maximum": 1 }, "minItems": 2, "maxItems": 2
+            },
+            "hours_to_critical": { "type": ["number", "null"] },
+            "inundation_extent_5179": {
+              "type": "object",
+              "required": ["type", "features"],
+              "properties": {
+                "type": { "type": "string", "const": "FeatureCollection" },
+                "features": { "type": "array" }
+              }
+            }
+          }
+        },
+        "warnings": { "type": "array", "items": { "type": "string" } }
+      }
+    }
+  }
+}

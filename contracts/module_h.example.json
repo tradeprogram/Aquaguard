@@ -1,0 +1,28 @@
+{
+  "input": {
+    "alert_id": "AL-20250719-0915",
+    "trigger_location": { "x_5179": 1090452.3, "y_5179": 1662188.7 },
+    "trigger_radius_m": 500,
+    "citizen_reports": [
+      {
+        "report_id": "R001",
+        "x_5179": 1090480.1,
+        "y_5179": 1662201.4,
+        "timestamp": "2025-07-19T09:22:00+09:00",
+        "report_type": "이상징후_목격",
+        "photo_url": null
+      }
+    ]
+  },
+  "output": {
+    "status": "ok",
+    "fallback_tier": 1,
+    "data": {
+      "report_count": 6,
+      "verification_status": "현장확인",
+      "confidence_adjustment": 0.12,
+      "response_latency_min": 4.5
+    },
+    "warnings": []
+  }
+}

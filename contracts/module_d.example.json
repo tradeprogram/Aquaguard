@@ -1,0 +1,21 @@
+{
+  "input": {
+    "risk_polygons": [
+      { "source_module": "A", "geometry_5179": { "type": "Polygon", "coordinates": [] }, "risk_prob": 0.78 },
+      { "source_module": "B", "geometry_5179": { "type": "Polygon", "coordinates": [] }, "risk_prob": 0.61 }
+    ],
+    "building_footprints_5179": { "type": "FeatureCollection", "features": [] },
+    "farmland_parcels_5179": { "type": "FeatureCollection", "features": [] }
+  },
+  "output": {
+    "status": "ok",
+    "fallback_tier": 1,
+    "data": {
+      "exposed_buildings": [
+        { "building_id": "B12345", "risk_prob": 0.78, "use_type": "주거" }
+      ],
+      "exposed_farmland_ha": 4.2
+    },
+    "warnings": []
+  }
+}

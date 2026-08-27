@@ -1,0 +1,55 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "module_d_exposure_overlay",
+  "type": "object",
+  "properties": {
+    "input": {
+      "type": "object",
+      "required": ["risk_polygons", "building_footprints_5179", "farmland_parcels_5179"],
+      "properties": {
+        "risk_polygons": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["source_module", "geometry_5179", "risk_prob"],
+            "properties": {
+              "source_module": { "type": "string", "enum": ["A", "B"] },
+              "geometry_5179": { "type": "object" },
+              "risk_prob": { "type": "number", "minimum": 0, "maximum": 1 }
+            }
+          }
+        },
+        "building_footprints_5179": { "type": "object" },
+        "farmland_parcels_5179": { "type": "object" }
+      }
+    },
+    "output": {
+      "type": "object",
+      "required": ["status", "fallback_tier", "data", "warnings"],
+      "properties": {
+        "status": { "type": "string", "enum": ["ok", "degraded", "error"] },
+        "fallback_tier": { "type": "integer", "enum": [1, 2, 3] },
+        "data": {
+          "type": "object",
+          "required": ["exposed_buildings", "exposed_farmland_ha"],
+          "properties": {
+            "exposed_buildings": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": ["building_id", "risk_prob", "use_type"],
+                "properties": {
+                  "building_id": { "type": "string" },
+                  "risk_prob": { "type": "number", "minimum": 0, "maximum": 1 },
+                  "use_type": { "type": "string" }
+                }
+              }
+            },
+            "exposed_farmland_ha": { "type": "number" }
+          }
+        },
+        "warnings": { "type": "array", "items": { "type": "string" } }
+      }
+    }
+  }
+}

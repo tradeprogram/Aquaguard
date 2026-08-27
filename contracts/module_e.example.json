@@ -1,0 +1,27 @@
+{
+  "input": {
+    "origin": { "x_5179": 1090452.3, "y_5179": 1662188.7 },
+    "risk_polygons": [
+      { "geometry_5179": {}, "risk_prob": 0.78 }
+    ],
+    "shelter_candidates": [
+      { "shelter_id": "S001", "x_5179": 1091200.0, "y_5179": 1663500.0, "capacity": 200 }
+    ],
+    "road_graph_source": "standard_node_link_v1",
+    "time_budget_hours": 2.0
+  },
+  "output": {
+    "status": "ok",
+    "fallback_tier": 1,
+    "data": {
+      "shelter_id": "S001",
+      "route_5179": { "type": "LineString", "coordinates": [] },
+      "eta_min": 14.5,
+      "route_confidence": "high",
+      "time_feasible": true,
+      "time_margin_min": 105.5,
+      "fallback_used": false
+    },
+    "warnings": []
+  }
+}

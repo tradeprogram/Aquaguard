@@ -1,0 +1,19 @@
+{
+  "input": {
+    "exposed_buildings": [
+      { "building_id": "B12345", "risk_prob": 0.78, "use_type": "주거" }
+    ],
+    "exposed_farmland_ha": 4.2,
+    "unit_cost_table_ref": "재해연보_2024_원단위"
+  },
+  "output": {
+    "status": "ok",
+    "fallback_tier": 1,
+    "data": {
+      "estimated_cost_krw": 1250000000,
+      "cost_range_krw": [900000000, 1600000000],
+      "basis_citation": "행안부 재해연보 2024 건축물 침수 원단위"
+    },
+    "warnings": []
+  }
+}

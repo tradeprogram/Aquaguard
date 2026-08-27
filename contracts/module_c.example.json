@@ -1,0 +1,17 @@
+{
+  "input": {
+    "underpass_id": "SC-UP-003",
+    "rainfall_intensity_1h_mm": 45.0,
+    "known_risk": true,
+    "drainage_capacity_class": "low"
+  },
+  "output": {
+    "status": "ok",
+    "fallback_tier": 1,
+    "data": {
+      "alert_level": "위험",
+      "underpass_id": "SC-UP-003"
+    },
+    "warnings": []
+  }
+}

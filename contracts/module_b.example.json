@@ -1,0 +1,19 @@
+{
+  "input": {
+    "reach_id": "GEUMHO_042",
+    "static": { "drainage_area_km2": 58.2, "river_order": 3, "slope_pct": 1.8 },
+    "dynamic": { "rainfall_cumulative_24h_mm": [187.3], "river_level_m": 3.2 },
+    "sar_water_extent": null
+  },
+  "output": {
+    "status": "ok",
+    "fallback_tier": 1,
+    "data": {
+      "flood_prob": 0.61,
+      "confidence_interval": [0.45, 0.75],
+      "hours_to_critical": 4.0,
+      "inundation_extent_5179": { "type": "FeatureCollection", "features": [] }
+    },
+    "warnings": []
+  }
+}

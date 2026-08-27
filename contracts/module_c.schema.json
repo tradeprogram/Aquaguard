@@ -1,0 +1,34 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "module_c_urban_rule",
+  "type": "object",
+  "properties": {
+    "input": {
+      "type": "object",
+      "required": ["underpass_id", "rainfall_intensity_1h_mm", "known_risk", "drainage_capacity_class"],
+      "properties": {
+        "underpass_id": { "type": "string" },
+        "rainfall_intensity_1h_mm": { "type": "number" },
+        "known_risk": { "type": "boolean" },
+        "drainage_capacity_class": { "type": "string", "enum": ["low", "medium", "high"] }
+      }
+    },
+    "output": {
+      "type": "object",
+      "required": ["status", "fallback_tier", "data", "warnings"],
+      "properties": {
+        "status": { "type": "string", "enum": ["ok", "degraded", "error"] },
+        "fallback_tier": { "type": "integer", "enum": [1, 2, 3] },
+        "data": {
+          "type": "object",
+          "required": ["alert_level", "underpass_id"],
+          "properties": {
+            "alert_level": { "type": "string", "enum": ["정상", "주의", "경계", "위험"] },
+            "underpass_id": { "type": "string" }
+          }
+        },
+        "warnings": { "type": "array", "items": { "type": "string" } }
+      }
+    }
+  }
+}

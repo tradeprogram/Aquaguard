@@ -1,0 +1,67 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "module_e_routing",
+  "type": "object",
+  "properties": {
+    "input": {
+      "type": "object",
+      "required": ["origin", "risk_polygons", "shelter_candidates", "road_graph_source", "time_budget_hours"],
+      "properties": {
+        "origin": {
+          "type": "object",
+          "required": ["x_5179", "y_5179"],
+          "properties": { "x_5179": { "type": "number" }, "y_5179": { "type": "number" } }
+        },
+        "risk_polygons": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["geometry_5179", "risk_prob"],
+            "properties": { "geometry_5179": { "type": "object" }, "risk_prob": { "type": "number", "minimum": 0, "maximum": 1 } }
+          }
+        },
+        "shelter_candidates": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["shelter_id", "x_5179", "y_5179", "capacity"],
+            "properties": {
+              "shelter_id": { "type": "string" },
+              "x_5179": { "type": "number" },
+              "y_5179": { "type": "number" },
+              "capacity": { "type": "integer" }
+            }
+          }
+        },
+        "road_graph_source": { "type": "string" },
+        "time_budget_hours": { "type": "number" }
+      }
+    },
+    "output": {
+      "type": "object",
+      "required": ["status", "fallback_tier", "data", "warnings"],
+      "properties": {
+        "status": { "type": "string", "enum": ["ok", "degraded", "error"] },
+        "fallback_tier": { "type": "integer", "enum": [1, 2, 3] },
+        "data": {
+          "type": "object",
+          "required": ["shelter_id", "route_5179", "eta_min", "route_confidence", "time_feasible", "time_margin_min", "fallback_used"],
+          "properties": {
+            "shelter_id": { "type": ["string", "null"] },
+            "route_5179": {
+              "type": "object",
+              "required": ["type", "coordinates"],
+              "properties": { "type": { "type": "string", "const": "LineString" }, "coordinates": { "type": "array" } }
+            },
+            "eta_min": { "type": ["number", "null"] },
+            "route_confidence": { "type": "string", "enum": ["high", "medium", "low"] },
+            "time_feasible": { "type": "boolean" },
+            "time_margin_min": { "type": ["number", "null"] },
+            "fallback_used": { "type": "boolean" }
+          }
+        },
+        "warnings": { "type": "array", "items": { "type": "string" } }
+      }
+    }
+  }
+}

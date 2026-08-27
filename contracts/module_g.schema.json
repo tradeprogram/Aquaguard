@@ -1,0 +1,47 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "module_g_damage_cost",
+  "type": "object",
+  "properties": {
+    "input": {
+      "type": "object",
+      "required": ["exposed_buildings", "exposed_farmland_ha", "unit_cost_table_ref"],
+      "properties": {
+        "exposed_buildings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["building_id", "risk_prob", "use_type"],
+            "properties": {
+              "building_id": { "type": "string" },
+              "risk_prob": { "type": "number", "minimum": 0, "maximum": 1 },
+              "use_type": { "type": "string" }
+            }
+          }
+        },
+        "exposed_farmland_ha": { "type": "number" },
+        "unit_cost_table_ref": { "type": "string" }
+      }
+    },
+    "output": {
+      "type": "object",
+      "required": ["status", "fallback_tier", "data", "warnings"],
+      "properties": {
+        "status": { "type": "string", "enum": ["ok", "degraded", "error"] },
+        "fallback_tier": { "type": "integer", "enum": [1, 2, 3] },
+        "data": {
+          "type": "object",
+          "required": ["estimated_cost_krw", "cost_range_krw", "basis_citation"],
+          "properties": {
+            "estimated_cost_krw": { "type": "integer" },
+            "cost_range_krw": {
+              "type": "array", "items": { "type": "integer" }, "minItems": 2, "maxItems": 2
+            },
+            "basis_citation": { "type": "string" }
+          }
+        },
+        "warnings": { "type": "array", "items": { "type": "string" } }
+      }
+    }
+  }
+}

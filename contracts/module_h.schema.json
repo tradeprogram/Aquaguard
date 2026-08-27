@@ -1,0 +1,54 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "module_h_citizen_verification",
+  "type": "object",
+  "properties": {
+    "input": {
+      "type": "object",
+      "required": ["alert_id", "trigger_location", "trigger_radius_m", "citizen_reports"],
+      "properties": {
+        "alert_id": { "type": "string" },
+        "trigger_location": {
+          "type": "object",
+          "required": ["x_5179", "y_5179"],
+          "properties": { "x_5179": { "type": "number" }, "y_5179": { "type": "number" } }
+        },
+        "trigger_radius_m": { "type": "number" },
+        "citizen_reports": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["report_id", "x_5179", "y_5179", "timestamp", "report_type", "photo_url"],
+            "properties": {
+              "report_id": { "type": "string" },
+              "x_5179": { "type": "number" },
+              "y_5179": { "type": "number" },
+              "timestamp": { "type": "string", "format": "date-time" },
+              "report_type": { "type": "string", "enum": ["이상징후_목격", "이미_대피함", "오탐_신고"] },
+              "photo_url": { "type": ["string", "null"] }
+            }
+          }
+        }
+      }
+    },
+    "output": {
+      "type": "object",
+      "required": ["status", "fallback_tier", "data", "warnings"],
+      "properties": {
+        "status": { "type": "string", "enum": ["ok", "degraded", "error"] },
+        "fallback_tier": { "type": "integer", "enum": [1, 2, 3] },
+        "data": {
+          "type": "object",
+          "required": ["report_count", "verification_status", "confidence_adjustment", "response_latency_min"],
+          "properties": {
+            "report_count": { "type": "integer" },
+            "verification_status": { "type": "string", "enum": ["미확인", "현장확인", "오탐판정"] },
+            "confidence_adjustment": { "type": "number", "minimum": -0.3, "maximum": 0.3 },
+            "response_latency_min": { "type": ["number", "null"] }
+          }
+        },
+        "warnings": { "type": "array", "items": { "type": "string" } }
+      }
+    }
+  }
+}
