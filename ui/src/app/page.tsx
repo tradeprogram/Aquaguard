@@ -36,13 +36,13 @@ export default function HomePage() {
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img src="/aquaguard-logo.png" alt="Aqua Guard.AI" width={554} height={125} className="h-7 w-auto" />
         </div>
-        <div className="pointer-events-auto flex gap-1.5 rounded-xl border border-white/10 bg-slate-900/40 p-1.5 shadow-lg backdrop-blur-xl">
+        <div className="pointer-events-auto flex gap-1.5 rounded-xl border border-white/20 bg-slate-950/85 p-1.5 shadow-lg backdrop-blur-xl">
           {MENU.map((item) => (
             <button
               key={item.key}
               onClick={() => setActive((cur) => (cur === item.key ? null : item.key))}
               className={`rounded-lg px-3 py-1.5 text-xs font-medium transition-colors ${
-                active === item.key ? "bg-sky-500/60 text-white" : "text-slate-300 hover:bg-white/10 hover:text-white"
+                active === item.key ? "bg-sky-500/70 text-white" : "text-slate-200 hover:bg-white/15 hover:text-white"
               }`}
             >
               {item.label}

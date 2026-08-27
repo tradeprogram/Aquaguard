@@ -10,8 +10,8 @@ interface GlassPanelProps {
 
 export default function GlassPanel({ title, onClose, children }: GlassPanelProps) {
   return (
-    <div className="flex h-[42rem] max-h-[80vh] w-[26rem] max-w-[90vw] flex-col overflow-hidden rounded-2xl border border-white/10 bg-slate-900/40 shadow-2xl backdrop-blur-xl">
-      <div className="flex items-center justify-between border-b border-white/10 bg-slate-950/30 px-4 py-3 backdrop-blur-xl">
+    <div className="flex h-[42rem] max-h-[80vh] w-[26rem] max-w-[90vw] flex-col overflow-hidden rounded-2xl border border-white/20 bg-slate-950/85 shadow-2xl backdrop-blur-xl">
+      <div className="flex items-center justify-between border-b border-white/10 bg-slate-950/60 px-4 py-3 backdrop-blur-xl">
         <span className="text-base font-semibold text-sky-300">{title}</span>
         <button onClick={onClose} aria-label="패널 닫기" className="text-lg text-slate-400 hover:text-slate-200">
           ✕
