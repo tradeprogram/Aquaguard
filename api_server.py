@@ -10,6 +10,7 @@ import hashlib
 import io
 import json
 import os
+import threading
 from pathlib import Path
 from typing import Literal
 
@@ -254,10 +255,24 @@ def get_terrain_tile(z: int, x: int, y: int) -> Response:
     CORSMiddleware가 붙인 헤더로 돌려준다. V-World API 키가 생기면(§2.3 1순위)
     이 프록시를 그쪽으로 바꿔치기하면 된다.
     """
+    cache_key = ("terrain", z, x, y)
+    cached = _IMAGERY_CACHE.get(cache_key)
+    if cached is not None:
+        return Response(content=cached, media_type="image/png", headers={"Cache-Control": "public, max-age=86400"})
+
     upstream = f"https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png"
-    resp = requests.get(upstream, timeout=10)
+    try:
+        resp = requests.get(upstream, timeout=5)
+    except requests.RequestException as e:
+        # 2026-08-28: 전에는 여기 예외 처리가 없어서 S3가 잠깐 끊기면 ConnectionError가
+        # 그대로 위로 새서 500이 되던 것과 별개로, Render 무료 인스턴스에서 헬스체크가
+        # 5초 타임아웃으로 반복 실패하는 원인 중 하나였다(느린/끊긴 업스트림 호출이
+        # 스레드를 오래 붙잡음) — timeout을 10s→5s로 줄이고 예외도 명시적으로 처리.
+        raise HTTPException(status_code=502, detail=f"terrain tile upstream failed: {e}")
     if resp.status_code != 200:
         raise HTTPException(status_code=resp.status_code, detail="terrain tile fetch failed")
+    if len(_IMAGERY_CACHE) < _IMAGERY_CACHE_MAX_ENTRIES:
+        _IMAGERY_CACHE[cache_key] = resp.content
     return Response(content=resp.content, media_type="image/png", headers={"Cache-Control": "public, max-age=86400"})
 
 
@@ -276,12 +291,23 @@ ESRI_FALLBACK_MAX_ZOOM_STEPS = 3
 # 스레드풀·CPU를 그 대기시간 동안 붙잡아둬 헬스체크(/health)까지 못 받게 만들
 # 수 있다. 같은 타일은 같은 결과가 나오므로(위성사진은 실시간으로 안 바뀜)
 # 메모리 캐시로 재요청 자체를 없애고, 타임아웃도 줄여 최악의 지연을 낮춘다.
-_IMAGERY_CACHE: dict[tuple[int, int, int], bytes] = {}
+_IMAGERY_CACHE: dict[tuple, bytes] = {}  # 위성타일((z,x,y))·지형타일(("terrain",z,x,y)) 공용
 _IMAGERY_CACHE_MAX_ENTRIES = 4000
 
 
 def _is_esri_placeholder(content: bytes) -> bool:
     return hashlib.md5(content).hexdigest() == ESRI_PLACEHOLDER_MD5
+
+
+# 2026-08-28: PIL의 crop/resize/encode는 CPU-bound라 GIL을 붙잡는다 — Render 무료
+# 인스턴스는 CPU가 매우 작은 조각(fractional vCPU)이라, 지도를 팬(pan)할 때 캐스케이드가
+# 필요한 타일 수십 개가 한꺼번에 들어오면 동시 이미지처리 요청들이 그 작은 CPU를
+# 서로 다투면서 /health 같은 사소한 요청까지 5초 넘게 밀릴 수 있다(이게 진짜 "Instance
+# failed" 원인으로 의심됨 — 캐시를 넣기 전까지는 이 처리가 CPU 작업이 아예 없던
+# 순수 프록시였다). 세마포어로 동시 이미지처리 개수를 하드하게 제한해 CPU 스파이크
+# 자체를 막는다 — 나머지 요청은 아주 짧게 대기했다가 처리되거나(대개 수백ms), 이미
+# 캐시에 있으면 이 경로를 아예 안 탄다.
+_CASCADE_CPU_SEMAPHORE = threading.Semaphore(2)
 
 
 def _fetch_esri_tile_with_zoom_cascade(z: int, x: int, y: int) -> bytes | None:
@@ -303,13 +329,16 @@ def _fetch_esri_tile_with_zoom_cascade(z: int, x: int, y: int) -> bytes | None:
             continue
         if step == 0:
             return resp.content
-        # 부모 타일 256×256 중 우리 타일이 차지하는 사분면만 잘라 다시 256×256으로 확대
+        # 부모 타일 256×256 중 우리 타일이 차지하는 사분면만 잘라 다시 256×256으로 확대.
+        # BILINEAR는 LANCZOS보다 훨씬 싸다 — 흐릿한 배경 위성사진 확대본이라 품질
+        # 차이는 실사용에서 거의 안 느껴지고, CPU 시간은 크게 줄어든다.
         sub = 256 // (2**step)
         ox, oy = (x % (2**step)) * sub, (y % (2**step)) * sub
-        img = Image.open(io.BytesIO(resp.content)).convert("RGB")
-        cropped = img.crop((ox, oy, ox + sub, oy + sub)).resize((256, 256), Image.LANCZOS)
-        buf = io.BytesIO()
-        cropped.save(buf, format="JPEG", quality=85)
+        with _CASCADE_CPU_SEMAPHORE:
+            img = Image.open(io.BytesIO(resp.content)).convert("RGB")
+            cropped = img.crop((ox, oy, ox + sub, oy + sub)).resize((256, 256), Image.BILINEAR)
+            buf = io.BytesIO()
+            cropped.save(buf, format="JPEG", quality=80)
         return buf.getvalue()
     return None
 
@@ -377,21 +406,27 @@ def _vworld_get_feature(data_layer: str, bbox: tuple[float, float, float, float]
     if not VWORLD_API_KEY:
         raise HTTPException(status_code=503, detail="VWORLD_API_KEY not configured (.env)")
     minx, miny, maxx, maxy = bbox
-    resp = requests.get(
-        "http://api.vworld.kr/req/data",
-        params={
-            "service": "data",
-            "request": "GetFeature",
-            "data": data_layer,
-            "key": VWORLD_API_KEY,
-            "domain": "localhost",
-            "format": "json",
-            "size": VWORLD_PAGE_SIZE,
-            "geomFilter": f"BOX({minx},{miny},{maxx},{maxy})",
-        },
-        timeout=10,
-    )
-    resp.raise_for_status()
+    try:
+        resp = requests.get(
+            "http://api.vworld.kr/req/data",
+            params={
+                "service": "data",
+                "request": "GetFeature",
+                "data": data_layer,
+                "key": VWORLD_API_KEY,
+                "domain": "localhost",
+                "format": "json",
+                "size": VWORLD_PAGE_SIZE,
+                "geomFilter": f"BOX({minx},{miny},{maxx},{maxy})",
+            },
+            timeout=5,
+        )
+        resp.raise_for_status()
+    except requests.RequestException as e:
+        # 2026-08-28: 전에는 여기 예외 처리가 없어서 ConnectionError 등이 그대로
+        # 위로 새어나갔다(Render 헬스체크 5초 타임아웃 반복 실패와 함께 관찰된
+        # "raise ConnectionError" 스택트레이스가 아마 여기) — timeout도 10s→5s로 낮춤.
+        raise HTTPException(status_code=502, detail=f"VWorld data API request failed: {e}")
     body = resp.json()
     service = body.get("response", {})
     if service.get("status") != "OK":
