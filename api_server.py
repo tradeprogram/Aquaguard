@@ -258,36 +258,49 @@ def get_terrain_tile(z: int, x: int, y: int) -> Response:
     return Response(content=resp.content, media_type="image/png", headers={"Cache-Control": "public, max-age=86400"})
 
 
+ESRI_IMAGERY_TILE_URL = (
+    "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
+)
+
+
 @app.get("/vworld/imagery/{z}/{x}/{y}.jpeg")
 def get_vworld_imagery_tile(z: int, x: int, y: int) -> Response:
-    """V-World WMTS 위성영상(Satellite 레이어) 프록시 — 2026-08-28, Esri World Imagery
-    대체용. Esri는 산간지역 등 일부 위치에서 "Image Not Available" 회색 타일을
-    반환하는데, V-World는 국토지리정보원 소관의 국내 정사영상이라 국내 커버리지가
-    훨씬 촘촘하고 해상도도 높다 — z19까지 실측 확인(z20은 커버리지 없음).
+    """V-World WMTS 위성영상(Satellite 레이어) 프록시, Esri 폴백 포함.
 
     V-World WMTS RESTful 주소는 level/tiley/tilex 순서(일반적인 z/x/y가 아님)임에
     주의 — 이 서명의 매개변수 순서({z}/{x}/{y})는 프론트(표준 XYZ 스킴)와 맞추고,
-    여기서 업스트림 호출 시에만 순서를 뒤집는다. Referer/domain 제한 없이 서버 간
-    호출로 정상 동작 확인됨(2026-08-28 curl 검증) — 브라우저 직접 호출은 CORS 헤더가
-    없어 막히므로 terrain-tiles와 동일한 이유로 프록시 필요.
+    여기서 업스트림 호출 시에만 순서를 뒤집는다.
+
+    2026-08-28: 로컬(curl)에서는 항상 200인데 배포 환경(Render, region=singapore)
+    에서는 매 타일이 502(V-World 자체가 text/html로 응답)로 실패하는 게 진단으로
+    확인됨 — 같은 서버에서 V-World Data API(건물·도로, /vworld/roads·buildings)는
+    정상 동작하므로 도메인 전체 차단이 아니라 WMTS 타일 서비스만 리전별로 막혀있는
+    것으로 보인다(원인 불명, V-World 쪽 문제로 우리가 고칠 수 없음). 그래서 V-World가
+    실패하면 원래 쓰던 Esri World Imagery로 자동 폴백 — 로컬 개발은 V-World의 더 나은
+    국내 해상도를 그대로 누리고, 배포 환경은 (예전처럼 Esri의 드문드문한 "이미지 없음"
+    지역이 있더라도) 최소한 지도가 완전히 비어 보이는 것보다는 낫다.
     """
-    if not VWORLD_API_KEY:
-        raise HTTPException(status_code=503, detail="VWORLD_API_KEY not configured (.env)")
-    upstream = f"http://api.vworld.kr/req/wmts/1.0.0/{VWORLD_API_KEY}/Satellite/{z}/{y}/{x}.jpeg"
-    try:
-        resp = requests.get(upstream, timeout=10)
-    except requests.RequestException as e:
-        # 2026-08-28: 배포 환경(Render, region=singapore)에서 502가 나던 원인 진단용 —
-        # 로컬(curl)에서는 같은 호출이 항상 성공해서 원인이 코드가 아니라 네트워크
-        # 경로(리전별 아웃바운드 차단/타임아웃)일 가능성이 높다고 보고 우선 원인이
-        # 드러나게 detail을 남긴다. 확인되면 이 detail은 다시 좁혀도 됨.
-        raise HTTPException(status_code=502, detail=f"vworld imagery upstream request failed: {e}")
-    if resp.status_code != 200 or resp.headers.get("content-type", "").startswith("application/xml"):
-        raise HTTPException(
-            status_code=404,
-            detail=f"vworld imagery tile not available (upstream status={resp.status_code}, type={resp.headers.get('content-type')})",
-        )
-    return Response(content=resp.content, media_type="image/jpeg", headers={"Cache-Control": "public, max-age=86400"})
+    if VWORLD_API_KEY:
+        upstream = f"http://api.vworld.kr/req/wmts/1.0.0/{VWORLD_API_KEY}/Satellite/{z}/{y}/{x}.jpeg"
+        try:
+            resp = requests.get(upstream, timeout=6)
+            if resp.status_code == 200 and resp.headers.get("content-type", "").startswith("image/"):
+                return Response(
+                    content=resp.content,
+                    media_type=resp.headers["content-type"],
+                    headers={"Cache-Control": "public, max-age=86400"},
+                )
+        except requests.RequestException:
+            pass  # 폴백으로 진행
+
+    fallback_resp = requests.get(ESRI_IMAGERY_TILE_URL.format(z=z, x=x, y=y), timeout=10)
+    if fallback_resp.status_code != 200:
+        raise HTTPException(status_code=404, detail="imagery tile not available from either source")
+    return Response(
+        content=fallback_resp.content,
+        media_type=fallback_resp.headers.get("content-type", "image/jpeg"),
+        headers={"Cache-Control": "public, max-age=86400"},
+    )
 
 
 VWORLD_BUILDING_LAYER = "LT_C_SPBD"  # 건물통합정보(국토교통부) — 브이월드 Data API 2.0
