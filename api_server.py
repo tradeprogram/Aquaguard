@@ -7,6 +7,7 @@ MODULE_PACKAGES를 통해 그대로 실제 모듈로 교체된다.
 from __future__ import annotations
 
 import json
+import math
 import os
 from pathlib import Path
 from typing import Literal
@@ -305,13 +306,37 @@ VWORLD_ROAD_LAYER = "LT_L_MOCTLINK"  # 국가교통정보센터 표준노드링�
 METERS_PER_FLOOR = 3.0
 DEFAULT_BUILDING_HEIGHT_M = 4.0
 VWORLD_PAGE_SIZE = 1000
+# 2026-08-28 발견(오늘 새로 생긴 문제 아니라 이 통합 시점부터 있던 버그) — V-World
+# Data API GetFeature는 geomFilter bbox 면적이 10km²를 넘으면 무조건
+# INVALID_RANGE 에러를 낸다(HTTP 200으로 status:"ERROR" 반환 — 상태코드로는 못
+# 걸러짐). 건물 압출을 켜는 최소 줌(z13)에서도 화면 전체 뷰포트 면적은 보통
+# 수백 km²라, 실제로는 거의 항상 이 한도에 걸려 실패 → OSM 폴백(더 성긴 데이터)
+# 으로 떨어지고 있었다 — "건물 로딩이 오래 걸린다"는 체감은 사실 매번 실패한
+# 뒤 폴백하는 것이었을 가능성이 큼. 뷰포트가 한도를 넘으면 같은 중심점을 유지한
+# 채로 9km²(한도보다 살짝 여유) 정사각형으로 줄여서 보낸다 — 화면 전체가 아니라
+# 중심 근처 건물만 받게 되지만, 매번 실패하는 것보다는 훨씬 낫다.
+VWORLD_MAX_QUERY_AREA_KM2 = 9.0
+
+
+def _clamp_bbox_to_area(bbox: tuple[float, float, float, float]) -> tuple[float, float, float, float]:
+    minx, miny, maxx, maxy = bbox
+    center_lat = (miny + maxy) / 2
+    width_km = (maxx - minx) * 111.32 * math.cos(math.radians(center_lat))
+    height_km = (maxy - miny) * 110.54
+    if width_km * height_km <= VWORLD_MAX_QUERY_AREA_KM2:
+        return bbox
+    center_lon = (minx + maxx) / 2
+    half_side_km = math.sqrt(VWORLD_MAX_QUERY_AREA_KM2) / 2
+    half_lon = half_side_km / (111.32 * math.cos(math.radians(center_lat)))
+    half_lat = half_side_km / 110.54
+    return (center_lon - half_lon, center_lat - half_lat, center_lon + half_lon, center_lat + half_lat)
 
 
 def _vworld_get_feature(data_layer: str, bbox: tuple[float, float, float, float]) -> dict:
     """VWorld Data API 2.0 GetFeature 공통 호출. bbox=(minx,miny,maxx,maxy)."""
     if not VWORLD_API_KEY:
         raise HTTPException(status_code=503, detail="VWORLD_API_KEY not configured (.env)")
-    minx, miny, maxx, maxy = bbox
+    minx, miny, maxx, maxy = _clamp_bbox_to_area(bbox)
     try:
         resp = requests.get(
             "http://api.vworld.kr/req/data",
