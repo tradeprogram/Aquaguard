@@ -27,21 +27,33 @@ const INITIAL_BOUNDS: [[number, number], [number, number]] = [
   [128.1152, 35.39634],
 ];
 
+// 2026-08-28: 이 앱은 어차피 대한민국 전용(위성영상은 V-World, 행정경계·건물·도로도
+// 전부 국내 소스 — §2.6)인데 지도에 maxBounds 제한이 없어서 줌아웃하면 전세계가
+// 다 보였다. 전세계 뷰에서는 osm_vectors(전세계 벡터타일)·라벨 래스터 타일이 한
+// 화면에 훨씬 많이 잡혀 요청·렌더 부하가 커지고, 화면 밖 지역은 애초에 아무 데이터도
+// 없어 회색 배경만 그려진다 — 렉의 상당 부분이 여기서 온다. 카메라가 이 범위
+// 밖으로 못 나가게 막으면 그 낭비가 원천 차단된다(제주·독도 포함 여유 있게).
+const SOUTH_KOREA_BOUNDS: [[number, number], [number, number]] = [
+  [124.5, 32.9],
+  [131.9, 38.9],
+];
+
 // 지형(raster-dem)은 스타일 JSON에 선언하지 않고 'load' 이후 명령형으로 추가한다 — 아래 참조.
-// 위성영상: Esri World Imagery(무료, API 키 불필요, CORS 허용 확인됨). §2.3 1순위인
-// V-World API 키가 생기면 이 소스만 바꿔치기하면 된다.
+// 위성영상: V-World WMTS 위성 레이어(§2.3 1순위, api_server.py의 /vworld/imagery 프록시
+// 경유 — CORS 우회는 /terrain-tiles와 동일 이유). 2026-08-28: Esri World Imagery에서
+// 교체 — Esri는 산간·농촌 지역에서 "Image Not Available" 회색 타일을 자주 반환했는데,
+// V-World는 국토지리정보원 소관 국내 정사영상이라 국내 커버리지가 훨씬 촘촘하다
+// (z19까지 커버리지 확인됨, api_server.py 프록시 주석 참조).
 const MAP_STYLE: StyleSpecification = {
   version: 8,
   glyphs: "https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf",
   sources: {
     satellite: {
       type: "raster",
-      tiles: [
-        "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
-      ],
+      tiles: [`${API_BASE}/vworld/imagery/{z}/{x}/{y}.jpeg`],
       tileSize: 256,
       maxzoom: 19,
-      attribution: "Esri, Maxar, Earthstar Geographics",
+      attribution: "VWorld(국토교통부 국토지리정보원)",
     },
     labels: {
       type: "raster",
@@ -286,6 +298,12 @@ export default function MapExplorer({ route = null, pickOrigin = false, onOrigin
       // 85° 근처의 극단적인 pitch는 지형(terrain) 활성화 상태에서 카메라 투영이
       // 불안정해져 줌 중 "튕기는" 현상의 흔한 원인이라 안전한 값으로 낮춤
       maxPitch: 70,
+      // 이 프로젝트는 대한민국 전용이라 카메라가 그 밖으로 나갈 이유가 없다 — 전세계
+      // 뷰에서 오는 렉 방지(위 SOUTH_KOREA_BOUNDS 주석). minZoom은 maxBounds가 이미
+      // 자동으로 강제하는 하한과 별개로, 컨테이너 리사이즈 도중에도 항상 그 하한을
+      // 보장하기 위한 안전판.
+      maxBounds: SOUTH_KOREA_BOUNDS,
+      minZoom: 6,
       // 마우스로 자유롭게 회전/기울기(우클릭 또는 Ctrl+드래그) 조작 가능하도록 명시적으로 켬
       dragRotate: true,
       pitchWithRotate: true,
@@ -314,18 +332,23 @@ export default function MapExplorer({ route = null, pickOrigin = false, onOrigin
       });
       map.addLayer({ id: "hills", type: "hillshade", source: "terrain", paint: { "hillshade-exaggeration": 0.7 } });
 
-      // DEM 소스가 z15까지밖에 없어서 그보다 확대(건물 단위 줌)하면 MapLibre가 같은
-      // 타일을 억지로 늘려 써야 한다 — 이때 벌어지는 "혹처럼 부풀어 보이는" 왜곡은
-      // exaggeration이 오버줌으로 생긴 타일 경계 스파이크까지 그대로 증폭해서
-      // 생긴다(도로가 z14 오버줌에서 뒤틀리던 것과 같은 근본 원인). 이전엔 아예
-      // 꺼버렸지만 그러면 건물 스케일로 들어가는 순간 산이 통째로 평평해져 버려서
-      // (사용자 리포트) 대신 z15를 넘는 만큼 exaggeration을 서서히 낮춘다 — 굴곡은
-      // 계속 보이되 왜곡의 세로 진폭만 줄여서 "찌그러짐"을 눈에 덜 띄게 만드는
-      // 절충. 0으로 완전히 죽이지 않고 바닥값(0.35)을 남겨 능선이 사라지진 않게 함.
+      // DEM 소스가 z15까지밖에 없어서(전세계 공개 SRTM 계열 지형타일의 실제 해상도
+      // 한계 — 30m급이라 그 이상은 어차피 새 정보가 없다) 그보다 확대(건물 단위 줌)
+      // 하면 MapLibre가 같은 타일을 억지로 늘려 써야 한다 — 이때 벌어지는 "혹처럼
+      // 부풀어 보이는" 왜곡은 exaggeration이 오버줌으로 생긴 타일 경계 스파이크까지
+      // 그대로 증폭해서 생긴다. 2026-08-28 재조정: 건물/도로 단위 정밀도(몇 m 물 높이
+      // 차이)는 실측 지형 굴곡이 아니라 아래 debris-flow-3d/flood-water-3d/건물 압출의
+      // 실제 depth 값으로 이미 표현하고 있으므로, 이 구간(z16+)에서는 지형을 과감히
+      // 평탄에 가깝게 눕혀 왜곡 자체를 없애는 쪽이 "더 정밀해 보인다" — 대신 taper를
+      // z17까지로 앞당기고 바닥값도 0.35→0.12로 낮춰 스파이크가 눈에 띄지 않게 한다.
+      // hillshade도 같은 커브로 함께 낮춰야 한다 — 안 그러면 지형 exaggeration은
+      // 죽었는데 음영기복만 남아 위성사진 위에 얼룩진 것처럼 보인다.
       const TERRAIN_TAPER_START_ZOOM = 15;
-      const TERRAIN_TAPER_END_ZOOM = 19;
+      const TERRAIN_TAPER_END_ZOOM = 17;
       const TERRAIN_MAX_EXAGGERATION = 1.3;
-      const TERRAIN_MIN_EXAGGERATION = 0.35;
+      const TERRAIN_MIN_EXAGGERATION = 0.12;
+      const HILLSHADE_MAX_EXAGGERATION = 0.7;
+      const HILLSHADE_MIN_EXAGGERATION = 0.15;
       let lastExaggeration: number | null = null;
       const syncTerrainForZoom = () => {
         const currentMap = mapRef.current;
@@ -336,12 +359,31 @@ export default function MapExplorer({ route = null, pickOrigin = false, onOrigin
           Math.max(0, (zoom - TERRAIN_TAPER_START_ZOOM) / (TERRAIN_TAPER_END_ZOOM - TERRAIN_TAPER_START_ZOOM))
         );
         const exaggeration = TERRAIN_MAX_EXAGGERATION - t * (TERRAIN_MAX_EXAGGERATION - TERRAIN_MIN_EXAGGERATION);
-        if (lastExaggeration !== null && Math.abs(exaggeration - lastExaggeration) < 0.02) return;
-        lastExaggeration = exaggeration;
-        currentMap.setTerrain({ source: "terrain", exaggeration });
+        if (lastExaggeration === null || Math.abs(exaggeration - lastExaggeration) >= 0.02) {
+          lastExaggeration = exaggeration;
+          currentMap.setTerrain({ source: "terrain", exaggeration });
+        }
+        const hillshadeExaggeration =
+          HILLSHADE_MAX_EXAGGERATION - t * (HILLSHADE_MAX_EXAGGERATION - HILLSHADE_MIN_EXAGGERATION);
+        currentMap.setPaintProperty("hills", "hillshade-exaggeration", hillshadeExaggeration);
       };
       syncTerrainForZoom();
       map.on("zoomend", syncTerrainForZoom);
+
+      // 대기감(하늘·안개) + 태양광 — 지형 메시 자체의 정밀도는 한계가 있으니(위 주석)
+      // 대신 조명·대기 표현으로 "실사에 가까운 가상세계" 느낌을 낸다. atmosphere-blend·
+      // fog-ground-blend는 3D terrain이 있을 때만 의미가 있는 속성(MapLibre 스펙).
+      map.setSky({
+        "sky-color": "#0b1a3a",
+        "horizon-color": "#bcd4f2",
+        "fog-color": "#dbe7f7",
+        "fog-ground-blend": 0.6,
+        "horizon-fog-blend": 0.7,
+        "sky-horizon-blend": 0.6,
+        "atmosphere-blend": 0.6,
+      });
+      // 오후 느낌의 낮은 태양 각도로 건물·교량 압출에 뚜렷한 음영을 줘 입체감을 강조.
+      map.setLight({ anchor: "viewport", color: "#fff7ed", intensity: 0.5, position: [1.15, 210, 40] });
 
       // 행정경계 3계층(사용자 제공 BND_ADM_DONG_PG 기반, 시도/시군구는 그 원본을
       // dissolve해서 생성 — 전국) — 뷰포트 bbox로 api_server.py의 /boundaries에서

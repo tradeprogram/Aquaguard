@@ -258,6 +258,28 @@ def get_terrain_tile(z: int, x: int, y: int) -> Response:
     return Response(content=resp.content, media_type="image/png", headers={"Cache-Control": "public, max-age=86400"})
 
 
+@app.get("/vworld/imagery/{z}/{x}/{y}.jpeg")
+def get_vworld_imagery_tile(z: int, x: int, y: int) -> Response:
+    """V-World WMTS 위성영상(Satellite 레이어) 프록시 — 2026-08-28, Esri World Imagery
+    대체용. Esri는 산간지역 등 일부 위치에서 "Image Not Available" 회색 타일을
+    반환하는데, V-World는 국토지리정보원 소관의 국내 정사영상이라 국내 커버리지가
+    훨씬 촘촘하고 해상도도 높다 — z19까지 실측 확인(z20은 커버리지 없음).
+
+    V-World WMTS RESTful 주소는 level/tiley/tilex 순서(일반적인 z/x/y가 아님)임에
+    주의 — 이 서명의 매개변수 순서({z}/{x}/{y})는 프론트(표준 XYZ 스킴)와 맞추고,
+    여기서 업스트림 호출 시에만 순서를 뒤집는다. Referer/domain 제한 없이 서버 간
+    호출로 정상 동작 확인됨(2026-08-28 curl 검증) — 브라우저 직접 호출은 CORS 헤더가
+    없어 막히므로 terrain-tiles와 동일한 이유로 프록시 필요.
+    """
+    if not VWORLD_API_KEY:
+        raise HTTPException(status_code=503, detail="VWORLD_API_KEY not configured (.env)")
+    upstream = f"http://api.vworld.kr/req/wmts/1.0.0/{VWORLD_API_KEY}/Satellite/{z}/{y}/{x}.jpeg"
+    resp = requests.get(upstream, timeout=10)
+    if resp.status_code != 200 or resp.headers.get("content-type", "").startswith("application/xml"):
+        raise HTTPException(status_code=404, detail="vworld imagery tile not available")
+    return Response(content=resp.content, media_type="image/jpeg", headers={"Cache-Control": "public, max-age=86400"})
+
+
 VWORLD_BUILDING_LAYER = "LT_C_SPBD"  # 건물통합정보(국토교통부) — 브이월드 Data API 2.0
 VWORLD_ROAD_LAYER = "LT_L_MOCTLINK"  # 국가교통정보센터 표준노드링크(§2.6이 원래 지정한 소스)
 METERS_PER_FLOOR = 3.0
