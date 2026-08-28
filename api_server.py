@@ -404,6 +404,18 @@ def get_vworld_buildings(bbox: str) -> dict:
     return fc
 
 
+VWORLD_RIVER_LAYER = "LT_C_WKMSTRM"  # 하천(수계망) 폴리곤 — riv_nm(하천명)·cat_nam(하천 등급)
+
+
+@app.get("/vworld/rivers")
+def get_vworld_rivers(bbox: str) -> dict:
+    """실폭하천 폴리곤(2026-08-28 신규) — 지금까지 지도에 하천이 아예 안 그려져
+    있었다(토사·침수 시뮬레이터의 손으로 그은 흐름경로만 있음). riv_nm(하천명)·
+    cat_nam(국가하천/지방하천 등급)을 포함한 실제 하천 폴리곤이라 실제 강 이름과
+    형태가 그대로 나온다 — 홍수(Module B) 앱 성격에 직접 맞닿는 데이터."""
+    return _vworld_get_feature(VWORLD_RIVER_LAYER, _parse_bbox(bbox))
+
+
 @app.get("/vworld/roads")
 def get_vworld_roads(bbox: str) -> dict:
     """§2.6이 원래 지정한 도로망 소스 — 국가교통정보센터 표준노드링크(LT_L_MOCTLINK).

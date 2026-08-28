@@ -70,6 +70,13 @@ export async function getVWorldRoads(bbox: [number, number, number, number]): Pr
   return res.json();
 }
 
+// 2026-08-28 신규 — 실폭하천 폴리곤(riv_nm 하천명·cat_nam 등급 포함)
+export async function getVWorldRivers(bbox: [number, number, number, number]): Promise<GeoJSON.FeatureCollection> {
+  const res = await fetch(`${API_BASE}/vworld/rivers?bbox=${bbox.join(",")}`, { cache: "no-store" });
+  if (!res.ok) throw new Error(`get vworld rivers failed: ${res.status}`);
+  return res.json();
+}
+
 export async function searchAdmin(q: string): Promise<AdminSearchResult[]> {
   if (!q.trim()) return [];
   const res = await fetch(`${API_BASE}/search?q=${encodeURIComponent(q)}`, { cache: "no-store" });

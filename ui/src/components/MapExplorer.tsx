@@ -12,6 +12,7 @@ import {
   API_BASE,
   getBoundaries,
   getVWorldBuildings,
+  getVWorldRivers,
   getVWorldRoads,
   searchAdmin,
   type AdminLevel,
@@ -459,6 +460,32 @@ export default function MapExplorer({ route = null, pickOrigin = false, onOrigin
           });
       };
 
+      // VWorld 실폭하천(2026-08-28 신규) — 지금까지 지도에 하천이 아예 안 그려져
+      // 있었다. 건물·도로보다 먼저 추가해 그 아래(땅 표면)에 깔리게 한다.
+      map.addSource("vworld-rivers", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
+      map.addLayer({
+        id: "vworld-rivers-fill",
+        type: "fill",
+        source: "vworld-rivers",
+        paint: { "fill-color": "#38bdf8", "fill-opacity": 0.75 },
+      });
+
+      const updateVWorldRivers = () => {
+        const currentMap = mapRef.current;
+        if (!currentMap) return;
+        const b = currentMap.getBounds();
+        getVWorldRivers([b.getWest(), b.getSouth(), b.getEast(), b.getNorth()])
+          .then((fc) => {
+            const liveMap = mapRef.current;
+            if (!liveMap) return;
+            (liveMap.getSource("vworld-rivers") as GeoJSONSource | undefined)?.setData(fc);
+          })
+          .catch(() => {
+            // 하천은 OSM 폴백이 없다 — 실패하면 그냥 비워둔다(도로·건물처럼 대체
+            // 데이터가 없으므로 조용히 무시, 다음 moveend에서 재시도됨).
+          });
+      };
+
       // VWorld 건물통합정보(§2.3 1순위) — OSM보다 훨씬 촘촘한 실제 건물 데이터.
       // fill-extrusion-height는 원본에 없는 값이라 height_m(층수×3m, api_server.py에서
       // 계산)을 쓴다 — 실측 높이가 아니라 통상값 근사임을 UI에 명시(§6).
@@ -613,6 +640,7 @@ export default function MapExplorer({ route = null, pickOrigin = false, onOrigin
       };
 
       updateBoundaries();
+      updateVWorldRivers();
       updateVWorldBuildings();
       updateVWorldRoads();
       let moveendTimer: ReturnType<typeof setTimeout> | undefined;
@@ -620,6 +648,7 @@ export default function MapExplorer({ route = null, pickOrigin = false, onOrigin
         clearTimeout(moveendTimer);
         moveendTimer = setTimeout(() => {
           updateBoundaries();
+          updateVWorldRivers();
           updateVWorldBuildings();
           updateVWorldRoads();
         }, 200);
