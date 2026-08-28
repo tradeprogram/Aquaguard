@@ -462,14 +462,22 @@ export default function MapExplorer({ route = null, pickOrigin = false, onOrigin
 
       // VWorld 실폭하천(2026-08-28 신규) — 지금까지 지도에 하천이 아예 안 그려져
       // 있었다. 건물·도로보다 먼저 추가해 그 아래(땅 표면)에 깔리게 한다.
+      // 색상은 실제 저수지에 가깝게 하늘색과 청록 사이 톤으로.
       map.addSource("vworld-rivers", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
       map.addLayer({
         id: "vworld-rivers-fill",
         type: "fill",
         source: "vworld-rivers",
-        paint: { "fill-color": "#38bdf8", "fill-opacity": 0.75 },
+        paint: { "fill-color": "#0e9aa7", "fill-opacity": 0.75 },
       });
 
+      // V-World Data API는 bbox 면적이 10km²를 넘으면 실패해서(§ api_server.py
+      // _clamp_bbox_to_area) 화면 중심 근처의 좁은 창만 매번 갱신된다 — 하천은
+      // 건물처럼 매번 그 창으로 통째로 교체하면 패닝할 때마다 "있다 없다"를
+      // 반복하며 깜빡인다(2026-08-28 사용자 리포트). 하천은 개수가 적고 안
+      // 움직이니, 지금까지 받은 걸 feature id 기준으로 계속 누적해서 한 번
+      // 화면에 들어왔던 하천은 계속 남아있게 한다.
+      const accumulatedRivers = new Map<string | number, Feature>();
       const updateVWorldRivers = () => {
         const currentMap = mapRef.current;
         if (!currentMap) return;
@@ -478,11 +486,18 @@ export default function MapExplorer({ route = null, pickOrigin = false, onOrigin
           .then((fc) => {
             const liveMap = mapRef.current;
             if (!liveMap) return;
-            (liveMap.getSource("vworld-rivers") as GeoJSONSource | undefined)?.setData(fc);
+            for (const feature of fc.features) {
+              const key = feature.id ?? JSON.stringify(feature.properties);
+              accumulatedRivers.set(key, feature as Feature);
+            }
+            (liveMap.getSource("vworld-rivers") as GeoJSONSource | undefined)?.setData({
+              type: "FeatureCollection",
+              features: Array.from(accumulatedRivers.values()),
+            } as FeatureCollection);
           })
           .catch(() => {
-            // 하천은 OSM 폴백이 없다 — 실패하면 그냥 비워둔다(도로·건물처럼 대체
-            // 데이터가 없으므로 조용히 무시, 다음 moveend에서 재시도됨).
+            // 하천은 OSM 폴백이 없다 — 실패해도 이미 누적된 데이터는 그대로
+            // 남아있으니 조용히 무시(다음 moveend에서 재시도됨).
           });
       };
 
