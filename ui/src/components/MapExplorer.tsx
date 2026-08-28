@@ -1,7 +1,13 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Map as MapLibreMap, NavigationControl, type ExpressionSpecification, type GeoJSONSource, type StyleSpecification } from "maplibre-gl";
+import {
+  Map as MapLibreMap,
+  NavigationControl,
+  type ExpressionSpecification,
+  type GeoJSONSource,
+  type StyleSpecification,
+} from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import buffer from "@turf/buffer";
 import centroid from "@turf/centroid";
@@ -22,6 +28,17 @@ import { useSlowLoading } from "@/lib/useSlowLoading";
 
 // 산청군 생비량면 — data/vector/adm_dong_5179.geojson 실측 centroid. 초기 카메라 위치일
 // 뿐, 이제 이 페이지는 검색으로 어디든 이동할 수 있는 범용 3D 지도다(고정 AOI 아님).
+// 2026-08-29: pitch가 높을수록(원래 60) 원근 투영상 지평선까지 훨씬 넓은 면적이
+// 화면에 잡혀 그만큼 더 많은 타일을 한꺼번에 요청하게 된다(§ maxPitch 주석의 실측
+// 참조) — flyTo·fitBounds로 프로그램적으로 카메라를 놓는 모든 곳에서 이 값 하나만
+// 쓰도록 통일해 나중에 조정하기 쉽게 함.
+const DEFAULT_PITCH = 50;
+
+// 2026-08-29: pitch·zoom이 겹치면 위성 래스터 타일 요청이 한꺼번에 수백 개까지
+// 튄다(§ maxPitch 주석) — "동시 요청 수를 줄이면 덜 몰릴 것"이라 예상하고
+// setMaxParallelImageRequests(8)을 넣어 실측했더니 오히려 11.98초로 더 느려졌다
+// (동시성 제한 없이는 3.8~4.5초) — 이 환경에서는 총 타일 수를 줄이는 것(pitch
+// 상한 인하)만 효과가 있고, 동시 요청 수 자체를 조르는 건 역효과라 뺐다.
 const INITIAL_CENTER: [number, number] = [128.0559, 35.3505];
 const INITIAL_BOUNDS: [[number, number], [number, number]] = [
   [128.00826, 35.30385],
@@ -73,6 +90,12 @@ const AOI_TILE_ZOOM = {
   roads: { minzoom: 9, maxzoom: 16 },
   landcover: { minzoom: 8, maxzoom: 15 },
 };
+
+// scripts/fetch_aoi_satellite.py의 ZOOM_MIN/ZOOM_MAX와 반드시 일치해야 함.
+// z17~18은 타일 수가 기하급수적(두 지역 합쳐 9만 개+)이라 z16까지만 미리 받았다 —
+// 래스터 소스는 maxzoom을 넘는 줌에서 마지막 유효 타일을 자동으로 확대해서 쓰기
+// 때문에(§satellite 소스 참고) 그 이상 줌에서도 추가 네트워크 요청 없이 커버된다.
+const AOI_SATELLITE_ZOOM = { minzoom: 6, maxzoom: 16 };
 
 // 환경부 세분류 토지피복도(L2_CODE, 20개 범주 — 산청·서울 데이터에 실제 등장하는
 // 값만) 색상. 위성사진 위에 반투명으로 얹어 농지·산림·시가화 등을 구분하기 위한
@@ -373,11 +396,17 @@ export default function MapExplorer({ route = null, pickOrigin = false, onOrigin
       style: MAP_STYLE,
       center: INITIAL_CENTER,
       zoom: 12.5,
-      pitch: 60,
+      pitch: DEFAULT_PITCH,
       bearing: -20,
       // 85° 근처의 극단적인 pitch는 지형(terrain) 활성화 상태에서 카메라 투영이
-      // 불안정해져 줌 중 "튕기는" 현상의 흔한 원인이라 안전한 값으로 낮춤
-      maxPitch: 70,
+      // 불안정해져 줌 중 "튕기는" 현상의 흔한 원인이라 안전한 값으로 낮춤. 2026-08-29:
+      // 원래 70이었는데, 큰 pitch일수록 화면에 지평선까지 원근 투영되는 면적이 넓어져
+      // MapLibre가 커버해야 할 타일 피라미드가 기하급수적으로 늘어난다(실측: 산청
+      // zoom17에서 pitch60일 때 위성 래스터 타일 224개·idle까지 4.5초, pitch30에선
+      // 18개·idle 2초 — "확대하면 랙 걸리고 건물이 안 보인다"는 사용자 리포트의
+      // 실제 원인). 55로 낮춰 사용자가 수동으로 끝까지 기울여도 그 폭주를 상한선에서
+      // 막는다. 아래 DEFAULT_PITCH(프로그램적 flyTo/fitBounds 기본값)도 같이 낮춤.
+      maxPitch: 55,
       // 이 프로젝트는 대한민국 전용이라 카메라가 그 밖으로 나갈 이유가 없다 — 전세계
       // 뷰에서 오는 렉 방지(위 SOUTH_KOREA_BOUNDS 주석). minZoom은 maxBounds가 이미
       // 자동으로 강제하는 하한과 별개로, 컨테이너 리사이즈 도중에도 항상 그 하한을
@@ -522,15 +551,37 @@ export default function MapExplorer({ route = null, pickOrigin = false, onOrigin
           });
       };
 
-      // 산청·서울 AOI 정적 타일(2026-08-28) — 토지피복 → 하천 → 도로 → 건물 순으로
-      // 쌓는다(토지피복이 제일 아래). 처음엔 전부 숨겨두고, syncAOILayers()가 카메라
-      // 위치를 보고 해당 AOI 것만 켠다. 두 지역 다 아니면 전부 숨긴 채로 기존
-      // 실시간 V-World 레이어(아래)가 그 자리를 대신한다.
+      // 산청·서울 AOI 정적 타일(2026-08-28) — 위성사진 → 토지피복 → 하천 → 도로 →
+      // 건물 순으로 쌓는다(위성이 제일 아래). 처음엔 전부 숨겨두고, syncAOILayers()가
+      // 카메라 위치를 보고 해당 AOI 것만 켠다. 두 지역 다 아니면 전부 숨긴 채로 기존
+      // 실시간 V-World/Esri 레이어(아래)가 그 자리를 대신한다.
       // MapLibre의 타일/geojson-url 요청 내부 경로는 상대경로("/tiles/...")를 바로
       // Request()에 넘겨서 파싱 실패한다(브라우저 fetch와 달리 base URL을 안 붙여줌) —
       // 반드시 origin을 붙인 절대 URL이어야 한다(2026-08-28 실측 확인).
       const origin = window.location.origin;
       for (const region of AOI_KEYS) {
+        // 위성사진(2026-08-29, scripts/fetch_aoi_satellite.py) — pitch·zoom이 겹치면
+        // 라이브 Esri 요청이 한 번에 수백 개까지 튀는 게 원인이었던 확대 랙(§DEFAULT_PITCH
+        // 주석)을 이 두 AOI 안에서는 아예 없앤다. beforeId로 "labels"(지명 텍스트) 바로
+        // 아래에 꽂아서 라벨이 항상 그 위에 그려지게 함 — 다른 레이어들은 addLayer
+        // 기본 동작대로 현재 스택 맨 위에 쌓여도 무방(§순서 코멘트 위 참고).
+        map.addSource(`${region}-satellite-src`, {
+          type: "raster",
+          tiles: [`${origin}/satellite/${region}/{z}/{x}/{y}.jpg`],
+          tileSize: 256,
+          bounds: AOI_BOUNDS[region],
+          ...AOI_SATELLITE_ZOOM,
+        });
+        map.addLayer(
+          {
+            id: `${region}-satellite`,
+            type: "raster",
+            source: `${region}-satellite-src`,
+            layout: { visibility: "none" },
+          },
+          "labels"
+        );
+
         map.addSource(`${region}-landcover-src`, {
           type: "vector",
           tiles: [`${origin}/tiles/${region}-landcover/{z}/{x}/{y}.pbf`],
@@ -623,10 +674,15 @@ export default function MapExplorer({ route = null, pickOrigin = false, onOrigin
       }
 
       // 카메라 중심이 AOI 안으로 들어오면 위 정적 레이어를 켜고 아래 실시간
-      // vworld-* 레이어는 끈다(반대로 나가면 원상복구) — 매 moveend마다 부르지만
-      // AOI가 안 바뀌었으면 아무 것도 안 건드리고 조용히 리턴.
+      // vworld-*/satellite 레이어는 끈다(반대로 나가면 원상복구) — 매 moveend마다
+      // 부르지만 AOI가 안 바뀌었으면 아무 것도 안 건드리고 조용히 리턴.
+      // "satellite"(라이브 Esri)는 여기 안 넣는다 — pitch/bearing 때문에 화면이
+      // AOI 사각 bounds 살짝 밖까지 보일 때(2026-08-29 실측: 산청 초기 뷰 우하단에
+      // 흰/음영 구멍) 그 자리를 채워줄 게 없어진다. 라이브 레이어를 계속 밑에 깔아두고
+      // 캐시된 ${region}-satellite가 그 위를 덮는 쪽이 항상 안전 — AOI 안쪽 대부분은
+      // 로컬 타일이 먼저 그려져 라이브 요청은 화면에 실제로 안 보이는 배경 작업일 뿐이다.
       const LIVE_LAYER_IDS = ["vworld-buildings-3d", "vworld-roads-casing", "vworld-roads", "vworld-roads-tunnel", "vworld-rivers-fill"];
-      const STATIC_LAYER_SUFFIXES = ["landcover-fill", "rivers-fill", "roads-casing", "roads", "roads-tunnel", "buildings-3d"];
+      const STATIC_LAYER_SUFFIXES = ["satellite", "landcover-fill", "rivers-fill", "roads-casing", "roads", "roads-tunnel", "buildings-3d"];
       const syncAOILayers = () => {
         const currentMap = mapRef.current;
         if (!currentMap) return;
@@ -989,7 +1045,7 @@ export default function MapExplorer({ route = null, pickOrigin = false, onOrigin
   }, []);
 
   const flyTo = useCallback((center: [number, number], zoom: number) => {
-    mapRef.current?.flyTo({ center, zoom, pitch: 60, bearing: -20, duration: 2000 });
+    mapRef.current?.flyTo({ center, zoom, pitch: DEFAULT_PITCH, bearing: -20, duration: 2000 });
     setSelectedRegion(null);
   }, []);
 
@@ -1025,7 +1081,7 @@ export default function MapExplorer({ route = null, pickOrigin = false, onOrigin
         [minLon, minLat],
         [maxLon, maxLat],
       ],
-      { padding: 60, bearing: -20, pitch: 60, duration: 1500 }
+      { padding: 60, bearing: -20, pitch: DEFAULT_PITCH, duration: 1500 }
     );
     setSelectedRegion(result);
     setSearchQuery("");
@@ -1078,7 +1134,7 @@ export default function MapExplorer({ route = null, pickOrigin = false, onOrigin
         [Math.min(...lons), Math.min(...lats)],
         [Math.max(...lons), Math.max(...lats)],
       ],
-      { padding: 120, pitch: 60, bearing: -20, duration: 1500 }
+      { padding: 120, pitch: DEFAULT_PITCH, bearing: -20, duration: 1500 }
     );
   }, [mapReady, route]);
 
