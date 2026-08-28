@@ -28,7 +28,7 @@ const OUT_DIR = path.join(UI_DIR, "public", "tiles");
 
 // [소스 파일, 출력 레이어명, {minzoom, maxzoom}] — 건물·토지피복이 용량 문제였던
 // 파일들. 하천은 이미 작아서(<4MB) 타일링 없이 그대로 GeoJSON 소스로 씀.
-const JOBS = [
+const ALL_JOBS = [
   { file: "sancheong_buildings.geojson", layer: "sancheong-buildings", minzoom: 10, maxzoom: 16 },
   { file: "seoul_buildings.geojson", layer: "seoul-buildings", minzoom: 10, maxzoom: 16 },
   { file: "sancheong_roads.geojson", layer: "sancheong-roads", minzoom: 9, maxzoom: 16 },
@@ -36,6 +36,9 @@ const JOBS = [
   { file: "sancheong_landcover.geojson", layer: "sancheong-landcover", minzoom: 8, maxzoom: 15 },
   { file: "seoul_landcover.geojson", layer: "seoul-landcover", minzoom: 8, maxzoom: 15 },
 ];
+// 특정 레이어만 재생성하고 싶을 때: node build_vector_tiles.mjs sancheong-buildings seoul-buildings
+const only = process.argv.slice(2);
+const JOBS = only.length > 0 ? ALL_JOBS.filter((j) => only.includes(j.layer)) : ALL_JOBS;
 
 function lonLatToTile(lon, lat, z) {
   const n = 2 ** z;

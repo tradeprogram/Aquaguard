@@ -170,6 +170,14 @@ def fetch_region_layer(region_key: str, layer_name: str, layer_code: str, tiles:
                 print(f"  [{region_key}/{layer_name}] tile {done_count}/{len(tiles)} done (tile {i}: {n} features)")
 
 
+# api_server.py의 get_vworld_buildings()와 반드시 동일한 값 — 실시간 경로는 여기서
+# height_m을 계산해 붙이는데, 이 배치 스크립트는 V-World GetFeature를 직접 호출해서
+# (api_server.py를 거치지 않음) 그 계산이 빠진 채로 저장됐었다(2026-08-29 발견 —
+# 건물이 전부 fill-extrusion-height=null → 0으로 렌더링돼 "땅에 박혀" 보이던 버그).
+METERS_PER_FLOOR = 3.0
+DEFAULT_BUILDING_HEIGHT_M = 4.0
+
+
 def merge_region_layer(region_key: str, layer_name: str, region_geom) -> dict:
     cache_dir = TILE_CACHE_DIR / region_key / layer_name
     seen: dict[str, dict] = {}
@@ -179,6 +187,16 @@ def merge_region_layer(region_key: str, layer_name: str, region_geom) -> dict:
             key = feat.get("id") or json.dumps(feat.get("properties", {}), sort_keys=True)
             seen[key] = feat
     features = list(seen.values())
+
+    if layer_name == "buildings":
+        for feat in features:
+            props = feat.setdefault("properties", {})
+            try:
+                floors = int(props.get("gro_flo_co") or 0)
+            except ValueError:
+                floors = 0
+            props["height_m"] = floors * METERS_PER_FLOOR if floors > 0 else DEFAULT_BUILDING_HEIGHT_M
+
     print(f"  [{region_key}/{layer_name}] merged {len(features)} unique features")
     return {"type": "FeatureCollection", "features": features}
 
