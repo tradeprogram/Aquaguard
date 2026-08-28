@@ -30,6 +30,10 @@ load_dotenv()  # .env(git-ignore됨)의 VWORLD_API_KEY 등을 os.environ으로 �
 
 DATA_VECTOR_DIR = Path(__file__).resolve().parent / "data" / "vector"
 VWORLD_API_KEY = os.environ.get("VWORLD_API_KEY")
+# Render가 서비스에 자동으로 심어주는 환경변수(공식 문서에 명시된 동작) — V-World
+# WMTS가 이 환경(싱가포르 리전)에서는 항상 502로 실패하는 게 이미 확인됐으므로,
+# 여기서는 그 시도 자체를 건너뛰어 타일당 낭비되는 왕복 시간을 없앤다(아래 참조).
+IS_RENDER = bool(os.environ.get("RENDER"))
 
 app = FastAPI(title="AquaGuard AI — api_server")
 
@@ -294,6 +298,18 @@ ESRI_FALLBACK_MAX_ZOOM_STEPS = 3
 _IMAGERY_CACHE: dict[tuple, bytes] = {}  # 위성타일((z,x,y))·지형타일(("terrain",z,x,y)) 공용
 _IMAGERY_CACHE_MAX_ENTRIES = 4000
 
+# 2026-08-28: 캐시·타임아웃만으로는 부족했다 — 실사용자 브라우저 콘솔에서 확인된 실제
+# 증상은 /vworld/imagery 요청 수백 개가 "CORS 에러"로 실패하고 /vworld/roads·buildings도
+# 502를 내는 것. 진짜 원인은 CORS 설정이 아니라, 지도 패닝 한 번에 캐시 안 된 타일
+# 수십~수백 개가 한꺼번에 몰리면서 각 요청이 순차 HTTP 요청을 여러 번 거치는 무거운
+# 경로(네트워크 I/O)를 동시에 타 Render 무료 인스턴스가 감당 못 하고 응답이 끊기거나
+# 지연되는 것 — 이때 브라우저는 응답에 CORS 헤더가 없다는 이유로 "CORS 에러"라고
+# 표시하지만 실제로는 백엔드가 과부하로 응답을 못 준 것(우리 CORSMiddleware는 정상
+# 응답에는 항상 헤더를 붙인다). 세마포어로 "지금 실제로 네트워크 작업 중인" 타일
+# 요청 개수 자체를 하드 캡 — 나머지는 아주 짧게 대기했다가 처리된다(캐시가 있으니
+# 두 번째 패닝부터는 이 경로를 거의 안 탐).
+_IMAGERY_INFLIGHT_SEMAPHORE = threading.Semaphore(4)
+
 
 def _is_esri_placeholder(content: bytes) -> bool:
     return hashlib.md5(content).hexdigest() == ESRI_PLACEHOLDER_MD5
@@ -373,18 +389,24 @@ def get_vworld_imagery_tile(z: int, x: int, y: int) -> Response:
 
     content: bytes | None = None
     media_type = "image/jpeg"
-    if VWORLD_API_KEY:
-        upstream = f"http://api.vworld.kr/req/wmts/1.0.0/{VWORLD_API_KEY}/Satellite/{z}/{y}/{x}.jpeg"
-        try:
-            resp = requests.get(upstream, timeout=3)
-            if resp.status_code == 200 and resp.headers.get("content-type", "").startswith("image/"):
-                content = resp.content
-                media_type = resp.headers["content-type"]
-        except requests.RequestException:
-            pass  # 폴백으로 진행
+    with _IMAGERY_INFLIGHT_SEMAPHORE:
+        # 캐시 미스가 세마포어 대기 중에 다른 요청으로 채워졌을 수 있으니 한 번 더 확인
+        cached = _IMAGERY_CACHE.get(cache_key)
+        if cached is not None:
+            return Response(content=cached, media_type="image/jpeg", headers={"Cache-Control": "public, max-age=86400"})
 
-    if content is None:
-        content = _fetch_esri_tile_with_zoom_cascade(z, x, y)
+        if VWORLD_API_KEY and not IS_RENDER:
+            upstream = f"http://api.vworld.kr/req/wmts/1.0.0/{VWORLD_API_KEY}/Satellite/{z}/{y}/{x}.jpeg"
+            try:
+                resp = requests.get(upstream, timeout=3)
+                if resp.status_code == 200 and resp.headers.get("content-type", "").startswith("image/"):
+                    content = resp.content
+                    media_type = resp.headers["content-type"]
+            except requests.RequestException:
+                pass  # 폴백으로 진행
+
+        if content is None:
+            content = _fetch_esri_tile_with_zoom_cascade(z, x, y)
 
     if content is None:
         raise HTTPException(status_code=404, detail="imagery tile not available from any source")
