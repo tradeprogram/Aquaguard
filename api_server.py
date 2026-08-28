@@ -274,9 +274,19 @@ def get_vworld_imagery_tile(z: int, x: int, y: int) -> Response:
     if not VWORLD_API_KEY:
         raise HTTPException(status_code=503, detail="VWORLD_API_KEY not configured (.env)")
     upstream = f"http://api.vworld.kr/req/wmts/1.0.0/{VWORLD_API_KEY}/Satellite/{z}/{y}/{x}.jpeg"
-    resp = requests.get(upstream, timeout=10)
+    try:
+        resp = requests.get(upstream, timeout=10)
+    except requests.RequestException as e:
+        # 2026-08-28: 배포 환경(Render, region=singapore)에서 502가 나던 원인 진단용 —
+        # 로컬(curl)에서는 같은 호출이 항상 성공해서 원인이 코드가 아니라 네트워크
+        # 경로(리전별 아웃바운드 차단/타임아웃)일 가능성이 높다고 보고 우선 원인이
+        # 드러나게 detail을 남긴다. 확인되면 이 detail은 다시 좁혀도 됨.
+        raise HTTPException(status_code=502, detail=f"vworld imagery upstream request failed: {e}")
     if resp.status_code != 200 or resp.headers.get("content-type", "").startswith("application/xml"):
-        raise HTTPException(status_code=404, detail="vworld imagery tile not available")
+        raise HTTPException(
+            status_code=404,
+            detail=f"vworld imagery tile not available (upstream status={resp.status_code}, type={resp.headers.get('content-type')})",
+        )
     return Response(content=resp.content, media_type="image/jpeg", headers={"Cache-Control": "public, max-age=86400"})
 
 
