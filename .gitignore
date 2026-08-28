@@ -10,3 +10,9 @@ build/
 .env.local
 *.log
 .DS_Store
+
+# 산청·서울 AOI 원본 데이터(scripts/fetch_aoi_data.py 산출물, 총 ~900MB) — 실제
+# 서빙되는 건 ui/public/tiles/(벡터타일)와 ui/public/aoi/(하천 geojson)뿐이라
+# 이 원본·타일 캐시는 git에 안 올린다. 재생성: python scripts/fetch_aoi_data.py
+data/precomputed/*.geojson
+data/precomputed/_tile_cache/

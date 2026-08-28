@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Map as MapLibreMap, NavigationControl, type GeoJSONSource, type StyleSpecification } from "maplibre-gl";
+import { Map as MapLibreMap, NavigationControl, type ExpressionSpecification, type GeoJSONSource, type StyleSpecification } from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import buffer from "@turf/buffer";
 import centroid from "@turf/centroid";
@@ -42,6 +42,65 @@ const INITIAL_BOUNDS: [[number, number], [number, number]] = [
 const SOUTH_KOREA_BOUNDS: [[number, number], [number, number]] = [
   [124.4, 32.9],
   [132.0, 38.8],
+];
+
+// 산청·서울 AOI 정적 벡터타일(2026-08-28, scripts/fetch_aoi_data.py +
+// ui/scripts/build_vector_tiles.mjs) — 실시간 V-World 뷰포트 쿼리는 10km² 한도
+// 때문에 패닝할 때마다 데이터가 깜빡이는 근본적 한계가 있다(§ vworld-rivers 주석).
+// 이 두 지역은 "피해규모 재현"의 데모 AOI라 신뢰성이 최우선이므로, 아예 통째로
+// 미리 받아 정적 파일로 박아두고 실시간 API 의존성 자체를 없앤다. 경계는 손으로
+// 어림한 게 아니라 실제 행정경계(data/vector/adm_sigungu_5179.geojson·
+// adm_sido_5179.geojson)를 4326으로 재투영한 total_bounds.
+const AOI_KEYS = ["sancheong", "seoul"] as const;
+type AOIKey = (typeof AOI_KEYS)[number];
+const AOI_BOUNDS: Record<AOIKey, [number, number, number, number]> = {
+  sancheong: [127.688782, 35.219031, 128.114735, 35.576211],
+  seoul: [126.764484, 37.428985, 127.183795, 37.701455],
+};
+
+function getActiveAOI(lng: number, lat: number): AOIKey | null {
+  for (const key of AOI_KEYS) {
+    const [minLon, minLat, maxLon, maxLat] = AOI_BOUNDS[key];
+    if (lng >= minLon && lng <= maxLon && lat >= minLat && lat <= maxLat) return key;
+  }
+  return null;
+}
+
+// build_vector_tiles.mjs의 JOBS 배열과 반드시 일치해야 하는 값(z 범위가 다르면
+// 없는 타일을 요청하게 됨).
+const AOI_TILE_ZOOM = {
+  buildings: { minzoom: 10, maxzoom: 16 },
+  roads: { minzoom: 9, maxzoom: 16 },
+  landcover: { minzoom: 8, maxzoom: 15 },
+};
+
+// 환경부 세분류 토지피복도(L2_CODE, 20개 범주 — 산청·서울 데이터에 실제 등장하는
+// 값만) 색상. 위성사진 위에 반투명으로 얹어 농지·산림·시가화 등을 구분하기 위한
+// 용도라(§2026-08-28 사용자 요청) 채도를 낮춰 텍스처를 완전히 가리지 않게 했다.
+const LANDCOVER_FILL_COLOR: ExpressionSpecification = [
+  "match",
+  ["get", "L2_CODE"],
+  "110", "#c98a7d", // 주거지역
+  "120", "#a56a63", // 공업지역
+  "130", "#c9736a", // 상업지역
+  "140", "#d9a79c", // 문화·체육·휴양지역
+  "150", "#8a8a8a", // 교통지역
+  "160", "#9c9088", // 공공시설지역
+  "210", "#d7d192", // 논
+  "220", "#c2a35c", // 밭
+  "230", "#b8c9a0", // 시설재배지(비닐하우스)
+  "240", "#9caf6b", // 과수원
+  "250", "#c7b57a", // 기타재배지
+  "310", "#4f7a3d", // 활엽수림
+  "320", "#2f5233", // 침엽수림
+  "330", "#3f6b34", // 혼효림
+  "410", "#a8c66c", // 자연초지
+  "420", "#c3d69b", // 인공초지
+  "510", "#7a9e9f", // 내륙습지
+  "610", "#d9cba3", // 자연나지
+  "620", "#c9c2b0", // 인공나지
+  "710", "#2ab7c9", // 내륙수
+  "#94a3b8", // 그 외
 ];
 
 // 지형(raster-dem)은 스타일 JSON에 선언하지 않고 'load' 이후 명령형으로 추가한다 — 아래 참조.
@@ -291,6 +350,9 @@ export default function MapExplorer({ route = null, pickOrigin = false, onOrigin
   const mapRef = useRef<MapLibreMap | null>(null);
   const simUpdateRef = useRef<((debrisM: number, floodM: number) => void) | null>(null);
   const highlightUpdateRef = useRef<((code: string | null) => void) | null>(null);
+  // 현재 카메라 중심이 산청·서울 AOI 안인지 — 안이면 정적 타일을 보여주고 실시간
+  // V-World fetch는 건너뛴다(아래 syncAOILayers/updateVWorld* 참조).
+  const aoiRef = useRef<AOIKey | null>(null);
 
   const [mapReady, setMapReady] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
@@ -460,6 +522,130 @@ export default function MapExplorer({ route = null, pickOrigin = false, onOrigin
           });
       };
 
+      // 산청·서울 AOI 정적 타일(2026-08-28) — 토지피복 → 하천 → 도로 → 건물 순으로
+      // 쌓는다(토지피복이 제일 아래). 처음엔 전부 숨겨두고, syncAOILayers()가 카메라
+      // 위치를 보고 해당 AOI 것만 켠다. 두 지역 다 아니면 전부 숨긴 채로 기존
+      // 실시간 V-World 레이어(아래)가 그 자리를 대신한다.
+      // MapLibre의 타일/geojson-url 요청 내부 경로는 상대경로("/tiles/...")를 바로
+      // Request()에 넘겨서 파싱 실패한다(브라우저 fetch와 달리 base URL을 안 붙여줌) —
+      // 반드시 origin을 붙인 절대 URL이어야 한다(2026-08-28 실측 확인).
+      const origin = window.location.origin;
+      for (const region of AOI_KEYS) {
+        map.addSource(`${region}-landcover-src`, {
+          type: "vector",
+          tiles: [`${origin}/tiles/${region}-landcover/{z}/{x}/{y}.pbf`],
+          bounds: AOI_BOUNDS[region],
+          ...AOI_TILE_ZOOM.landcover,
+        });
+        map.addLayer({
+          id: `${region}-landcover-fill`,
+          type: "fill",
+          source: `${region}-landcover-src`,
+          "source-layer": `${region}-landcover`,
+          layout: { visibility: "none" },
+          paint: {
+            "fill-color": LANDCOVER_FILL_COLOR,
+            // 멀리서는 뚜렷하게, 건물 단위로 확대할수록(§AOI_TILE_ZOOM.buildings.minzoom
+            // 근방) 옅어져 3D 건물·도로 판독을 방해하지 않게 함
+            "fill-opacity": ["interpolate", ["linear"], ["zoom"], 10, 0.55, 13, 0.5, 16, 0.15],
+          },
+        });
+
+        // 하천은 이미 완전히 받아둔 소량 데이터(2~4MB)라 타일링 없이 그대로 GeoJSON —
+        // vworld-rivers처럼 뷰포트마다 누적할 필요 없이 처음부터 전체가 다 있다.
+        map.addSource(`${region}-rivers-src`, { type: "geojson", data: `${origin}/aoi/${region}_rivers.geojson` });
+        map.addLayer({
+          id: `${region}-rivers-fill`,
+          type: "fill",
+          source: `${region}-rivers-src`,
+          layout: { visibility: "none" },
+          paint: { "fill-color": "#0e9aa7", "fill-opacity": 0.75 },
+        });
+
+        map.addSource(`${region}-roads-src`, {
+          type: "vector",
+          tiles: [`${origin}/tiles/${region}-roads/{z}/{x}/{y}.pbf`],
+          bounds: AOI_BOUNDS[region],
+          ...AOI_TILE_ZOOM.roads,
+        });
+        map.addLayer({
+          id: `${region}-roads-casing`,
+          type: "line",
+          source: `${region}-roads-src`,
+          "source-layer": `${region}-roads`,
+          layout: { "line-cap": "round", "line-join": "round", visibility: "none" },
+          paint: {
+            "line-color": "#1e293b",
+            "line-width": ["match", ["get", "rd_rank_h"], "특별·광역시도", 7, "일반국도", 6, 4],
+          },
+        });
+        map.addLayer({
+          id: `${region}-roads`,
+          type: "line",
+          source: `${region}-roads-src`,
+          "source-layer": `${region}-roads`,
+          filter: ["!=", ["get", "rd_type_h"], "터널"],
+          layout: { "line-cap": "round", "line-join": "round", visibility: "none" },
+          paint: {
+            "line-color": ["match", ["get", "rd_rank_h"], "특별·광역시도", "#f59e0b", "일반국도", "#fbbf24", "#e2e8f0"],
+            "line-width": ["match", ["get", "rd_rank_h"], "특별·광역시도", 5, "일반국도", 4, 2.5],
+          },
+        });
+        map.addLayer({
+          id: `${region}-roads-tunnel`,
+          type: "line",
+          source: `${region}-roads-src`,
+          "source-layer": `${region}-roads`,
+          filter: ["==", ["get", "rd_type_h"], "터널"],
+          layout: { "line-cap": "round", "line-join": "round", visibility: "none" },
+          paint: { "line-color": "#94a3b8", "line-dasharray": [2, 2], "line-width": 3, "line-opacity": 0.5 },
+        });
+
+        map.addSource(`${region}-buildings-src`, {
+          type: "vector",
+          tiles: [`${origin}/tiles/${region}-buildings/{z}/{x}/{y}.pbf`],
+          bounds: AOI_BOUNDS[region],
+          ...AOI_TILE_ZOOM.buildings,
+        });
+        map.addLayer({
+          id: `${region}-buildings-3d`,
+          type: "fill-extrusion",
+          source: `${region}-buildings-src`,
+          "source-layer": `${region}-buildings`,
+          layout: { visibility: "none" },
+          paint: {
+            "fill-extrusion-color": "#c9c3b3",
+            "fill-extrusion-height": ["get", "height_m"],
+            "fill-extrusion-base": 0,
+            "fill-extrusion-opacity": 0.9,
+          },
+        });
+      }
+
+      // 카메라 중심이 AOI 안으로 들어오면 위 정적 레이어를 켜고 아래 실시간
+      // vworld-* 레이어는 끈다(반대로 나가면 원상복구) — 매 moveend마다 부르지만
+      // AOI가 안 바뀌었으면 아무 것도 안 건드리고 조용히 리턴.
+      const LIVE_LAYER_IDS = ["vworld-buildings-3d", "vworld-roads-casing", "vworld-roads", "vworld-roads-tunnel", "vworld-rivers-fill"];
+      const STATIC_LAYER_SUFFIXES = ["landcover-fill", "rivers-fill", "roads-casing", "roads", "roads-tunnel", "buildings-3d"];
+      const syncAOILayers = () => {
+        const currentMap = mapRef.current;
+        if (!currentMap) return;
+        const center = currentMap.getCenter();
+        const aoi = getActiveAOI(center.lng, center.lat);
+        if (aoi === aoiRef.current) return;
+        aoiRef.current = aoi;
+        for (const region of AOI_KEYS) {
+          const visible = aoi === region;
+          for (const suffix of STATIC_LAYER_SUFFIXES) {
+            currentMap.setLayoutProperty(`${region}-${suffix}`, "visibility", visible ? "visible" : "none");
+          }
+        }
+        const liveVisibility = aoi ? "none" : "visible";
+        for (const id of LIVE_LAYER_IDS) {
+          currentMap.setLayoutProperty(id, "visibility", liveVisibility);
+        }
+      };
+
       // VWorld 실폭하천(2026-08-28 신규) — 지금까지 지도에 하천이 아예 안 그려져
       // 있었다. 건물·도로보다 먼저 추가해 그 아래(땅 표면)에 깔리게 한다.
       // 색상은 실제 저수지에 가깝게 하늘색과 청록 사이 톤으로.
@@ -481,6 +667,9 @@ export default function MapExplorer({ route = null, pickOrigin = false, onOrigin
       const updateVWorldRivers = () => {
         const currentMap = mapRef.current;
         if (!currentMap) return;
+        // 산청·서울 AOI 안에서는 위의 정적 하천 GeoJSON이 이미 전체를 다 갖고 있으니
+        // 실시간 fetch 자체를 건너뛴다(쿼터 절약 + 깜빡임 걱정 원천 차단).
+        if (aoiRef.current) return;
         const b = currentMap.getBounds();
         getVWorldRivers([b.getWest(), b.getSouth(), b.getEast(), b.getNorth()])
           .then((fc) => {
@@ -520,6 +709,9 @@ export default function MapExplorer({ route = null, pickOrigin = false, onOrigin
       const updateVWorldBuildings = () => {
         const currentMap = mapRef.current;
         if (!currentMap) return;
+        // 산청·서울 AOI 안에서는 정적 벡터타일(위 ${region}-buildings-3d)이 대신하므로
+        // 실시간 fetch를 건너뛴다.
+        if (aoiRef.current) return;
         // 건물 압출은 어차피 minzoom 13 근처에서만 의미가 있고, VWorld 쿼터도 아껴야
         // 하니 많이 줌아웃된 상태에서는 요청하지 않는다.
         if (currentMap.getZoom() < 13) return;
@@ -619,12 +811,19 @@ export default function MapExplorer({ route = null, pickOrigin = false, onOrigin
         const currentMap = mapRef.current;
         if (!currentMap) return;
         if (currentMap.getZoom() < 11) return;
+        // AOI 안에서도 계속 fetch는 한다 — 정적 도로 타일엔 교량 데크가 없어서
+        // (geojson-vt로 자른 타일 경계 때문에 LineString을 안정적으로 재조립하기
+        // 까다로움) 교량만큼은 여전히 이 실시간 결과로 만든다. 대신 메인 도로
+        // 라인(vworld-roads 소스)은 AOI 안이면 정적 타일이 이미 그리고 있으니
+        // 중복으로 덮어쓰지 않는다.
         const b = currentMap.getBounds();
         getVWorldRoads([b.getWest(), b.getSouth(), b.getEast(), b.getNorth()])
           .then((fc) => {
             const liveMap = mapRef.current;
             if (!liveMap) return;
-            (liveMap.getSource("vworld-roads") as GeoJSONSource | undefined)?.setData(fc);
+            if (!aoiRef.current) {
+              (liveMap.getSource("vworld-roads") as GeoJSONSource | undefined)?.setData(fc);
+            }
 
             // rd_type_h에 교량/고가차도가 명시돼 있어 OSM의 brunnel 태그보다 신뢰도
             // 높게 판별 가능 — 두 종류 다 지면에서 띄운 데크로 그린다.
@@ -645,6 +844,7 @@ export default function MapExplorer({ route = null, pickOrigin = false, onOrigin
             } as FeatureCollection);
           })
           .catch(() => {
+            if (aoiRef.current) return; // AOI 안은 정적 도로 타일이 이미 신뢰성 있게 커버 — OSM 폴백 불필요
             // 실패 시 OSM 폴백 도로 레이어를 보여주고, 교량도 OSM brunnel 태그로 대체
             const liveMap = mapRef.current;
             for (const id of ["roads-osm", "roads-casing-osm", "roads-tunnel-osm"]) {
@@ -654,6 +854,7 @@ export default function MapExplorer({ route = null, pickOrigin = false, onOrigin
           });
       };
 
+      syncAOILayers();
       updateBoundaries();
       updateVWorldRivers();
       updateVWorldBuildings();
@@ -662,6 +863,7 @@ export default function MapExplorer({ route = null, pickOrigin = false, onOrigin
       map.on("moveend", () => {
         clearTimeout(moveendTimer);
         moveendTimer = setTimeout(() => {
+          syncAOILayers();
           updateBoundaries();
           updateVWorldRivers();
           updateVWorldBuildings();
