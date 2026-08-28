@@ -47,7 +47,7 @@ class TriggerRequest(BaseModel):
     alert_id: str
     trigger_location: dict[str, float]
     timestamp: str
-    auto_approve_timeout_min: int = 15
+    escalation_timeout_min: int = 15
     safety_margin_hours: float = 0.5
 
 
@@ -70,11 +70,15 @@ def get_alert(alert_id: str) -> dict:
     if alert is None:
         raise HTTPException(status_code=404, detail="alert not found")
     envelope = dict(alert.envelope)
-    envelope["data"] = {**envelope["data"], "approval_status": alert.resolve_status()}
-    # 계약(§4.2)의 4개 필드 밖에 붙는 부가 메타 — UI의 승인 타임아웃 카운트다운용
+    envelope["data"] = {
+        **envelope["data"],
+        "approval_status": alert.resolve_status(),
+        "escalation_level": alert.escalation_level,
+    }
+    # 계약(§4.2)의 4개 필드 밖에 붙는 부가 메타 — UI의 escalation 카운트다운용
     envelope["meta"] = {
         "created_at": alert.created_at.isoformat(),
-        "auto_approve_timeout_min": alert.auto_approve_timeout_min,
+        "escalation_timeout_min": alert.escalation_timeout_min,
     }
     return envelope
 
@@ -88,6 +92,7 @@ def approve_alert(alert_id: str, req: ApproveRequest) -> dict:
     return {
         "alert_id": alert.alert_id,
         "approval_status": alert.resolve_status(),
+        "escalation_level": alert.escalation_level,
         "approver_id": alert.approver_id,
     }
 

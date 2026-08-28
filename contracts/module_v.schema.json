@@ -1,0 +1,60 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "module_v_validation",
+  "type": "object",
+  "properties": {
+    "input": {
+      "type": "object",
+      "required": ["alert_id", "predicted", "observed"],
+      "properties": {
+        "alert_id": { "type": "string" },
+        "predicted": {
+          "type": "object",
+          "required": ["source_module", "geometry_5179"],
+          "properties": {
+            "source_module": { "type": "string", "enum": ["A", "B"] },
+            "geometry_5179": { "type": "object" }
+          }
+        },
+        "observed": {
+          "type": "object",
+          "required": ["type", "geometry_5179", "acquisition_timestamp", "source"],
+          "properties": {
+            "type": { "type": "string", "enum": ["sentinel1_sar_change", "landslide_inventory", "river_gauge"] },
+            "geometry_5179": { "type": "object" },
+            "acquisition_timestamp": { "type": "string", "format": "date-time" },
+            "source": { "type": "string" }
+          }
+        }
+      }
+    },
+    "output": {
+      "type": "object",
+      "required": ["status", "fallback_tier", "data", "warnings"],
+      "properties": {
+        "status": { "type": "string", "enum": ["ok", "degraded", "error"] },
+        "fallback_tier": { "type": "integer", "enum": [1, 2, 3] },
+        "data": {
+          "type": "object",
+          "required": ["iou", "f1", "precision", "recall", "confusion_geometry_5179", "lead_time_min"],
+          "properties": {
+            "iou": { "type": "number", "minimum": 0, "maximum": 1 },
+            "f1": { "type": "number", "minimum": 0, "maximum": 1 },
+            "precision": { "type": "number", "minimum": 0, "maximum": 1 },
+            "recall": { "type": "number", "minimum": 0, "maximum": 1 },
+            "confusion_geometry_5179": {
+              "type": "object",
+              "properties": {
+                "true_positive": { "type": "object" },
+                "false_positive": { "type": "object" },
+                "false_negative": { "type": "object" }
+              }
+            },
+            "lead_time_min": { "type": ["number", "null"] }
+          }
+        },
+        "warnings": { "type": "array", "items": { "type": "string" } }
+      }
+    }
+  }
+}

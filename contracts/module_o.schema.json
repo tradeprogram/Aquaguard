@@ -5,7 +5,7 @@
   "properties": {
     "input": {
       "type": "object",
-      "required": ["alert_id", "trigger_location", "timestamp", "auto_approve_timeout_min", "safety_margin_hours"],
+      "required": ["alert_id", "trigger_location", "timestamp", "escalation_timeout_min", "safety_margin_hours"],
       "properties": {
         "alert_id": { "type": "string" },
         "trigger_location": {
@@ -14,7 +14,7 @@
           "properties": { "x_5179": { "type": "number" }, "y_5179": { "type": "number" } }
         },
         "timestamp": { "type": "string", "format": "date-time" },
-        "auto_approve_timeout_min": { "type": "integer" },
+        "escalation_timeout_min": { "type": "integer" },
         "safety_margin_hours": { "type": "number" }
       }
     },
@@ -26,7 +26,7 @@
         "fallback_tier": { "type": "integer", "enum": [1, 2, 3] },
         "data": {
           "type": "object",
-          "required": ["timeline_actual", "timeline_agent", "golden_time_saved_min", "approval_status", "citizen_verification", "alert_package"],
+          "required": ["timeline_actual", "timeline_agent", "golden_time_saved_min", "approval_status", "escalation_level", "citizen_verification", "alert_package"],
           "properties": {
             "timeline_actual": {
               "type": "object",
@@ -44,7 +44,8 @@
               }
             },
             "golden_time_saved_min": { "type": "number" },
-            "approval_status": { "type": "string", "enum": ["대기", "승인", "거부", "자동승인(timeout)"] },
+            "approval_status": { "type": "string", "enum": ["대기", "승인", "거부", "권고중(escalation)"] },
+            "escalation_level": { "type": "integer", "minimum": 0 },
             "citizen_verification": {
               "type": "object",
               "properties": {

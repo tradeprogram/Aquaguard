@@ -24,7 +24,7 @@ def test_run_matches_contract_shape():
     assert envelope["warnings"] == []
 
     data = envelope["data"]
-    for key in ("timeline_actual", "timeline_agent", "golden_time_saved_min", "approval_status", "citizen_verification", "alert_package"):
+    for key in ("timeline_actual", "timeline_agent", "golden_time_saved_min", "approval_status", "escalation_level", "citizen_verification", "alert_package"):
         assert key in data
     assert data["approval_status"] == "대기"
     for key in ("landslide", "flood", "shelter_route", "damage_cost"):
@@ -56,32 +56,51 @@ def test_manual_approval_overrides_pending():
     envelope = {
         "data": {"citizen_verification": {"verification_status": "미확인", "confidence_adjustment": 0}}
     }
-    store.add(Alert(alert_id="X1", created_at=now, auto_approve_timeout_min=15, envelope=envelope))
+    store.add(Alert(alert_id="X1", created_at=now, escalation_timeout_min=15, envelope=envelope))
 
     result = store.approve("X1", "거부", approver_id="tester")
     assert result.approval_status == "거부"
     assert result.resolve_status() == "거부"
 
 
-def test_auto_approve_after_timeout():
+def test_escalation_after_timeout_does_not_auto_approve():
+    """2026-08-29: 무응답 시 자동승인은 삭제됐다 — 타임아웃이 지나도 상태는 "승인"이
+    아니라 "권고중(escalation)"으로만 바뀐다(§5 Module O). 시스템이 대피명령을 독자
+    발령하는 경로가 없다는 걸 코드 레벨로 보증하는 테스트."""
     store = AlertStore()
     past = datetime.now(timezone(timedelta(hours=9))) - timedelta(minutes=20)
     envelope = {
         "data": {"citizen_verification": {"verification_status": "미확인", "confidence_adjustment": 0}}
     }
-    store.add(Alert(alert_id="X2", created_at=past, auto_approve_timeout_min=15, envelope=envelope))
+    store.add(Alert(alert_id="X2", created_at=past, escalation_timeout_min=15, envelope=envelope))
 
     alert = store.get("X2")
-    assert alert.resolve_status() == "자동승인(timeout)"
+    assert alert.resolve_status() == "권고중(escalation)"
+    assert alert.escalation_level >= 1
 
 
-def test_no_auto_approve_when_false_positive():
+def test_human_can_still_approve_after_escalation():
+    """escalation은 판단을 가로채지 않는다 — 타임아웃이 지난 뒤에도 담당자가 승인/거부할 수 있어야 한다."""
+    store = AlertStore()
+    past = datetime.now(timezone(timedelta(hours=9))) - timedelta(minutes=20)
+    envelope = {
+        "data": {"citizen_verification": {"verification_status": "미확인", "confidence_adjustment": 0}}
+    }
+    store.add(Alert(alert_id="X4", created_at=past, escalation_timeout_min=15, envelope=envelope))
+    store.get("X4").resolve_status()  # escalation 상태로 전이시킴
+
+    result = store.approve("X4", "승인", approver_id="tester")
+    assert result.approval_status == "승인"
+    assert result.resolve_status() == "승인"
+
+
+def test_no_escalation_when_false_positive():
     store = AlertStore()
     past = datetime.now(timezone(timedelta(hours=9))) - timedelta(minutes=20)
     envelope = {
         "data": {"citizen_verification": {"verification_status": "오탐판정", "confidence_adjustment": -0.2}}
     }
-    store.add(Alert(alert_id="X3", created_at=past, auto_approve_timeout_min=15, envelope=envelope))
+    store.add(Alert(alert_id="X3", created_at=past, escalation_timeout_min=15, envelope=envelope))
 
     alert = store.get("X3")
     assert alert.resolve_status() == "대기"

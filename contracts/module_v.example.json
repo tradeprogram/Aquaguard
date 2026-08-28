@@ -1,0 +1,32 @@
+{
+  "input": {
+    "alert_id": "AL-20250719-0915",
+    "predicted": {
+      "source_module": "A",
+      "geometry_5179": { "type": "FeatureCollection", "features": [] }
+    },
+    "observed": {
+      "type": "sentinel1_sar_change",
+      "geometry_5179": { "type": "FeatureCollection", "features": [] },
+      "acquisition_timestamp": "2025-07-20T01:32:00+09:00",
+      "source": "Copernicus Sentinel-1"
+    }
+  },
+  "output": {
+    "status": "ok",
+    "fallback_tier": 1,
+    "data": {
+      "iou": 0.58,
+      "f1": 0.71,
+      "precision": 0.74,
+      "recall": 0.69,
+      "confusion_geometry_5179": {
+        "true_positive": { "type": "FeatureCollection", "features": [] },
+        "false_positive": { "type": "FeatureCollection", "features": [] },
+        "false_negative": { "type": "FeatureCollection", "features": [] }
+      },
+      "lead_time_min": 195
+    },
+    "warnings": []
+  }
+}

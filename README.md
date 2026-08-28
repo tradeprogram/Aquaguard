@@ -203,6 +203,8 @@ decay(Δt): Δt<2년 → 1.0(감쇠없음) / Δt≥2년 → NDVI 회복곡선 �
 
 `hours_to_critical`은 "골든타임"을 실제 숫자로 만드는 핵심 필드 — LDAPS 예보 시계열(1시간 스텝)로 `landslide_prob`을 계산해 임계치(예: 0.7)를 처음 넘는 시점까지의 시간. 예보 구간 내내 안 넘으면 `null`. 폴백: InSAR+실측강수 → 지형+실측강수 → LDAPS 예보모드(CI 확대, `source:"forecast"`).
 
+> **방법론 확정(2026-08-29)**: `landslide_prob`은 순수 ML이 아니라 Infinite Slope 기반 FoS(안전율, TRIGRS 원리)를 먼저 계산한 값이어야 한다 — 전문은 [ARCHITECTURE.md §5 Module A](ARCHITECTURE.md#module-a--산사태-예측-module_a_landslide), 왜 그래야 하는지는 [§15](ARCHITECTURE.md#15-심층-경쟁기술-리서치-반영-2026-08-29).
+
 ### Module B — 하천범람 예측 (`module_b_flood`)
 
 ```jsonc
@@ -215,6 +217,12 @@ decay(Δt): Δt<2년 → 1.0(감쇠없음) / Δt≥2년 → NDVI 회복곡선 �
 ```
 
 폴백: 실측강수+수위+SAR → 실측강수+SAR → 실측강수만(CI 확대).
+
+> **방법론 확정(2026-08-29)**: 자체 shallow-water solver를 새로 짜지 않는다 — **SFINCS**(1순위, HydroMT-SFINCS로 모델 구축 자동화) 또는 **ANUGA**(대체)를 통합. 전문은 [ARCHITECTURE.md §5 Module B](ARCHITECTURE.md#module-b--하천범람-예측-module_b_flood).
+
+### Module V — 검증 엔진 (`module_v_validation`) — 신규(2026-08-29, 트랙①)
+
+Sentinel-1 SAR(또는 실측 landslide inventory)와 Module A/B의 예측 polygon을 자동으로 겹쳐 IoU/F1/Recall/lead_time을 계산한다. AquaGuard가 조사된 경쟁 시스템(FloodAdapt·SynxFlow·iHydroSlide3D 등) 대비 가장 강하게 내세울 수 있는 단일 기능 — Module A/B와 **동급 우선순위**. `observed`(사건 이후 취득 레이어)를 `predicted` 입력에 절대 섞지 않는 data leakage 금지 원칙이 핵심. 전체 계약·지표 선택 원칙은 [ARCHITECTURE.md §5 Module V](ARCHITECTURE.md#module-v--검증-엔진-module_v_validation--신규2026-08-29-심층-경쟁기술-리서치-반영).
 
 ### Module C — 도로·지하차도 침수 (`module_c_urban_rule`, 규칙기반·모델 아님)
 
@@ -296,11 +304,13 @@ UI 표기 시 신뢰도 배지를 A/B와 다르게(모델 아님을 명시).
 
 **역할**: A/B/C를 임계치로 감시 → 초과 시 D/E/G 순차 호출 → H로 시민 역검증 트리거 → 경보 패키지 생성 → 전파.
 
-**상태머신 7단계**(시민 모드): 관측 → 예측 → 1차권고 → 시민 역검증(H, 병렬) → 경보격상 → 주민전파 → 개별대피. **관공서 모드**에서는 1차권고와 경보격상 사이에 원클릭 승인 단계가 추가된다(담당자가 승인/보류하지 않으면 `auto_approve_timeout_min` 후 자동승인).
+**상태머신 7단계**(시민 모드): 관측 → 예측 → 1차권고 → 시민 역검증(H, 병렬) → 경보격상 → 주민전파 → 개별대피. **관공서 모드**에서는 1차권고와 경보격상 사이에 원클릭 승인 단계가 추가된다.
 
 **시간예산**: `time_budget_hours = A/B의 hours_to_critical − 안전여유(기본 0.5h)` → Module E에 전달. 경보 패키지에 Module E의 `time_feasible`/`fallback_used` 반드시 포함.
 
-> **2026-08-28 변경**: 지자체 담당자 승인 게이트("원클릭 승인")는 **시민 모드에서만** 뺐다 — 일반 시민이 재난 중에 관 승인을 기다릴 이유가 없어서다. 대신 **관공서 모드**(§2 "시민 모드 vs 관공서 모드")로 재배치해 그대로 살아있다: `approval_status`/`POST /approve/{alert_id}`(`ApprovePanel.tsx`)가 관공서 모드 메뉴에 "원클릭 승인"으로 노출된다. 시민 모드에서는 시민 역검증(Module H)이 신뢰도를 보강하면 승인 대기 없이 곧바로 경보격상·주민전파로 넘어가고, 관공서 모드로 전환하면 담당자가 그 판단을 버튼 하나로 승인/보류할 수 있다 — 삭제가 아니라 청중별 노출 범위 조정.
+> **2026-08-28 변경**: 지자체 담당자 승인 게이트("원클릭 승인")는 **시민 모드에서만** 뺐다 — 일반 시민이 재난 중에 관 승인을 기다릴 이유가 없어서다. 대신 **관공서 모드**(§2 "시민 모드 vs 관공서 모드")로 재배치해 그대로 살아있다.
+>
+> **2026-08-29 변경 — 자동승인 완전 삭제, escalation으로 교체**: 관공서 모드에서 담당자 무응답 시 `auto_approve_timeout_min` 경과 후 시스템이 자동 승인 처리하던 로직을 없앴다. 심층 경쟁기술 리서치가 가장 강하게 지적한 위험이 이 지점이다 — 생명안전 관련 공공 의사결정에서 "무응답 시 자동승인"은 혁신성이 아니라 책임성 공격을 정면으로 받는다. `15분 무응답 → 긴급 재알림 → 상위 담당자 escalation → 승인 전 recommendation 상태 유지 → 시스템은 어떤 경우에도 공식 대피명령을 독자 발령하지 않음`으로 교체(전문: [ARCHITECTURE.md §5 Module O](ARCHITECTURE.md#module-o--골든타임-오케스트레이션-module_o_orchestrator)). 시민 모드는 원래부터 승인 게이트가 없다는 점은 그대로 — 시민 역검증(Module H)이 신뢰도를 보강하면 곧바로 경보격상·주민전파로 넘어간다.
 
 ```jsonc
 // output (data)
@@ -308,7 +318,8 @@ UI 표기 시 신뢰도 배지를 A/B와 다르게(모델 아님을 명시).
     "warning_escalated": "2025-07-19T12:37:00+09:00" },
   "timeline_agent": { "detected": "2025-07-19T09:15:00+09:00", "alert_sent": "2025-07-19T09:20:00+09:00" },
   "golden_time_saved_min": 197,
-  "approval_status": "자동승인(timeout)",
+  "approval_status": "권고중(escalation)", // "권고중"|"권고중(escalation)"|"승인됨"|"보류" — 자동승인 값 없음(2026-08-29)
+  "escalation_level": 1,
   "citizen_verification": { "verification_status": "현장확인", "confidence_adjustment": 0.12 },
   "alert_package": { "landslide": {}, "flood": {}, "shelter_route": {}, "damage_cost": {} } }
 ```
@@ -330,6 +341,7 @@ UI 표기 시 신뢰도 배지를 A/B와 다르게(모델 아님을 명시).
 - `source: "observed" | "forecast"`를 A/B 출력에 필수 포함, forecast는 CI를 더 넓게
 - InSAR는 coherence 확보 지점만 표시, 나머지는 "관측 불가" 명시
 - Module C는 신뢰도 배지를 A/B와 다르게(모델 아님을 명확히)
+- **(신규, 2026-08-29) Provenance 4단계 배지** — 모든 화면 요소는 `OBSERVED`(실측)/`FORECAST`(외부 예보)/`MODEL`(우리 모델 계산)/`ASSUMPTION`(What-if 가정값) 중 하나를 반드시 표시한다. 계약 변경 없이 UI 레이어(트랙③)에서만 구현 — 전문은 [ARCHITECTURE.md §6.1](ARCHITECTURE.md#61-provenance-4단계-배지-2026-08-29-신규-심층-경쟁기술-리서치-반영)
 
 | 모듈 | 1순위 | 2순위 | 3순위 |
 |------|-------|-------|-------|
@@ -379,21 +391,21 @@ api_server.py                  # FastAPI, 전 모듈 import
 
 | 트랙 | 담당 | 소유 모듈 | 핵심 산출물 |
 |------|------|-----------|-------------|
-| ① 예측모델·위성 | 김민석 | A, B | 데이터 파이프라인(6~9월), `f(dNBR,Δt)`, LDAPS 편차보정, 신뢰구간 |
+| ① 예측모델·위성·검증 | 김민석 | A, B, **V(신규)** | Infinite Slope/FoS 기반 산사태 polygon(TRIGRS 원리), SFINCS/ANUGA 기반 홍수 polygon, **Sentinel-1 predicted-vs-observed 자동 검증(Module V, A/B와 동급 우선순위)**, `f(dNBR,Δt)`, LDAPS 편차보정, 신뢰구간 |
 | ② 대응로직·데이터통합 | 나정우 | C, D, G, H | 도로침수 규칙엔진, 노출자산 오버레이, 피해비용, 시민 역검증 (Module E는 ④로 이관) |
-| ③ 오케스트레이션·UI·3D | 하수범 | O, UI, UI-3D | 상태머신·경보 전파, 대시보드, MapLibre+VWorld 3D 지도(건물/도로/교량 실데이터, 토사·침수 시뮬레이터) — **대부분 완성**, 이후 통합·데모 총괄 |
+| ③ 오케스트레이션·UI·3D | 하수범 | O, UI, UI-3D | 상태머신·경보 전파, 대시보드, MapLibre+VWorld 3D 지도(건물/도로/교량 실데이터, 토사·침수 시뮬레이터), **자동승인 삭제→escalation 교체**, **Provenance 4단계 배지**, Module V 결과 predicted/observed 오버레이 — 이후 통합·데모 총괄 |
 | ④ 대피경로·고립분석 (신규) | 동현 | E (확장판) | 네이버/카카오 길찾기로 대피소 도달가능성, 도로망 그래프 기반 고립마을 자동탐지 — **독창성 축 4** |
 
-담당자가 바뀌어도 이 표와 §5~6(+ [HANDOFF.md](HANDOFF.md) §6·§7) 계약만 유지되면 재구성 가능. **Module E가 트랙②→④로 이관된 이유**: 네이버/카카오 API 연동 + 그래프 분석이 더해지면서 독립 서브시스템 규모로 커졌기 때문(상세: [HANDOFF.md §6·§7](HANDOFF.md)).
+담당자가 바뀌어도 이 표와 §5~6(+ [HANDOFF.md](HANDOFF.md) §6·§7) 계약만 유지되면 재구성 가능. **Module E가 트랙②→④로 이관된 이유**: 네이버/카카오 API 연동 + 그래프 분석이 더해지면서 독립 서브시스템 규모로 커졌기 때문(상세: [HANDOFF.md §6·§7](HANDOFF.md)). **Module V가 신규 트랙①로 배정된 이유**: 위성 데이터가 이미 트랙①의 스코프이고, A/B output을 가장 잘 아는 사람이 검증도 짜는 게 자연스럽다 — 상세: [ARCHITECTURE.md §15](ARCHITECTURE.md#15-심층-경쟁기술-리서치-반영-2026-08-29).
 
 ## 11. 2주 로드맵 (4인 체제 갱신판)
 
-| 구간 | ① 예측모델(김민석) | ② 대응로직(나정우) | ③ 오케스트레이션/UI(하수범) | ④ 대피경로·고립분석(동현) |
+| 구간 | ① 예측모델·검증(김민석) | ② 대응로직(나정우) | ③ 오케스트레이션/UI(하수범) | ④ 대피경로·고립분석(동현) |
 |------|-----------|-----------|---------------------|---------------------|
-| Day 1 | 넷이 §5~6(+§6·§7 HANDOFF) 리뷰, `contracts/` 확정 → 각자 착수 | 〃 | 〃 | 〃 + 카카오/네이버 API 키 본인 발급 |
-| Day 2-5 | 500m/1.5km/10m 파이프라인, Module A 베이스라인(목업 InSAR) | Module C 규칙엔진, Module D(A/B example.json 입력), Module H 뼈대 | Module O mock→real 스위치 점검, UI 안정화, 트랙 지원 | 대피경로 뼈대(손 대피소 후보 + 직선거리 근사) → 키 받으면 실연동 |
-| Day 6-9 | A/B 실데이터 학습·검증, 신뢰구간 산출·공유 | 실제 A/B output으로 D 전환, Module H를 precursor_flag와 실연동 | 트랙①②④ output 순차 실연동, 통합 테스트 | 고립마을 자동탐지(`networkx`, 기존 `/vworld/roads` 재사용) |
-| Day 10-12 | 산청 백테스트로 `golden_time_saved_min` 산출 | 산청 대피소/경로 실사례 검증 | §9 데모 풀 리허설, 3D 지도 폴리싱, `api_server.py` 최종 통합 | 대피경로·고립탐지 UI를 Module O/3D 지도에 연결(하수범과 Day 10 전후 협업) |
+| Day 1 | 넷이 §5~6(+§6·§7 HANDOFF) 리뷰, `contracts/` 확정(신규 `module_v.*` 포함) → 각자 착수. 산청 backtest용 실제 데이터 확보 가능한지 점검 | 〃 | 〃 + 자동승인 삭제→escalation 교체(간단해서 Day 1에 끝내는 게 좋음) | 〃 + 카카오/네이버 API 키 본인 발급 |
+| Day 2-5 | 500m/1.5km/10m 파이프라인, Module A는 Infinite Slope/FoS baseline(목업 InSAR), Module B는 SFINCS/HydroMT-SFINCS 셋업(안 되면 ANUGA) — **Module V 뼈대도 병행 착수**(mock output으로 IoU/F1 로직 먼저 개발 가능) | Module C 규칙엔진, Module D(A/B example.json 입력), Module H 뼈대 | Module O mock→real 스위치 점검, Provenance 4단계 배지 UI, UI 안정화, 트랙 지원 | 대피경로 뼈대(손 대피소 후보 + 직선거리 근사) → 키 받으면 실연동 |
+| Day 6-9 | A/B 실데이터 학습·검증, 신뢰구간 산출·공유. **Module V를 실제 Sentinel-1(또는 실측 inventory)로 전환** | 실제 A/B output으로 D 전환, Module H를 precursor_flag와 실연동 | 트랙①②④ output 순차 실연동, **Module V predicted/observed 오버레이 UI**, 통합 테스트 | 고립마을 자동탐지(`networkx`, 기존 `/vworld/roads` 재사용) |
+| Day 10-12 | 산청 leakage-free 백테스트로 `golden_time_saved_min` 산출, Module V 지표 확정, 서울 out-of-sample 착수 여부 결정 | 산청 대피소/경로 실사례 검증 | §9 데모(검증화면 포함) 풀 리허설, 3D 지도 폴리싱, `api_server.py` 최종 통합 | 대피경로·고립탐지 UI를 Module O/3D 지도에 연결(하수범과 Day 10 전후 협업) |
 | Day 13-14 | 전원: 발표자료·기획서, 최종 리허설, 예상 질의응답 준비 | 〃 | 〃 | 〃 |
 
 ## 12. 남은 TODO
@@ -404,9 +416,11 @@ api_server.py                  # FastAPI, 전 모듈 import
 4. Module A/B 베이스라인 학습 (2019-2025 중 6~9월만 + 산사태정보시스템 라벨) — 강우/무강우 비율 확인 후 필요시 연중 확장 재검토
 5. V-World 3D/지형 API 커버리지 확인(상능마을 AOI)
 6. Module H 푸시 알림 채널 결정(문자/앱푸시/카톡 알림톡 — 데모는 웹 대시보드 시뮬레이션 대체 가능)
-7. 원클릭 승인 `auto_approve_timeout_min` 기본값 조정 — 관공서 모드 전용 기능으로 유지 중(2026-08-28, §2 "시민 모드 vs 관공서 모드")
-8. Module O `input` 스키마(위 §6 참고사항) 3인 합의로 확정
+7. ~~원클릭 승인 `auto_approve_timeout_min` 기본값 조정~~ → **2026-08-29 변경**: 자동승인 완전 삭제, escalation으로 교체(트랙③ 최우선, 상세는 [ARCHITECTURE.md §5 Module O](ARCHITECTURE.md#module-o--골든타임-오케스트레이션-module_o_orchestrator))
+8. Module O `input` 스키마(위 §6 참고사항) 4인 합의로 확정
 9. Module E — 네이버/카카오 길찾기 API 연동으로 대피 경로 실구현 (최우선, 상세 명세는 [HANDOFF.md §6](HANDOFF.md))
+10. `contracts/module_v.schema.json`/`module_v.example.json` 생성 및 4인 확정(신규, Module V)
+11. Module V leakage-free backtest용 실데이터(산청 실제 산사태 polygon·시간별 강우·도로통제·대피정보) 확보 가능 여부 Day 1~2에 점검 — 확보 안 되면 백테스트 사례 재검토
 
 ---
 
@@ -416,9 +430,9 @@ api_server.py                  # FastAPI, 전 모듈 import
 
 > 이 저장소의 README.md(또는 ARCHITECTURE.md)를 읽어라 — 배경(재해연쇄+골든타임 격차, 산청 사건)부터 반드시 이해한 뒤 §5~6(통합 규약·모듈 계약)으로 넘어가라. 다른 트랙의 내부 구현은 몰라도 된다 — 오직 `contracts/`의 example.json/schema.json이 네 모듈의 입출력 계약 전부다. Day 1엔 나머지 세 세션과 함께 `contracts/`를 먼저 확정하라.
 
-- **트랙①**: `module_a_landslide`, `module_b_flood`. **2026-08-28 추가**: 실제 학습 후엔 AUC/ROC·정밀도재현율·혼동행렬·산청/서울 사례별 시계열 예측값을 남길 것(트랙③이 받을 UI는 이미 완성 — `ModelPerformancePanel.tsx`), 실시간 강수·수위 데이터 연동도 검토 — 상세는 **[HANDOFF.md §8](HANDOFF.md)**. 특히 **산청 leakage-free 백테스트**(§9.3)가 이 프로젝트 전체에서 가장 중요한 단일 과제로 확정됨 — 반드시 먼저 읽을 것
+- **트랙①**: `module_a_landslide`, `module_b_flood`, **`module_v_validation`(신규, 2026-08-29)**. **방법론 필수**: Module A는 Infinite Slope/FoS(TRIGRS 원리)를 먼저 계산, ML은 그 위에 보정용으로만. Module B는 SFINCS(1순위, HydroMT-SFINCS)/ANUGA(대체) 통합 — 자체 solver 금지. **Module V는 A/B와 동급 우선순위**: Sentinel-1 predicted-vs-observed 자동 검증(IoU/F1/Recall), data leakage 절대 금지. 전문은 **[ARCHITECTURE.md §5 Module A/B/V, §15](ARCHITECTURE.md)**. **2026-08-28 추가**: 실제 학습 후엔 AUC/ROC·정밀도재현율·혼동행렬·산청/서울 사례별 시계열 예측값을 남길 것(트랙③이 받을 UI는 이미 완성 — `ModelPerformancePanel.tsx`), 실시간 강수·수위 데이터 연동도 검토 — 상세는 **[HANDOFF.md §8](HANDOFF.md)**. 특히 **산청 leakage-free 백테스트**(§9.3)가 이 프로젝트 전체에서 가장 중요한 단일 과제로 확정됨 — 반드시 먼저 읽을 것
 - **트랙②**: `module_c_urban_rule`, `module_d_exposure_overlay`, `module_g_damage_cost`, `module_h_citizen_verification` — D/G/H는 `contracts/module_a.example.json`, `module_b.example.json`을 목업 삼아 트랙①을 기다리지 않고 개발. **`module_e_routing`은 더 이상 이 트랙 소유가 아님 — 트랙④ 참조.**
-- **트랙③**: `module_o_orchestrator`, `ui/`(대시보드+채팅+경보 전파+3D) — **대부분 이미 완성돼 있음**, 먼저 읽고 실행해볼 것. A~H를 전부 `contracts/`의 example.json으로 목업 호출하는 파이프라인부터 굴려보고 실제 모듈로 하나씩 교체. 화면은 시민 모드/관공서 모드로 분리돼 있고(2026-08-28, §2), 원클릭 승인은 관공서 모드 메뉴에 이미 연결돼 있음 — 추가 작업 불필요
+- **트랙③**: `module_o_orchestrator`, `ui/`(대시보드+채팅+경보 전파+3D) — **대부분 이미 완성돼 있음**, 먼저 읽고 실행해볼 것. A~H를 전부 `contracts/`의 example.json으로 목업 호출하는 파이프라인부터 굴려보고 실제 모듈로 하나씩 교체. 화면은 시민 모드/관공서 모드로 분리돼 있고(2026-08-28, §2), 원클릭 승인은 관공서 모드 메뉴에 이미 연결돼 있음. **최우선 신규 작업(2026-08-29)**: ① 자동승인 완전 삭제→escalation 교체(Day 1에 끝낼 것, 전문 [ARCHITECTURE.md §5 Module O](ARCHITECTURE.md)) ② Provenance 4단계 배지(OBSERVED/FORECAST/MODEL/ASSUMPTION, §7 참조) ③ Module V의 predicted/observed/TP-FP-FN 오버레이 화면 — 발표에서 3D 자유회전보다 비중이 커야 함
 - **트랙④ (신규)**: `module_e_routing`(확장판) — 네이버/카카오 길찾기 API로 대피 경로, 도로망 그래프로 고립마을 자동탐지. 상세 명세는 **[HANDOFF.md §6·§7](HANDOFF.md)을 그대로 따를 것** — 외부 API 키는 본인이 직접 발급받아야 함(계정 생성은 Claude Code가 대신 못 함)
 
 ---
@@ -473,7 +487,9 @@ USGS Postfire debris-flow hazards · 경향신문(2025.4) 대형 산불 이후 �
 
 1. **개발 리소스 배분을 새 기능:검증 = 20:80으로 전환.** 예선에서 가장 싸게 살 수 있는 점수는 모델 정확도가 아니라 활용성+협력성의 빈 24점.
 2. **핵심 메시지 교체**: "위험지도가 아니라 재난 의사결정 체인" (§2 포지셔닝 문장 참조). 강우 기반 산사태 위험, 산불피해지 반영, 실시간 침수 GIS, 대피소 검색은 전부 이미 존재하는 기술이다(산림청·USGS·공모전 내 FloodingPoint 선례) — **아쿠아가드의 실제 독창점은 개별 위험 신호가 아니라, 그걸 도로단절→고립→담당자 의사결정→골든타임 회복까지 하나로 잇고 실측 검증한다는 것.**
-3. **가장 위험한 심사질문**에 미리 답을 준비해둘 것 — "예측이 실제로 맞습니까?"(→ 산청 hold-out 백테스트), "산림청도 산불피해지 반영하는데 뭐가 다르죠?"(→ 예측이 아니라 downstream 의사결정 체인이라는 비교도), "화재지역과 7월 산사태 위치가 실제로 겹칩니까?"(→ burn scar × landslide inventory 공간교차 검증 필요, 미검증), "이 화면 숫자는 실제인가요 데모인가요?"(→ 모든 화면에 REAL/MODEL/SIMULATION 표시 필요). "공무원이 진짜 자동 발령하나요?"(→ 리서치 원안의 human-in-the-loop·원클릭 승인·audit log 답이 **2026-08-28부로 다시 유효하다** — 삭제된 게 아니라 관공서 모드로 재배치됐다: 시민 모드는 승인 없이 자동 경보격상, 관공서 모드는 담당자가 원클릭 승인/보류하는 human-in-the-loop 그대로. "왜 시민 모드는 승인이 없나?"로 재질문이 오면 시민 역검증(Module H) 신뢰도 임계치로 답).
+3. **가장 위험한 심사질문**에 미리 답을 준비해둘 것 — "예측이 실제로 맞습니까?"(→ 산청 hold-out 백테스트 + Module V predicted-vs-observed 화면), "산림청도 산불피해지 반영하는데 뭐가 다르죠?"(→ 예측이 아니라 downstream 의사결정 체인이라는 비교도), "화재지역과 7월 산사태 위치가 실제로 겹칩니까?"(→ burn scar × landslide inventory 공간교차 검증 필요, 미검증), "이 화면 숫자는 실제인가요 데모인가요?"(→ Provenance 4단계 배지, §7 참조). **"공무원이 진짜 자동 발령하나요? 담당자가 무응답이면 자동승인되는 게 더 위험하지 않나요?"**(→ **2026-08-29 재수정**: 관공서 모드의 자동승인을 완전히 삭제하고 escalation으로 교체했다 — 무응답 시 자동 승인이 아니라 상위 담당자에게 재알림·escalation만 되고, 시스템은 어떤 경우에도 공식 대피명령을 독자 발령하지 않는다. 이전 버전(2026-08-28)은 "관공서 모드로 재배치했으니 human-in-the-loop이 유효하다"고 방어했는데, 심층 리서치가 재검토한 결과 **자동승인 자체가 방어 불가능한 리스크**라 이제는 아예 없다. 시민 모드는 원래부터 승인 게이트가 없고 시민 역검증(Module H) 신뢰도 임계치로 경보격상하는 구조 그대로).
+
+상세 근거는 [ARCHITECTURE.md §15 — 심층 경쟁기술 리서치 반영](ARCHITECTURE.md#15-심층-경쟁기술-리서치-반영-2026-08-29)(2026-08-29, 이 §15 리서치의 후속·심화판 — 원본 PDF는 [`docs/2026-08-29_경쟁기술_심층분석.pdf`](docs/2026-08-29_경쟁기술_심층분석.pdf))에 있다. 결론은 동일(위험지도가 아니라 재난 의사결정 체인)하지만, 이번 리서치는 그 위에 구체적 엔진 선택(SFINCS/Infinite Slope-FoS), 신규 Validation Engine(Module V), 심사위원 공격질문표까지 못박았다 — Module A/B/O의 §5~6 계약과 §11 팀 구성에 이미 반영 완료.
 4. **비중을 낮출 기능**: 챗봇/LLM 고도화, 과한 3D 효과, 피해금액 상세 계산, 검증 전 시민신고 역검증·InSAR 전조, 지하차도 세부 엔진, 모바일 최적화, 전국 모든 재난 확장. 이미 만든 건 유지하되 발표 비중은 최소화.
 5. **최우선 단일 과제**: 산청 2025 leakage-free 백테스트 + Module A 실제 baseline 연결 — 상세 방법론은 [HANDOFF.md §9](HANDOFF.md).
 

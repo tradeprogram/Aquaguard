@@ -8,6 +8,7 @@
 ## 주의
 - **Day 1 이후 이 폴더의 필드를 바꿀 때는 4인 합의 필수** (문서 §4.3, 원문은 3인 기준이지만 팀이 4인으로 늘어났으니 전원 합의로 해석). 한쪽에서 조용히 바꾸면 다른 트랙들이 깨진다.
 - **`module_e.example.json`/`module_e.schema.json` 소유자가 트랙②(나정우)→트랙④(동현)로 바뀌었다.** 네이버/카카오 길찾기 API + 고립마을 탐지가 더해지면서 필드 확장이 필요할 것(차량/도보 이동수단 분리 등) — 제안 스키마는 [HANDOFF.md §6.6](../HANDOFF.md)에 있으나 **아직 이 폴더에 반영 안 됨**, 실제로 바꾸기 전에 4인 합의부터.
+- **`module_v.example.json`/`module_v.schema.json`은 신규(2026-08-29, 심층 경쟁기술 리서치 반영)** — 소유 트랙①(김민석). Sentinel-1 predicted-vs-observed 검증 엔진, 상세는 [ARCHITECTURE.md §5 Module V](../ARCHITECTURE.md).
 - 좌표는 전부 `EPSG:5179`(미터). 4326(GeoJSON 표준)으로의 재투영은 Module UI/UI-3D 출력 직전에만 수행 (문서 §4.1).
-- `module_o.example.json`의 `input` 필드(`alert_id`/`trigger_location`/`timestamp`/`auto_approve_timeout_min`/`safety_margin_hours`)는 문서 §5에 명시적 예시가 없어 §5 본문 서술(상태머신·시간예산 계산·`auto_approve_timeout_min` 언급)을 근거로 트랙③이 추론한 값이다 — Day 1 리뷰 때 3인이 함께 확정할 것.
+- `module_o.example.json`의 `input` 필드(`alert_id`/`trigger_location`/`timestamp`/`escalation_timeout_min`/`safety_margin_hours`)는 문서 §5에 명시적 예시가 없어 §5 본문 서술(상태머신·시간예산 계산)을 근거로 트랙③이 추론한 값이다 — Day 1 리뷰 때 4인이 함께 확정할 것. **`auto_approve_timeout_min`이었던 필드명은 2026-08-29부로 `escalation_timeout_min`으로 바뀌었다** — 자동승인 로직 자체를 삭제하고 escalation(상위 담당자 재알림)으로 교체했기 때문(§5 Module O 참조). `approval_status`의 가능한 값에서도 `"자동승인(timeout)"`이 빠지고 `"권고중(escalation)"` + 신규 `escalation_level` 필드가 추가됐다.
 - Module O의 `POST /approve/{alert_id}` 요청 바디는 `module_o.example.json`의 `approve_endpoint`에 별도로 정리해뒀다 (output data와는 별개 엔드포인트).

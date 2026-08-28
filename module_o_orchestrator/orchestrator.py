@@ -59,7 +59,7 @@ def run(input: dict[str, Any]) -> dict[str, Any]:  # noqa: A002 - §4.2 규약�
     alert_id: str = input["alert_id"]
     trigger_location: dict[str, float] = input["trigger_location"]
     timestamp = datetime.fromisoformat(input["timestamp"])
-    auto_approve_timeout_min: int = input.get("auto_approve_timeout_min", 15)
+    escalation_timeout_min: int = input.get("escalation_timeout_min", 15)
     safety_margin_hours: float = input.get("safety_margin_hours", 0.5)
     # 실제 모드에서 A/B가 필요로 하는 static/dynamic 관측값 — 목업 모드에서는 무시됨.
     # TODO(§10): 실제 연동 시 Module O가 이 값을 어디서 가져올지(별도 데이터 접근 계층) 정의 필요.
@@ -153,6 +153,7 @@ def run(input: dict[str, Any]) -> dict[str, Any]:  # noqa: A002 - §4.2 규약�
         },
         "golden_time_saved_min": round(golden_time_saved_min, 1),
         "approval_status": "대기",
+        "escalation_level": 0,
         "citizen_verification": {
             "verification_status": citizen["verification_status"],
             "confidence_adjustment": citizen["confidence_adjustment"],
@@ -174,11 +175,12 @@ def run(input: dict[str, Any]) -> dict[str, Any]:  # noqa: A002 - §4.2 규약�
             Alert(
                 alert_id=alert_id,
                 created_at=datetime.now(timestamp.tzinfo),
-                auto_approve_timeout_min=auto_approve_timeout_min,
+                escalation_timeout_min=escalation_timeout_min,
                 envelope=envelope,
                 trigger_input=input,
             )
         )
         envelope["data"]["approval_status"] = alert_store.get(alert_id).resolve_status()
+        envelope["data"]["escalation_level"] = alert_store.get(alert_id).escalation_level
 
     return envelope

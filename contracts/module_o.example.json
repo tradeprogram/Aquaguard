@@ -3,7 +3,7 @@
     "alert_id": "AL-20250719-0915",
     "trigger_location": { "x_5179": 1090452.3, "y_5179": 1662188.7 },
     "timestamp": "2025-07-19T08:00:00+09:00",
-    "auto_approve_timeout_min": 15,
+    "escalation_timeout_min": 15,
     "safety_margin_hours": 0.5
   },
   "output": {
@@ -20,7 +20,8 @@
         "alert_sent": "2025-07-19T09:20:00+09:00"
       },
       "golden_time_saved_min": 197,
-      "approval_status": "자동승인(timeout)",
+      "approval_status": "권고중(escalation)",
+      "escalation_level": 1,
       "citizen_verification": {
         "verification_status": "현장확인",
         "confidence_adjustment": 0.12

@@ -6,7 +6,7 @@ export interface TriggerInput {
   alert_id: string;
   trigger_location: { x_5179: number; y_5179: number };
   timestamp: string;
-  auto_approve_timeout_min?: number;
+  escalation_timeout_min?: number;
   safety_margin_hours?: number;
 }
 
@@ -18,7 +18,7 @@ export const SANGCHEONG_DEMO_INPUT: TriggerInput = {
   alert_id: "AL-20250719-0915",
   trigger_location: { x_5179: 1050511.5, y_5179: 1706245.2 },
   timestamp: "2025-07-19T08:00:00+09:00",
-  auto_approve_timeout_min: 15,
+  escalation_timeout_min: 15,
   safety_margin_hours: 0.5,
 };
 
@@ -105,7 +105,7 @@ export async function approveAlert(
   alertId: string,
   decision: "승인" | "거부",
   approverId: string
-): Promise<{ alert_id: string; approval_status: string; approver_id: string }> {
+): Promise<{ alert_id: string; approval_status: string; escalation_level: number; approver_id: string }> {
   const res = await fetch(`${API_BASE}/approve/${alertId}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },

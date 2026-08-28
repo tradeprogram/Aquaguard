@@ -11,7 +11,9 @@ export interface TimelineAgent {
   alert_sent: string;
 }
 
-export type ApprovalStatus = "대기" | "승인" | "거부" | "자동승인(timeout)";
+// 2026-08-29: 무응답 시 자동승인 로직을 삭제하고 escalation으로 교체(§5 Module O) —
+// "자동승인(timeout)" 값은 더 이상 나오지 않는다. 시스템은 대피명령을 독자 발령하지 않는다.
+export type ApprovalStatus = "대기" | "승인" | "거부" | "권고중(escalation)";
 export type VerificationStatus = "미확인" | "현장확인" | "오탐판정";
 
 export interface LandslideData {
@@ -93,6 +95,7 @@ export interface ModuleOData {
   timeline_agent: TimelineAgent;
   golden_time_saved_min: number;
   approval_status: ApprovalStatus;
+  escalation_level: number;
   citizen_verification: {
     verification_status: VerificationStatus;
     confidence_adjustment: number;
@@ -109,7 +112,7 @@ export interface Envelope<T> {
 
 export interface AlertMeta {
   created_at: string;
-  auto_approve_timeout_min: number;
+  escalation_timeout_min: number;
 }
 
 export type ModuleOEnvelope = Envelope<ModuleOData> & { meta?: AlertMeta };

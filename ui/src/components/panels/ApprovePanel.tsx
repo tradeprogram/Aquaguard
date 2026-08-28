@@ -55,7 +55,7 @@ export default function ApprovePanel({ alertId = SANGCHEONG_DEMO_INPUT.alert_id 
     return () => clearInterval(id);
   }, [refresh]);
 
-  const remainingSec = useCountdown(envelope?.meta?.created_at, envelope?.meta?.auto_approve_timeout_min);
+  const remainingSec = useCountdown(envelope?.meta?.created_at, envelope?.meta?.escalation_timeout_min);
 
   async function decide(decision: "승인" | "거부") {
     setSubmitting(true);
@@ -71,7 +71,11 @@ export default function ApprovePanel({ alertId = SANGCHEONG_DEMO_INPUT.alert_id 
 
   const data = envelope?.data;
   const alertPackage = data?.alert_package;
-  const pending = data?.approval_status === "대기";
+  // 2026-08-29: 자동승인 삭제 — "권고중(escalation)"도 여전히 사람의 승인/거부를
+  // 기다리는 미확정 상태다(§5 Module O). 확정 상태는 "승인"/"거부"뿐이라 버튼도
+  // escalation 중에는 계속 눌러야 한다.
+  const escalated = data?.approval_status === "권고중(escalation)";
+  const pending = data?.approval_status === "대기" || escalated;
   const timedOut = remainingSec === 0;
 
   return (
@@ -95,20 +99,23 @@ export default function ApprovePanel({ alertId = SANGCHEONG_DEMO_INPUT.alert_id 
         <>
           <div
             className={`rounded-xl border p-5 text-center ${
-              pending
-                ? timedOut
-                  ? "border-red-800/50 bg-red-950/30"
-                  : "border-amber-800/50 bg-amber-950/30"
-                : "border-emerald-800/50 bg-emerald-950/30"
+              escalated
+                ? "border-red-800/50 bg-red-950/30"
+                : pending
+                  ? "border-amber-800/50 bg-amber-950/30"
+                  : "border-emerald-800/50 bg-emerald-950/30"
             }`}
           >
             <p className="text-xs opacity-80">현재 상태</p>
             <p className="mt-1 text-2xl font-bold">{data.approval_status}</p>
-            {pending && remainingSec !== null && (
+            {data.approval_status === "대기" && remainingSec !== null && !timedOut && (
               <p className="mt-2 text-xs">
-                {timedOut
-                  ? "타임아웃 도달 — 다음 조회 시 자동승인으로 전환됩니다"
-                  : `${Math.floor(remainingSec / 60)}분 ${remainingSec % 60}초 안에 응답하지 않으면 자동승인됩니다`}
+                {`${Math.floor(remainingSec / 60)}분 ${remainingSec % 60}초 안에 응답하지 않으면 상위 담당자에게 긴급 재알림(escalation)됩니다`}
+              </p>
+            )}
+            {escalated && (
+              <p className="mt-2 text-xs text-red-300">
+                {`무응답으로 상위 담당자에게 ${data.escalation_level}차 긴급 재알림됨 — 시스템은 대피명령을 독자 발령하지 않습니다. 계속 승인/거부 대기 중`}
               </p>
             )}
           </div>
