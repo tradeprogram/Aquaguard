@@ -6,6 +6,8 @@ MODULE_PACKAGES를 통해 그대로 실제 모듈로 교체된다.
 """
 from __future__ import annotations
 
+import hashlib
+import io
 import json
 import os
 from pathlib import Path
@@ -16,6 +18,7 @@ import requests
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
+from PIL import Image
 from pydantic import BaseModel
 
 from module_o_orchestrator import geo
@@ -261,11 +264,50 @@ def get_terrain_tile(z: int, x: int, y: int) -> Response:
 ESRI_IMAGERY_TILE_URL = (
     "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
 )
+# Esri는 커버리지가 없는 위치·줌에서도 에러가 아니라 HTTP 200으로 이 고정 회색
+# "Image Not Available" 플레이스홀더 타일을 돌려준다(2026-08-28, 산청 등 3개
+# 서로 다른 좌표에서 동일 MD5로 확인) — 그래서 상태코드만으로는 실패를 못 걸러낸다.
+ESRI_PLACEHOLDER_MD5 = "f27d9de7f80c13501f470595e327aa6d"
+ESRI_FALLBACK_MAX_ZOOM_STEPS = 4
+
+
+def _is_esri_placeholder(content: bytes) -> bool:
+    return hashlib.md5(content).hexdigest() == ESRI_PLACEHOLDER_MD5
+
+
+def _fetch_esri_tile_with_zoom_cascade(z: int, x: int, y: int) -> bytes | None:
+    """Esri가 요청한 줌에서 플레이스홀더만 줄 때, 상위(더 낮은) 줌의 부모 타일을
+    받아와 우리 타일이 속한 사분면만 잘라 256×256으로 확대해 대신 쓴다 — 실제
+    지도 서비스들이 커버리지 없는 영역에서 흔히 쓰는 방식과 같다. 해상도는
+    떨어지지만(줌 한 단계당 절반씩) 최소한 화면이 회색으로 비지는 않는다.
+    """
+    for step in range(ESRI_FALLBACK_MAX_ZOOM_STEPS + 1):
+        zz = z - step
+        if zz < 0:
+            return None
+        xx, yy = x >> step, y >> step
+        try:
+            resp = requests.get(ESRI_IMAGERY_TILE_URL.format(z=zz, x=xx, y=yy), timeout=8)
+        except requests.RequestException:
+            continue
+        if resp.status_code != 200 or _is_esri_placeholder(resp.content):
+            continue
+        if step == 0:
+            return resp.content
+        # 부모 타일 256×256 중 우리 타일이 차지하는 사분면만 잘라 다시 256×256으로 확대
+        sub = 256 // (2**step)
+        ox, oy = (x % (2**step)) * sub, (y % (2**step)) * sub
+        img = Image.open(io.BytesIO(resp.content)).convert("RGB")
+        cropped = img.crop((ox, oy, ox + sub, oy + sub)).resize((256, 256), Image.LANCZOS)
+        buf = io.BytesIO()
+        cropped.save(buf, format="JPEG", quality=85)
+        return buf.getvalue()
+    return None
 
 
 @app.get("/vworld/imagery/{z}/{x}/{y}.jpeg")
 def get_vworld_imagery_tile(z: int, x: int, y: int) -> Response:
-    """V-World WMTS 위성영상(Satellite 레이어) 프록시, Esri 폴백 포함.
+    """V-World WMTS 위성영상(Satellite 레이어) 프록시, Esri 줌 캐스케이드 폴백 포함.
 
     V-World WMTS RESTful 주소는 level/tiley/tilex 순서(일반적인 z/x/y가 아님)임에
     주의 — 이 서명의 매개변수 순서({z}/{x}/{y})는 프론트(표준 XYZ 스킴)와 맞추고,
@@ -275,10 +317,11 @@ def get_vworld_imagery_tile(z: int, x: int, y: int) -> Response:
     에서는 매 타일이 502(V-World 자체가 text/html로 응답)로 실패하는 게 진단으로
     확인됨 — 같은 서버에서 V-World Data API(건물·도로, /vworld/roads·buildings)는
     정상 동작하므로 도메인 전체 차단이 아니라 WMTS 타일 서비스만 리전별로 막혀있는
-    것으로 보인다(원인 불명, V-World 쪽 문제로 우리가 고칠 수 없음). 그래서 V-World가
-    실패하면 원래 쓰던 Esri World Imagery로 자동 폴백 — 로컬 개발은 V-World의 더 나은
-    국내 해상도를 그대로 누리고, 배포 환경은 (예전처럼 Esri의 드문드문한 "이미지 없음"
-    지역이 있더라도) 최소한 지도가 완전히 비어 보이는 것보다는 낫다.
+    것으로 보인다(원인 불명, V-World 쪽 문제로 우리가 고칠 수 없음). V-World가
+    실패하면 Esri로 폴백하는데, Esri도 산간지역 고줌에서는 커버리지가 없어 회색
+    플레이스홀더만 주므로(위 _fetch_esri_tile_with_zoom_cascade 참조) 그 경우
+    낮은 줌의 실제 이미지를 잘라 확대해서 대신 쓴다 — 로컬 개발은 V-World의 더
+    나은 국내 해상도를 그대로 누리고, 배포 환경도 더 이상 회색 화면이 아니다.
     """
     if VWORLD_API_KEY:
         upstream = f"http://api.vworld.kr/req/wmts/1.0.0/{VWORLD_API_KEY}/Satellite/{z}/{y}/{x}.jpeg"
@@ -293,14 +336,10 @@ def get_vworld_imagery_tile(z: int, x: int, y: int) -> Response:
         except requests.RequestException:
             pass  # 폴백으로 진행
 
-    fallback_resp = requests.get(ESRI_IMAGERY_TILE_URL.format(z=z, x=x, y=y), timeout=10)
-    if fallback_resp.status_code != 200:
-        raise HTTPException(status_code=404, detail="imagery tile not available from either source")
-    return Response(
-        content=fallback_resp.content,
-        media_type=fallback_resp.headers.get("content-type", "image/jpeg"),
-        headers={"Cache-Control": "public, max-age=86400"},
-    )
+    content = _fetch_esri_tile_with_zoom_cascade(z, x, y)
+    if content is None:
+        raise HTTPException(status_code=404, detail="imagery tile not available from any source")
+    return Response(content=content, media_type="image/jpeg", headers={"Cache-Control": "public, max-age=86400"})
 
 
 VWORLD_BUILDING_LAYER = "LT_C_SPBD"  # 건물통합정보(국토교통부) — 브이월드 Data API 2.0
