@@ -52,6 +52,13 @@ const SOUTH_KOREA_BOUNDS: [[number, number], [number, number]] = [
 // api_server.py의 _IMAGERY_CACHE 주석 §연혁 참조). Esri는 산간지역 등 일부 위치에서
 // "Image Not Available" 회색 타일을 반환하는 단점이 있지만, 그 정도가 백엔드 전체가
 // 불안정해지는 것보다는 훨씬 낫다 — 직결이 훨씬 빠르고 안정적이다.
+//
+// maxzoom을 19가 아니라 18로 낮춰둔다 — 실측 결과 산청 등 산간지역은 z19에서 거의
+// 항상 이 회색 플레이스홀더만 나오고, z18까지는 대체로 실제 이미지가 있었다
+// (2026-08-28 확인). MapLibre는 소스의 maxzoom을 넘는 줌에서는 그 이상 타일을 요청하지
+// 않고 마지막 유효 타일(z18)을 그대로 확대해서 쓴다 — 그 이상 확대하면 살짝 흐려지긴
+// 하지만 회색 화면보다는 훨씬 낫다. 서울처럼 실제로 z19 커버리지가 있는 곳도 손해를
+// 보지만, 이 프로젝트의 메인 데모 지역(산청)이 산간이라 이 쪽을 우선한다.
 const MAP_STYLE: StyleSpecification = {
   version: 8,
   glyphs: "https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf",
@@ -62,7 +69,7 @@ const MAP_STYLE: StyleSpecification = {
         "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
       ],
       tileSize: 256,
-      maxzoom: 19,
+      maxzoom: 18,
       attribution: "Esri, Maxar, Earthstar Geographics",
     },
     labels: {
