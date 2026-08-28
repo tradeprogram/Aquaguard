@@ -6,11 +6,8 @@ MODULE_PACKAGES를 통해 그대로 실제 모듈로 교체된다.
 """
 from __future__ import annotations
 
-import hashlib
-import io
 import json
 import os
-import threading
 from pathlib import Path
 from typing import Literal
 
@@ -19,7 +16,6 @@ import requests
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
-from PIL import Image
 from pydantic import BaseModel
 
 from module_o_orchestrator import geo
@@ -30,10 +26,6 @@ load_dotenv()  # .env(git-ignore됨)의 VWORLD_API_KEY 등을 os.environ으로 �
 
 DATA_VECTOR_DIR = Path(__file__).resolve().parent / "data" / "vector"
 VWORLD_API_KEY = os.environ.get("VWORLD_API_KEY")
-# Render가 서비스에 자동으로 심어주는 환경변수(공식 문서에 명시된 동작) — V-World
-# WMTS가 이 환경(싱가포르 리전)에서는 항상 502로 실패하는 게 이미 확인됐으므로,
-# 여기서는 그 시도 자체를 건너뛰어 타일당 낭비되는 왕복 시간을 없앤다(아래 참조).
-IS_RENDER = bool(os.environ.get("RENDER"))
 
 app = FastAPI(title="AquaGuard AI — api_server")
 
@@ -289,131 +281,23 @@ ESRI_IMAGERY_TILE_URL = (
 ESRI_PLACEHOLDER_MD5 = "f27d9de7f80c13501f470595e327aa6d"
 ESRI_FALLBACK_MAX_ZOOM_STEPS = 3
 
-# 2026-08-28: Render "서비스 실패 감지" 반복 원인 — 캐스케이드는 최악의 경우
-# 요청 하나당 순차 HTTP 요청을 여러 번(V-World 1회 + Esri 최대 4회) 날리는데,
-# 지도 패닝 한 번에 타일 수십 개가 동시에 요청되면 Render 무료 플랜의 제한된
-# 스레드풀·CPU를 그 대기시간 동안 붙잡아둬 헬스체크(/health)까지 못 받게 만들
-# 수 있다. 같은 타일은 같은 결과가 나오므로(위성사진은 실시간으로 안 바뀜)
-# 메모리 캐시로 재요청 자체를 없애고, 타임아웃도 줄여 최악의 지연을 낮춘다.
-_IMAGERY_CACHE: dict[tuple, bytes] = {}  # 위성타일((z,x,y))·지형타일(("terrain",z,x,y)) 공용
+# 2026-08-28: 위성영상은 더 이상 이 백엔드를 거치지 않는다(아래 §연혁) — 이 캐시는
+# 이제 /terrain-tiles 전용. 같은 타일은 같은 결과가 나오므로(고도값은 안 바뀜)
+# 메모리 캐시로 재요청 자체를 없애 응답을 빠르게 하고 업스트림(S3) 부하도 줄인다.
+#
+# §연혁: 위성영상을 V-World WMTS(§2.3 1순위)로 프록시하고, 실패 시 Esri로 폴백,
+# Esri도 커버리지 없는 곳은 placeholder라 낮은 줌에서 잘라 확대하는 캐스케이드까지
+# 만들었다가 전부 되돌렸다. 이유: (1) V-World WMTS가 Render(싱가포르 리전)에서
+# 항상 502로 실패(Data API는 정상 — WMTS만 리전 제약, 원인 불명·우리가 못 고침),
+# (2) Esri 캐스케이드는 타일마다 순차 HTTP 요청+PIL 이미지처리(CPU-bound)를 거치는
+# 무거운 경로라, 지도 로드 한 번에 타일 수십~수백 개가 몰리면 Render 무료 인스턴스가
+# 감당을 못 해 헬스체크 타임아웃("Instance failed")과 브라우저 쪽 CORS-처럼-보이는
+# 에러(실제로는 응답을 아예 못 준 것)로 이어짐, (3) 세마포어로 동시처리를 제한해도
+# Render 엣지 자체가 요청 "개수"에 429를 걸어 소용없었음. 결론: 타일 트래픽을 우리
+# 백엔드에 태우는 구조 자체가 무료 인스턴스와 안 맞는다 — Esri 직결(아래 MapExplorer.tsx)
+# 이 더 빠르고 안정적이다. V-World 재도전은 우리 백엔드가 한국 리전에 있을 때만 재검토.
+_IMAGERY_CACHE: dict[tuple, bytes] = {}
 _IMAGERY_CACHE_MAX_ENTRIES = 4000
-
-# 2026-08-28: 캐시·타임아웃만으로는 부족했다 — 실사용자 브라우저 콘솔에서 확인된 실제
-# 증상은 /vworld/imagery 요청 수백 개가 "CORS 에러"로 실패하고 /vworld/roads·buildings도
-# 502를 내는 것. 진짜 원인은 CORS 설정이 아니라, 지도 패닝 한 번에 캐시 안 된 타일
-# 수십~수백 개가 한꺼번에 몰리면서 각 요청이 순차 HTTP 요청을 여러 번 거치는 무거운
-# 경로(네트워크 I/O)를 동시에 타 Render 무료 인스턴스가 감당 못 하고 응답이 끊기거나
-# 지연되는 것 — 이때 브라우저는 응답에 CORS 헤더가 없다는 이유로 "CORS 에러"라고
-# 표시하지만 실제로는 백엔드가 과부하로 응답을 못 준 것(우리 CORSMiddleware는 정상
-# 응답에는 항상 헤더를 붙인다). 세마포어로 "지금 실제로 네트워크 작업 중인" 타일
-# 요청 개수 자체를 하드 캡 — 나머지는 아주 짧게 대기했다가 처리된다(캐시가 있으니
-# 두 번째 패닝부터는 이 경로를 거의 안 탐).
-_IMAGERY_INFLIGHT_SEMAPHORE = threading.Semaphore(4)
-
-
-def _is_esri_placeholder(content: bytes) -> bool:
-    return hashlib.md5(content).hexdigest() == ESRI_PLACEHOLDER_MD5
-
-
-# 2026-08-28: PIL의 crop/resize/encode는 CPU-bound라 GIL을 붙잡는다 — Render 무료
-# 인스턴스는 CPU가 매우 작은 조각(fractional vCPU)이라, 지도를 팬(pan)할 때 캐스케이드가
-# 필요한 타일 수십 개가 한꺼번에 들어오면 동시 이미지처리 요청들이 그 작은 CPU를
-# 서로 다투면서 /health 같은 사소한 요청까지 5초 넘게 밀릴 수 있다(이게 진짜 "Instance
-# failed" 원인으로 의심됨 — 캐시를 넣기 전까지는 이 처리가 CPU 작업이 아예 없던
-# 순수 프록시였다). 세마포어로 동시 이미지처리 개수를 하드하게 제한해 CPU 스파이크
-# 자체를 막는다 — 나머지 요청은 아주 짧게 대기했다가 처리되거나(대개 수백ms), 이미
-# 캐시에 있으면 이 경로를 아예 안 탄다.
-_CASCADE_CPU_SEMAPHORE = threading.Semaphore(2)
-
-
-def _fetch_esri_tile_with_zoom_cascade(z: int, x: int, y: int) -> bytes | None:
-    """Esri가 요청한 줌에서 플레이스홀더만 줄 때, 상위(더 낮은) 줌의 부모 타일을
-    받아와 우리 타일이 속한 사분면만 잘라 256×256으로 확대해 대신 쓴다 — 실제
-    지도 서비스들이 커버리지 없는 영역에서 흔히 쓰는 방식과 같다. 해상도는
-    떨어지지만(줌 한 단계당 절반씩) 최소한 화면이 회색으로 비지는 않는다.
-    """
-    for step in range(ESRI_FALLBACK_MAX_ZOOM_STEPS + 1):
-        zz = z - step
-        if zz < 0:
-            return None
-        xx, yy = x >> step, y >> step
-        try:
-            resp = requests.get(ESRI_IMAGERY_TILE_URL.format(z=zz, x=xx, y=yy), timeout=5)
-        except requests.RequestException:
-            continue
-        if resp.status_code != 200 or _is_esri_placeholder(resp.content):
-            continue
-        if step == 0:
-            return resp.content
-        # 부모 타일 256×256 중 우리 타일이 차지하는 사분면만 잘라 다시 256×256으로 확대.
-        # BILINEAR는 LANCZOS보다 훨씬 싸다 — 흐릿한 배경 위성사진 확대본이라 품질
-        # 차이는 실사용에서 거의 안 느껴지고, CPU 시간은 크게 줄어든다.
-        sub = 256 // (2**step)
-        ox, oy = (x % (2**step)) * sub, (y % (2**step)) * sub
-        with _CASCADE_CPU_SEMAPHORE:
-            img = Image.open(io.BytesIO(resp.content)).convert("RGB")
-            cropped = img.crop((ox, oy, ox + sub, oy + sub)).resize((256, 256), Image.BILINEAR)
-            buf = io.BytesIO()
-            cropped.save(buf, format="JPEG", quality=80)
-        return buf.getvalue()
-    return None
-
-
-@app.get("/vworld/imagery/{z}/{x}/{y}.jpeg")
-def get_vworld_imagery_tile(z: int, x: int, y: int) -> Response:
-    """V-World WMTS 위성영상(Satellite 레이어) 프록시, Esri 줌 캐스케이드 폴백 포함.
-
-    V-World WMTS RESTful 주소는 level/tiley/tilex 순서(일반적인 z/x/y가 아님)임에
-    주의 — 이 서명의 매개변수 순서({z}/{x}/{y})는 프론트(표준 XYZ 스킴)와 맞추고,
-    여기서 업스트림 호출 시에만 순서를 뒤집는다.
-
-    2026-08-28: 로컬(curl)에서는 항상 200인데 배포 환경(Render, region=singapore)
-    에서는 매 타일이 502(V-World 자체가 text/html로 응답)로 실패하는 게 진단으로
-    확인됨 — 같은 서버에서 V-World Data API(건물·도로, /vworld/roads·buildings)는
-    정상 동작하므로 도메인 전체 차단이 아니라 WMTS 타일 서비스만 리전별로 막혀있는
-    것으로 보인다(원인 불명, V-World 쪽 문제로 우리가 고칠 수 없음). V-World가
-    실패하면 Esri로 폴백하는데, Esri도 산간지역 고줌에서는 커버리지가 없어 회색
-    플레이스홀더만 주므로(위 _fetch_esri_tile_with_zoom_cascade 참조) 그 경우
-    낮은 줌의 실제 이미지를 잘라 확대해서 대신 쓴다 — 로컬 개발은 V-World의 더
-    나은 국내 해상도를 그대로 누리고, 배포 환경도 더 이상 회색 화면이 아니다.
-
-    결과는 (z,x,y)별로 프로세스 메모리에 캐싱한다 — 위성사진은 실시간으로 안
-    바뀌고, 캐스케이드 자체가 순차 HTTP 요청을 여러 번 거치는 무거운 경로라
-    같은 타일을 패닝마다 매번 재요청하면 Render 무료 플랜에서 헬스체크까지
-    지연시켜 "서비스 실패"로 오탐되는 원인이 된다.
-    """
-    cache_key = (z, x, y)
-    cached = _IMAGERY_CACHE.get(cache_key)
-    if cached is not None:
-        return Response(content=cached, media_type="image/jpeg", headers={"Cache-Control": "public, max-age=86400"})
-
-    content: bytes | None = None
-    media_type = "image/jpeg"
-    with _IMAGERY_INFLIGHT_SEMAPHORE:
-        # 캐시 미스가 세마포어 대기 중에 다른 요청으로 채워졌을 수 있으니 한 번 더 확인
-        cached = _IMAGERY_CACHE.get(cache_key)
-        if cached is not None:
-            return Response(content=cached, media_type="image/jpeg", headers={"Cache-Control": "public, max-age=86400"})
-
-        if VWORLD_API_KEY and not IS_RENDER:
-            upstream = f"http://api.vworld.kr/req/wmts/1.0.0/{VWORLD_API_KEY}/Satellite/{z}/{y}/{x}.jpeg"
-            try:
-                resp = requests.get(upstream, timeout=3)
-                if resp.status_code == 200 and resp.headers.get("content-type", "").startswith("image/"):
-                    content = resp.content
-                    media_type = resp.headers["content-type"]
-            except requests.RequestException:
-                pass  # 폴백으로 진행
-
-        if content is None:
-            content = _fetch_esri_tile_with_zoom_cascade(z, x, y)
-
-    if content is None:
-        raise HTTPException(status_code=404, detail="imagery tile not available from any source")
-
-    if len(_IMAGERY_CACHE) < _IMAGERY_CACHE_MAX_ENTRIES:
-        _IMAGERY_CACHE[cache_key] = content
-    return Response(content=content, media_type=media_type, headers={"Cache-Control": "public, max-age=86400"})
 
 
 VWORLD_BUILDING_LAYER = "LT_C_SPBD"  # 건물통합정보(국토교통부) — 브이월드 Data API 2.0

@@ -1,13 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import {
-  Map as MapLibreMap,
-  NavigationControl,
-  setMaxParallelImageRequests,
-  type GeoJSONSource,
-  type StyleSpecification,
-} from "maplibre-gl";
+import { Map as MapLibreMap, NavigationControl, type GeoJSONSource, type StyleSpecification } from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import buffer from "@turf/buffer";
 import centroid from "@turf/centroid";
@@ -24,16 +18,6 @@ import {
   type AdminSearchResult,
 } from "@/lib/api";
 import { useSlowLoading } from "@/lib/useSlowLoading";
-
-// 2026-08-28: 실사용자 브라우저 콘솔에서 /vworld/imagery 요청 대부분이 429(Too Many
-// Requests)로 실패하는 게 확인됨 — 백엔드(api_server.py) 로그에는 안 잡히는 걸 보면
-// 우리 코드 앞단(Render 엣지)에서 짧은 시간에 몰리는 요청량 자체를 막는 것으로 보인다.
-// MapLibre는 기본적으로 타일 하나당 최대 16개까지 동시 요청을 날리는데(위성+지형
-// 두 소스가 합쳐지면 순간적으로 그보다 훨씬 많은 요청이 한꺼번에 나간다), 지도를
-// 처음 열거나 크게 패닝할 때 이 버스트가 그 엣지 레이트리밋에 걸리는 게 유력한
-// 원인이라 동시 요청 수 자체를 낮춰 버스트 크기를 줄인다. 모듈 로드 시 한 번만
-// 호출하면 되는 전역 설정이라 컴포넌트 바깥에 둔다.
-setMaxParallelImageRequests(6);
 
 // 산청군 생비량면 — data/vector/adm_dong_5179.geojson 실측 centroid. 초기 카메라 위치일
 // 뿐, 이제 이 페이지는 검색으로 어디든 이동할 수 있는 범용 3D 지도다(고정 AOI 아님).
@@ -60,21 +44,26 @@ const SOUTH_KOREA_BOUNDS: [[number, number], [number, number]] = [
 ];
 
 // 지형(raster-dem)은 스타일 JSON에 선언하지 않고 'load' 이후 명령형으로 추가한다 — 아래 참조.
-// 위성영상: V-World WMTS 위성 레이어(§2.3 1순위, api_server.py의 /vworld/imagery 프록시
-// 경유 — CORS 우회는 /terrain-tiles와 동일 이유). 2026-08-28: Esri World Imagery에서
-// 교체 — Esri는 산간·농촌 지역에서 "Image Not Available" 회색 타일을 자주 반환했는데,
-// V-World는 국토지리정보원 소관 국내 정사영상이라 국내 커버리지가 훨씬 촘촘하다
-// (z19까지 커버리지 확인됨, api_server.py 프록시 주석 참조).
+// 위성영상: Esri World Imagery — 우리 백엔드를 거치지 않고 브라우저에서 Esri CDN에
+// 직접 요청한다(무료, 키 불필요, CORS 허용 확인됨). 2026-08-28: V-World WMTS 프록시로
+// 교체했다가(국내 커버리지가 더 촘촘해서) 다시 되돌림 — V-World WMTS가 Render(싱가포르
+// 리전)에서 항상 502로 실패했고, 그 실패를 감추려던 Esri 폴백·캐스케이드 로직이 오히려
+// Render 무료 인스턴스를 과부하시켜 헬스체크 실패·429·로딩 지연을 유발했다(자세한 경위는
+// api_server.py의 _IMAGERY_CACHE 주석 §연혁 참조). Esri는 산간지역 등 일부 위치에서
+// "Image Not Available" 회색 타일을 반환하는 단점이 있지만, 그 정도가 백엔드 전체가
+// 불안정해지는 것보다는 훨씬 낫다 — 직결이 훨씬 빠르고 안정적이다.
 const MAP_STYLE: StyleSpecification = {
   version: 8,
   glyphs: "https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf",
   sources: {
     satellite: {
       type: "raster",
-      tiles: [`${API_BASE}/vworld/imagery/{z}/{x}/{y}.jpeg`],
+      tiles: [
+        "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+      ],
       tileSize: 256,
       maxzoom: 19,
-      attribution: "VWorld(국토교통부 국토지리정보원)",
+      attribution: "Esri, Maxar, Earthstar Geographics",
     },
     labels: {
       type: "raster",
