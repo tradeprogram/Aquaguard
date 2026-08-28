@@ -1,7 +1,13 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Map as MapLibreMap, NavigationControl, type GeoJSONSource, type StyleSpecification } from "maplibre-gl";
+import {
+  Map as MapLibreMap,
+  NavigationControl,
+  setMaxParallelImageRequests,
+  type GeoJSONSource,
+  type StyleSpecification,
+} from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import buffer from "@turf/buffer";
 import centroid from "@turf/centroid";
@@ -18,6 +24,16 @@ import {
   type AdminSearchResult,
 } from "@/lib/api";
 import { useSlowLoading } from "@/lib/useSlowLoading";
+
+// 2026-08-28: 실사용자 브라우저 콘솔에서 /vworld/imagery 요청 대부분이 429(Too Many
+// Requests)로 실패하는 게 확인됨 — 백엔드(api_server.py) 로그에는 안 잡히는 걸 보면
+// 우리 코드 앞단(Render 엣지)에서 짧은 시간에 몰리는 요청량 자체를 막는 것으로 보인다.
+// MapLibre는 기본적으로 타일 하나당 최대 16개까지 동시 요청을 날리는데(위성+지형
+// 두 소스가 합쳐지면 순간적으로 그보다 훨씬 많은 요청이 한꺼번에 나간다), 지도를
+// 처음 열거나 크게 패닝할 때 이 버스트가 그 엣지 레이트리밋에 걸리는 게 유력한
+// 원인이라 동시 요청 수 자체를 낮춰 버스트 크기를 줄인다. 모듈 로드 시 한 번만
+// 호출하면 되는 전역 설정이라 컴포넌트 바깥에 둔다.
+setMaxParallelImageRequests(6);
 
 // 산청군 생비량면 — data/vector/adm_dong_5179.geojson 실측 centroid. 초기 카메라 위치일
 // 뿐, 이제 이 페이지는 검색으로 어디든 이동할 수 있는 범용 3D 지도다(고정 AOI 아님).
