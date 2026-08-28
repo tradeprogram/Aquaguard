@@ -268,7 +268,16 @@ ESRI_IMAGERY_TILE_URL = (
 # "Image Not Available" 플레이스홀더 타일을 돌려준다(2026-08-28, 산청 등 3개
 # 서로 다른 좌표에서 동일 MD5로 확인) — 그래서 상태코드만으로는 실패를 못 걸러낸다.
 ESRI_PLACEHOLDER_MD5 = "f27d9de7f80c13501f470595e327aa6d"
-ESRI_FALLBACK_MAX_ZOOM_STEPS = 4
+ESRI_FALLBACK_MAX_ZOOM_STEPS = 3
+
+# 2026-08-28: Render "서비스 실패 감지" 반복 원인 — 캐스케이드는 최악의 경우
+# 요청 하나당 순차 HTTP 요청을 여러 번(V-World 1회 + Esri 최대 4회) 날리는데,
+# 지도 패닝 한 번에 타일 수십 개가 동시에 요청되면 Render 무료 플랜의 제한된
+# 스레드풀·CPU를 그 대기시간 동안 붙잡아둬 헬스체크(/health)까지 못 받게 만들
+# 수 있다. 같은 타일은 같은 결과가 나오므로(위성사진은 실시간으로 안 바뀜)
+# 메모리 캐시로 재요청 자체를 없애고, 타임아웃도 줄여 최악의 지연을 낮춘다.
+_IMAGERY_CACHE: dict[tuple[int, int, int], bytes] = {}
+_IMAGERY_CACHE_MAX_ENTRIES = 4000
 
 
 def _is_esri_placeholder(content: bytes) -> bool:
@@ -287,7 +296,7 @@ def _fetch_esri_tile_with_zoom_cascade(z: int, x: int, y: int) -> bytes | None:
             return None
         xx, yy = x >> step, y >> step
         try:
-            resp = requests.get(ESRI_IMAGERY_TILE_URL.format(z=zz, x=xx, y=yy), timeout=8)
+            resp = requests.get(ESRI_IMAGERY_TILE_URL.format(z=zz, x=xx, y=yy), timeout=5)
         except requests.RequestException:
             continue
         if resp.status_code != 200 or _is_esri_placeholder(resp.content):
@@ -322,24 +331,38 @@ def get_vworld_imagery_tile(z: int, x: int, y: int) -> Response:
     플레이스홀더만 주므로(위 _fetch_esri_tile_with_zoom_cascade 참조) 그 경우
     낮은 줌의 실제 이미지를 잘라 확대해서 대신 쓴다 — 로컬 개발은 V-World의 더
     나은 국내 해상도를 그대로 누리고, 배포 환경도 더 이상 회색 화면이 아니다.
+
+    결과는 (z,x,y)별로 프로세스 메모리에 캐싱한다 — 위성사진은 실시간으로 안
+    바뀌고, 캐스케이드 자체가 순차 HTTP 요청을 여러 번 거치는 무거운 경로라
+    같은 타일을 패닝마다 매번 재요청하면 Render 무료 플랜에서 헬스체크까지
+    지연시켜 "서비스 실패"로 오탐되는 원인이 된다.
     """
+    cache_key = (z, x, y)
+    cached = _IMAGERY_CACHE.get(cache_key)
+    if cached is not None:
+        return Response(content=cached, media_type="image/jpeg", headers={"Cache-Control": "public, max-age=86400"})
+
+    content: bytes | None = None
+    media_type = "image/jpeg"
     if VWORLD_API_KEY:
         upstream = f"http://api.vworld.kr/req/wmts/1.0.0/{VWORLD_API_KEY}/Satellite/{z}/{y}/{x}.jpeg"
         try:
-            resp = requests.get(upstream, timeout=6)
+            resp = requests.get(upstream, timeout=3)
             if resp.status_code == 200 and resp.headers.get("content-type", "").startswith("image/"):
-                return Response(
-                    content=resp.content,
-                    media_type=resp.headers["content-type"],
-                    headers={"Cache-Control": "public, max-age=86400"},
-                )
+                content = resp.content
+                media_type = resp.headers["content-type"]
         except requests.RequestException:
             pass  # 폴백으로 진행
 
-    content = _fetch_esri_tile_with_zoom_cascade(z, x, y)
+    if content is None:
+        content = _fetch_esri_tile_with_zoom_cascade(z, x, y)
+
     if content is None:
         raise HTTPException(status_code=404, detail="imagery tile not available from any source")
-    return Response(content=content, media_type="image/jpeg", headers={"Cache-Control": "public, max-age=86400"})
+
+    if len(_IMAGERY_CACHE) < _IMAGERY_CACHE_MAX_ENTRIES:
+        _IMAGERY_CACHE[cache_key] = content
+    return Response(content=content, media_type=media_type, headers={"Cache-Control": "public, max-age=86400"})
 
 
 VWORLD_BUILDING_LAYER = "LT_C_SPBD"  # 건물통합정보(국토교통부) — 브이월드 Data API 2.0
