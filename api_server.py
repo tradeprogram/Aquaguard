@@ -360,11 +360,17 @@ def _vworld_get_feature(data_layer: str, bbox: tuple[float, float, float, float]
         raise HTTPException(status_code=502, detail=f"VWorld data API request failed: {e}")
     body = resp.json()
     service = body.get("response", {})
-    if service.get("status") != "OK":
-        # NOT_FOUND(해당 영역에 데이터 없음)는 정상적인 빈 결과로 취급
-        error = service.get("error", {})
-        if error.get("code") == "NOT_FOUND":
+    status = service.get("status")
+    if status != "OK":
+        # 2026-08-28 버그 수정: NOT_FOUND(해당 영역에 건물/도로가 없는 정상적인 빈
+        # 결과)는 V-World 응답에서 response.status == "NOT_FOUND"로 온다 —
+        # response.error.code가 아니다(그쪽엔 애초에 error 필드 자체가 없음).
+        # 이전 코드는 error.code를 확인해서 항상 거짓이 됐고, 그 결과 확대해서
+        # 건물이 없는 좁은 구역을 볼 때마다 정상적인 "빈 결과"를 502 에러로
+        # 취급해버렸다 — "확대하면 건물이 사라진다"는 증상의 실제 원인.
+        if status == "NOT_FOUND":
             return {"type": "FeatureCollection", "features": []}
+        error = service.get("error", {})
         raise HTTPException(status_code=502, detail=f"VWorld error: {error}")
     return service["result"]["featureCollection"]
 
