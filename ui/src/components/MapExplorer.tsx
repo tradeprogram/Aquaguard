@@ -439,45 +439,23 @@ export default function MapExplorer({ route = null, pickOrigin = false, onOrigin
         encoding: "terrarium",
         maxzoom: 15,
       });
-      map.addLayer({ id: "hills", type: "hillshade", source: "terrain", paint: { "hillshade-exaggeration": 0.7 } });
+      map.addLayer({ id: "hills", type: "hillshade", source: "terrain", paint: { "hillshade-exaggeration": 0.5 } });
 
-      // DEM 소스가 z15까지밖에 없어서(전세계 공개 SRTM 계열 지형타일의 실제 해상도
-      // 한계 — 30m급이라 그 이상은 어차피 새 정보가 없다) 그보다 확대(건물 단위 줌)
-      // 하면 MapLibre가 같은 타일을 억지로 늘려 써야 한다 — 이때 벌어지는 "혹처럼
-      // 부풀어 보이는" 왜곡은 exaggeration이 오버줌으로 생긴 타일 경계 스파이크까지
-      // 그대로 증폭해서 생긴다. 2026-08-28 재조정: 건물/도로 단위 정밀도(몇 m 물 높이
-      // 차이)는 실측 지형 굴곡이 아니라 아래 debris-flow-3d/flood-water-3d/건물 압출의
-      // 실제 depth 값으로 이미 표현하고 있으므로, 이 구간(z16+)에서는 지형을 과감히
-      // 평탄에 가깝게 눕혀 왜곡 자체를 없애는 쪽이 "더 정밀해 보인다" — 대신 taper를
-      // z17까지로 앞당기고 바닥값도 0.35→0.12로 낮춰 스파이크가 눈에 띄지 않게 한다.
-      // hillshade도 같은 커브로 함께 낮춰야 한다 — 안 그러면 지형 exaggeration은
-      // 죽었는데 음영기복만 남아 위성사진 위에 얼룩진 것처럼 보인다.
-      const TERRAIN_TAPER_START_ZOOM = 15;
-      const TERRAIN_TAPER_END_ZOOM = 17;
-      const TERRAIN_MAX_EXAGGERATION = 1.3;
-      const TERRAIN_MIN_EXAGGERATION = 0.12;
-      const HILLSHADE_MAX_EXAGGERATION = 0.7;
-      const HILLSHADE_MIN_EXAGGERATION = 0.15;
-      let lastExaggeration: number | null = null;
-      const syncTerrainForZoom = () => {
-        const currentMap = mapRef.current;
-        if (!currentMap) return;
-        const zoom = currentMap.getZoom();
-        const t = Math.min(
-          1,
-          Math.max(0, (zoom - TERRAIN_TAPER_START_ZOOM) / (TERRAIN_TAPER_END_ZOOM - TERRAIN_TAPER_START_ZOOM))
-        );
-        const exaggeration = TERRAIN_MAX_EXAGGERATION - t * (TERRAIN_MAX_EXAGGERATION - TERRAIN_MIN_EXAGGERATION);
-        if (lastExaggeration === null || Math.abs(exaggeration - lastExaggeration) >= 0.02) {
-          lastExaggeration = exaggeration;
-          currentMap.setTerrain({ source: "terrain", exaggeration });
-        }
-        const hillshadeExaggeration =
-          HILLSHADE_MAX_EXAGGERATION - t * (HILLSHADE_MAX_EXAGGERATION - HILLSHADE_MIN_EXAGGERATION);
-        currentMap.setPaintProperty("hills", "hillshade-exaggeration", hillshadeExaggeration);
-      };
-      syncTerrainForZoom();
-      map.on("zoomend", syncTerrainForZoom);
+      // 2026-08-28~29: 원래 여기서 줌에 따라 exaggeration을 1.3→0.12까지 실시간으로
+      // 낮추는 taper가 있었다(z15+에서 DEM 오버줌 스파이크를 감추려는 의도). 그런데
+      // 건물이 실제 height_m로 압출되기 시작한 뒤(2026-08-29) 실측해보니, 카메라를
+      // 고정한 채 exaggeration만 1.3→0.12로 바꿨을 때 같은 건물이 화면에서 69px나
+      // 움직였다 — exaggeration이 지형 메시의 실제 고도를 바꾸는 값이라, 경사면 위
+      // 건물의 "땅" 자체가 줌에 따라 오르내리면서 건물이 "땅에 박혔다 솟았다"
+      // 하는 것처럼 보이는 원인이었다(사용자 리포트로 재현·근본원인 확인).
+      // 지형 exaggeration은 줌과 무관하게 고정값을 쓴다 — 그래야 건물이 지형에 대해
+      // 항상 같은 자리에 있다(3D 지도의 기본 기대치). 1.3(원경 드라마틱함)과
+      // 0.12(근접 스파이크 억제) 사이에서 산세는 여전히 드러나면서 스파이크 증폭은
+      // 최소화되는 절충값 0.55로 고정 — 건물/도로 단위 정밀도는 어차피 지형 메시가
+      // 아니라 실제 벡터 데이터(압출 높이·폭)로 표현되므로 지형이 완전히 평탄할
+      // 필요는 없다.
+      const TERRAIN_EXAGGERATION = 0.55;
+      map.setTerrain({ source: "terrain", exaggeration: TERRAIN_EXAGGERATION });
 
       // 대기감(하늘·안개) + 태양광 — 지형 메시 자체의 정밀도는 한계가 있으니(위 주석)
       // 대신 조명·대기 표현으로 "실사에 가까운 가상세계" 느낌을 낸다. atmosphere-blend·
