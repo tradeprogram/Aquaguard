@@ -9,8 +9,9 @@ import IsolationPanel from "@/components/panels/IsolationPanel";
 import WhatifPanel from "@/components/panels/WhatifPanel";
 import ModelPerformancePanel from "@/components/panels/ModelPerformancePanel";
 import ApprovePanel from "@/components/panels/ApprovePanel";
+import ValidationPanel from "@/components/panels/ValidationPanel";
 
-type PanelKey = "dashboard" | "evacuation" | "isolation" | "whatif" | "performance" | "approve";
+type PanelKey = "dashboard" | "evacuation" | "isolation" | "whatif" | "performance" | "validation" | "approve";
 type Mode = "citizen" | "gov";
 
 // 시민용 기능(내 위치 기반 대피 안내)과 관공서용 기능(관 대응 비교·피해비용·모델 성능
@@ -29,6 +30,7 @@ const MENU: Record<Mode, { key: PanelKey; label: string }[]> = {
   gov: [
     { key: "dashboard", label: "대시보드" },
     { key: "performance", label: "모델 성능" },
+    { key: "validation", label: "검증 (Predicted vs Observed)" },
     { key: "whatif", label: "What-if 시뮬레이터" },
     { key: "approve", label: "원클릭 승인" },
   ],
@@ -43,6 +45,7 @@ const PANEL_TITLE: Record<Mode, Partial<Record<PanelKey, string>>> = {
   gov: {
     dashboard: "아쿠아가드 골든타임 대시보드",
     performance: "모델 성능 검증 (Module A/B)",
+    validation: "검증 (§5 Module V) — Predicted vs Observed",
     whatif: "What-if 예측 시뮬레이터",
     approve: "원클릭 승인 (§5 Module O)",
   },
@@ -121,6 +124,7 @@ export default function HomePage() {
             <GlassPanel title={PANEL_TITLE[mode][active] ?? ""} onClose={() => setActive(null)}>
               {active === "dashboard" && <DashboardPanel mode={mode} />}
               {active === "performance" && <ModelPerformancePanel />}
+              {active === "validation" && <ValidationPanel />}
               {active === "evacuation" && (
                 <EvacuationPanel
                   onSelectRoute={setEvacuationRoute}

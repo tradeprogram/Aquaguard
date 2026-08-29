@@ -1,4 +1,5 @@
 import type { ModuleOData } from "@/lib/types";
+import ProvenanceBadge from "@/components/ProvenanceBadge";
 
 function fmt(iso: string | undefined) {
   if (!iso) return "—";
@@ -22,14 +23,18 @@ export default function GoldenTimeCounter({ data }: { data: ModuleOData }) {
       </p>
       <div className="mt-4 grid grid-cols-2 gap-4 text-sm">
         <div>
-          <p className="text-slate-400">실제 타임라인 (관 대응)</p>
-          <p className="text-slate-200">
+          <p className="flex items-center gap-1.5 text-slate-400">
+            실제 타임라인 (관 대응) <ProvenanceBadge kind="OBSERVED" />
+          </p>
+          <p className="mt-1 text-slate-200">
             신고 {fmt(data.timeline_actual.report_start)} → 경보 {fmt(data.timeline_actual.warning_escalated)}
           </p>
         </div>
         <div>
-          <p className="text-slate-400">에이전트 타임라인</p>
-          <p className="text-slate-200">
+          <p className="flex items-center gap-1.5 text-slate-400">
+            에이전트 타임라인 <ProvenanceBadge kind="MODEL" />
+          </p>
+          <p className="mt-1 text-slate-200">
             탐지 {fmt(data.timeline_agent.detected)} → 발송 {fmt(data.timeline_agent.alert_sent)}
           </p>
         </div>

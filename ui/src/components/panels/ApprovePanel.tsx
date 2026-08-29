@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { SANGCHEONG_DEMO_INPUT, approveAlert, getAlert } from "@/lib/api";
 import type { ModuleOEnvelope } from "@/lib/types";
 import { useSlowLoading } from "@/lib/useSlowLoading";
+import ProvenanceBadge from "@/components/ProvenanceBadge";
 
 function useCountdown(createdAt?: string, timeoutMin?: number) {
   const [remainingSec, setRemainingSec] = useState<number | null>(null);
@@ -122,8 +123,10 @@ export default function ApprovePanel({ alertId = SANGCHEONG_DEMO_INPUT.alert_id 
 
           <div className="grid grid-cols-2 gap-3 rounded-xl border border-white/10 bg-white/5 p-3 text-xs">
             <div>
-              <p className="text-slate-400">산사태 위험확률</p>
-              <p className="text-base font-semibold">
+              <p className="flex items-center gap-1 text-slate-400">
+                산사태 위험확률 <ProvenanceBadge kind="MODEL" />
+              </p>
+              <p className="mt-1 text-base font-semibold">
                 {(alertPackage.landslide.landslide_prob * 100).toFixed(0)}%{" "}
                 <span className="text-[10px] font-normal text-slate-500">
                   [{(alertPackage.landslide.confidence_interval[0] * 100).toFixed(0)}%,{" "}
@@ -132,16 +135,22 @@ export default function ApprovePanel({ alertId = SANGCHEONG_DEMO_INPUT.alert_id 
               </p>
             </div>
             <div>
-              <p className="text-slate-400">하천범람 위험확률</p>
-              <p className="text-base font-semibold">{(alertPackage.flood.flood_prob * 100).toFixed(0)}%</p>
+              <p className="flex items-center gap-1 text-slate-400">
+                하천범람 위험확률 <ProvenanceBadge kind="MODEL" />
+              </p>
+              <p className="mt-1 text-base font-semibold">{(alertPackage.flood.flood_prob * 100).toFixed(0)}%</p>
             </div>
             <div>
-              <p className="text-slate-400">시민 역검증</p>
-              <p className="text-base font-semibold">{data.citizen_verification.verification_status}</p>
+              <p className="flex items-center gap-1 text-slate-400">
+                시민 역검증 <ProvenanceBadge kind="OBSERVED" />
+              </p>
+              <p className="mt-1 text-base font-semibold">{data.citizen_verification.verification_status}</p>
             </div>
             <div>
-              <p className="text-slate-400">대피 시간 여유</p>
-              <p className="text-base font-semibold">
+              <p className="flex items-center gap-1 text-slate-400">
+                대피 시간 여유 <ProvenanceBadge kind="MODEL" />
+              </p>
+              <p className="mt-1 text-base font-semibold">
                 {"time_feasible" in alertPackage.shelter_route
                   ? alertPackage.shelter_route.time_feasible
                     ? "충분"

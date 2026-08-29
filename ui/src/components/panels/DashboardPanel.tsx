@@ -6,6 +6,7 @@ import type { ModuleOEnvelope } from "@/lib/types";
 import { useSlowLoading } from "@/lib/useSlowLoading";
 import GoldenTimeCounter from "@/components/GoldenTimeCounter";
 import RiskCard from "@/components/RiskCard";
+import ProvenanceBadge from "@/components/ProvenanceBadge";
 
 // Module C(도로·지하차도 침수, 규칙기반 — 모델 아님)는 아직 Module O 파이프라인에
 // 연결 전이라 contracts/module_c.example.json(SC-UP-003, "위험")을 기준으로 손으로
@@ -128,7 +129,9 @@ export default function DashboardPanel({ mode }: { mode: "citizen" | "gov" }) {
 
           <div className="grid grid-cols-1 gap-3">
             <div className="rounded-xl border border-white/10 bg-white/5 p-3">
-              <p className="text-xs text-slate-400">도로·지하차도 침수 (Module C, 규칙기반)</p>
+              <p className="flex items-center gap-1.5 text-xs text-slate-400">
+                도로·지하차도 침수 (Module C, 규칙기반) <ProvenanceBadge kind="MODEL" />
+              </p>
               <div className="mt-2 space-y-1.5">
                 {UNDERPASSES.map((u) => (
                   <div key={u.id} className="flex items-center justify-between text-xs">
@@ -141,7 +144,9 @@ export default function DashboardPanel({ mode }: { mode: "citizen" | "gov" }) {
               </div>
             </div>
             <div className="rounded-xl border border-white/10 bg-white/5 p-3">
-              <p className="text-xs text-slate-400">노출자산 (Module D)</p>
+              <p className="flex items-center gap-1.5 text-xs text-slate-400">
+                노출자산 (Module D) <ProvenanceBadge kind="MODEL" />
+              </p>
               <p className="mt-1 text-base font-semibold">건물 3채 노출 · 농경지 4.2ha</p>
               <p className="text-[11px] text-slate-500">주거 2 · 상가 1 — risk_prob 45~78%</p>
             </div>
@@ -149,7 +154,9 @@ export default function DashboardPanel({ mode }: { mode: "citizen" | "gov" }) {
 
           <div className="grid grid-cols-1 gap-3">
             <div className="rounded-xl border border-white/10 bg-white/5 p-3">
-              <p className="text-xs text-slate-400">대피소 · 경로 (Module E)</p>
+              <p className="flex items-center gap-1.5 text-xs text-slate-400">
+                대피소 · 경로 (Module E) <ProvenanceBadge kind="MODEL" />
+              </p>
               {"shelter_id" in alertPackage.shelter_route ? (
                 <>
                   <p className="mt-1 text-base font-semibold">
@@ -171,7 +178,9 @@ export default function DashboardPanel({ mode }: { mode: "citizen" | "gov" }) {
             </div>
             {govOnly && (
               <div className="rounded-xl border border-white/10 bg-white/5 p-3">
-                <p className="text-xs text-slate-400">예상 피해비용 (Module G)</p>
+                <p className="flex items-center gap-1.5 text-xs text-slate-400">
+                  예상 피해비용 (Module G) <ProvenanceBadge kind="MODEL" />
+                </p>
                 {"estimated_cost_krw" in alertPackage.damage_cost ? (
                   <>
                     <p className="mt-1 text-base font-semibold">
@@ -187,7 +196,9 @@ export default function DashboardPanel({ mode }: { mode: "citizen" | "gov" }) {
           </div>
 
           <div className="rounded-xl border border-white/10 bg-white/5 p-3">
-            <p className="text-xs text-slate-400">시민 신고 역검증 (Module H)</p>
+            <p className="flex items-center gap-1.5 text-xs text-slate-400">
+              시민 신고 역검증 (Module H) <ProvenanceBadge kind="OBSERVED" />
+            </p>
             <p className="mt-1 text-base font-semibold">{data.citizen_verification.verification_status}</p>
             <p className="text-[11px] text-slate-500">
               신뢰도 보정: {data.citizen_verification.confidence_adjustment >= 0 ? "+" : ""}

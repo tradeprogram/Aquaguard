@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { ConfusionMatrix, RocCurve, TimeSeriesChart } from "@/components/charts/MiniCharts";
+import ProvenanceBadge from "@/components/ProvenanceBadge";
 
 // 사용자 요청(2026-08-27): "ML 기반으로 돌리는거면 그래프부터 포함해서 과학적으로
 // 성능을 입증하고 결과를 입증할 수 있는 시각자료나 지표가 모두 떠있는게 더 좋을수도
@@ -100,9 +101,9 @@ export default function ModelPerformancePanel() {
 
   return (
     <div className="space-y-4 text-sm">
-      <p className="text-xs text-slate-400">
+      <p className="flex items-center gap-1.5 text-xs text-slate-400">
         Module A/B의 예측 성능을 실제 검증 지표(AUC/ROC, 정밀도·재현율, 혼동행렬)와 사례별 시계열
-        예측 곡선으로 보여준다. 산사태는 산청, 하천범람·침수는 서울 사례 기준.
+        예측 곡선으로 보여준다. 산사태는 산청, 하천범람·침수는 서울 사례 기준. <ProvenanceBadge kind="MODEL" />
       </p>
 
       <div className="rounded-lg border border-dashed border-amber-800/40 bg-amber-950/10 p-3 text-[11px] text-amber-300/80">

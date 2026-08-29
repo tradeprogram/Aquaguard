@@ -1,3 +1,5 @@
+import ProvenanceBadge from "@/components/ProvenanceBadge";
+
 export default function RiskCard({
   title,
   prob,
@@ -23,9 +25,12 @@ export default function RiskCard({
 
   return (
     <div className={`rounded-xl border p-4 ${color}`}>
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-2">
         <p className="text-sm font-medium">{title}</p>
-        <span className="rounded-full border border-current/40 px-2 py-0.5 text-xs">{level}</span>
+        <div className="flex shrink-0 items-center gap-1.5">
+          <ProvenanceBadge kind="MODEL" />
+          <span className="rounded-full border border-current/40 px-2 py-0.5 text-xs">{level}</span>
+        </div>
       </div>
       <p className="mt-2 text-2xl font-bold">{(prob * 100).toFixed(0)}%</p>
       <p className="text-xs opacity-70">
