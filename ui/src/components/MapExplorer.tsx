@@ -344,12 +344,12 @@ function buildFlowBands(
   return out;
 }
 
-// 건물 압출은 특정 AOI 한정이 아니라 전국(사실상 전세계) 벡터타일이라 아무 데서나
-// 보인다 — 건물 밀집지로 빠르게 이동해 확인할 수 있는 테스트 지점들
+// 데모 AOI(산청·서울) 빠른 이동 버튼 — 이 두 지역만 정적 벡터타일로 완전히
+// 캐싱돼 있다(§AOI_BOUNDS). 부산 등 다른 지역도 라이브 V-World 폴백으로 여전히
+// 뜨긴 하지만, 데모 스코프 밖이라 2026-08-29 사용자 요청으로 버튼에서 제외.
 const TEST_LOCATIONS: { label: string; center: [number, number]; zoom: number }[] = [
   { label: "산청 상능마을", center: INITIAL_CENTER, zoom: 12.5 },
   { label: "서울 강남", center: [127.0276, 37.4979], zoom: 16 },
-  { label: "부산 해운대", center: [129.1603, 35.1587], zoom: 16 },
 ];
 
 // EvacuationPanel(§6)에서 선택한 대피 경로 — 카카오/네이버 실경로 API 붙기 전까지는
