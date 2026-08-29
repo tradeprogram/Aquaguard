@@ -441,7 +441,7 @@ export default function MapExplorer({ route = null, pickOrigin = false, onOrigin
         encoding: "terrarium",
         maxzoom: 15,
       });
-      map.addLayer({ id: "hills", type: "hillshade", source: "terrain", paint: { "hillshade-exaggeration": 0.5 } });
+      map.addLayer({ id: "hills", type: "hillshade", source: "terrain", paint: { "hillshade-exaggeration": 0.7 } });
 
       // 2026-08-28~29: 원래 여기서 줌에 따라 exaggeration을 1.3→0.12까지 실시간으로
       // 낮추는 taper가 있었다(z15+에서 DEM 오버줌 스파이크를 감추려는 의도). 그런데
@@ -449,14 +449,18 @@ export default function MapExplorer({ route = null, pickOrigin = false, onOrigin
       // 고정한 채 exaggeration만 1.3→0.12로 바꿨을 때 같은 건물이 화면에서 69px나
       // 움직였다 — exaggeration이 지형 메시의 실제 고도를 바꾸는 값이라, 경사면 위
       // 건물의 "땅" 자체가 줌에 따라 오르내리면서 건물이 "땅에 박혔다 솟았다"
-      // 하는 것처럼 보이는 원인이었다(사용자 리포트로 재현·근본원인 확인).
-      // 지형 exaggeration은 줌과 무관하게 고정값을 쓴다 — 그래야 건물이 지형에 대해
-      // 항상 같은 자리에 있다(3D 지도의 기본 기대치). 1.3(원경 드라마틱함)과
-      // 0.12(근접 스파이크 억제) 사이에서 산세는 여전히 드러나면서 스파이크 증폭은
-      // 최소화되는 절충값 0.55로 고정 — 건물/도로 단위 정밀도는 어차피 지형 메시가
-      // 아니라 실제 벡터 데이터(압출 높이·폭)로 표현되므로 지형이 완전히 평탄할
-      // 필요는 없다.
-      const TERRAIN_EXAGGERATION = 0.55;
+      // 하는 것처럼 보이는 원인이었다(사용자 리포트로 재현·근본원인 확인). 문제는
+      // "값이 줌마다 바뀐다"는 것이었지 값의 크기가 아니었으므로, 줌과 무관한
+      // 고정값을 쓰기로 했다 — 그래야 건물이 지형에 대해 항상 같은 자리에 있다.
+      //
+      // 처음엔 절충한다고 0.55로 낮게 고정했는데, 주로 보게 되는 저~중간 줌(원래
+      // taper가 1.3을 쓰던 구간)에서 산세가 실제 스케일보다도 낮아 보인다는 사용자
+      // 리포트로 재조정 — 원래 taper의 최댓값(1.3)에 가깝게 1.2로 고정한다. z16+
+      // 근접줌에서 DEM 오버줌 스파이크가 taper 최솟값(0.12)일 때보다는 더 보이겠지만,
+      // 건물/도로는 이미 실제 벡터 데이터(압출 높이·폭)로 정밀하게 표현되고 있어
+      // 지형 메시 자체의 완벽함보다는 산불·산사태 서사에 필요한 산세의 입체감이
+      // 우선이다.
+      const TERRAIN_EXAGGERATION = 1.2;
       map.setTerrain({ source: "terrain", exaggeration: TERRAIN_EXAGGERATION });
 
       // 대기감(하늘·안개) + 태양광 — 지형 메시 자체의 정밀도는 한계가 있으니(위 주석)
