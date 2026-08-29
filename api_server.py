@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import re
 from pathlib import Path
 from typing import Literal
 
@@ -17,6 +18,8 @@ import requests
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
+from google import genai
+from google.genai import types as genai_types
 from pydantic import BaseModel
 
 from module_o_orchestrator import geo
@@ -27,6 +30,8 @@ load_dotenv()  # .env(git-ignore됨)의 VWORLD_API_KEY 등을 os.environ으로 �
 
 DATA_VECTOR_DIR = Path(__file__).resolve().parent / "data" / "vector"
 VWORLD_API_KEY = os.environ.get("VWORLD_API_KEY")
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-flash-latest")
 
 app = FastAPI(title="AquaGuard AI — api_server")
 
@@ -434,15 +439,20 @@ def get_vworld_roads(bbox: str) -> dict:
     return _vworld_get_feature(VWORLD_ROAD_LAYER, _parse_bbox(bbox))
 
 
+class ChatHistoryTurn(BaseModel):
+    role: str  # "user" | "bot"
+    text: str
+
+
 class ChatRequest(BaseModel):
     message: str
+    alert_id: str | None = None
+    history: list[ChatHistoryTurn] | None = None
 
 
-def _chat_reply(message: str) -> str:
-    """Aqua Guard.AI 챗봇 위젯용 규칙 기반 임시 응답기.
-
-    실제 LLM(예: Module O 상황 요약) 연동 전까지의 자리표시자 — 나중에 이 함수
-    본문만 그쪽 호출로 바꿔치면 프론트는 그대로 쓸 수 있다.
+def _rule_based_chat_reply(message: str) -> str:
+    """규칙 기반 폴백 응답기 — Gemini API 키가 없거나 호출이 실패했을 때만 쓰인다
+    (§7 폴백 계층과 같은 원칙: LLM 하나에 단일 실패점을 두지 않는다).
     """
     text = message.strip()
     if not text:
@@ -470,16 +480,163 @@ def _chat_reply(message: str) -> str:
     if "고립" in text:
         return "그래프 연결성 분석 기반 고립마을 자동탐지 기능은 아직 개발 중이에요."
     if "승인" in text:
-        return "'원클릭 승인' 메뉴에서 자동 승인 대기 중인 경보를 확인하고 승인/거부할 수 있어요."
+        return "'원클릭 승인' 메뉴에서 escalation 대기 중인 경보를 확인하고 승인/거부할 수 있어요."
     return (
-        "저는 Aqua Guard.AI예요. 아직은 정해둔 답변만 드릴 수 있는 프로토타입이지만, "
+        "저는 Aqua Guard.AI예요. 지금은 정해둔 답변만 드릴 수 있는 상태지만, "
         "골든타임 / 대피소 / 산사태 / 침수 / 고립마을 / 승인 절차에 대해 물어보시면 안내해드릴게요."
     )
 
 
+# §5 Module UI "LLM 채팅"·§15 AI Agent Architecture — "LLM이 FoS나 flood depth를
+# 직접 계산하지 않는다. LLM은 도구 선택·결과 해석·보고서 조합만 한다"는 원칙을
+# 시스템 프롬프트에 그대로 명시한다. Module O의 alert_package(§5)를 컨텍스트로
+# 넣어주면 그 안의 숫자만 해석하게 하고, 모델이 직접 확률·수치를 지어내지 않도록
+# 막는 것이 핵심 — 그래야 Provenance 배지(§6.1)가 약속하는 "이 숫자는 MODEL이
+# 계산했다"는 신뢰가 챗봇 답변에서도 깨지지 않는다.
+_CHAT_SYSTEM_INSTRUCTION = """너는 AquaGuard AI(아쿠아가드)의 챗봇 해설층이다.
+AquaGuard는 산불로 훼손된 사면 위에 집중호우가 떨어졌을 때 산사태·하천범람 위험을 감지하고,
+대피소·경로·피해비용을 자동 계산해 관(官)과 시민에게 전파하는 재난 의사결정지원시스템(DSS)이다.
+
+반드시 지킬 것:
+- 너는 산사태 확률이나 침수 범위 같은 예측 수치를 절대 스스로 만들어내지 않는다. 아래
+  "현재 경보 데이터"로 주어진 값만 인용해서 설명한다. 그 데이터가 없으면 "지금 실행된
+  시나리오가 없다"고 말하고, 대시보드에서 시나리오를 먼저 실행해보라고 안내한다.
+- 너는 대피 명령이나 승인 같은 공식 결정을 스스로 내리지 않는다. 최종 판단은 항상
+  담당자(관공서 모드) 또는 사용자 본인(시민 모드)의 몫이라고 명확히 한다.
+- 지금 Module A(산사태)·B(홍수)·C~H는 목업(예시 데이터) 단계인 경우가 있다 — "현재 경보
+  데이터"에 그렇게 표시돼 있으면 반드시 그대로 사용자에게 알려주고, 실제 관측값처럼
+  포장하지 않는다.
+- AquaGuard와 무관한 질문(일반 상식, 다른 서비스 등)에는 짧게 범위 밖이라고 안내하고
+  이 서비스로 화제를 되돌린다.
+- 한국어로 답한다. 짧게 끝낼 질문은 짧게, 근거를 풀어 설명해야 하는 질문은 여러 문장으로
+  충분히 답하되 전체 답변은 공백 포함 800자를 넘기지 않는다. 별표(**)나 #, - 같은 마크다운
+  기호는 쓰지 않고 자연스러운 대화체 문장으로만 쓴다. 이모지는 쓰지 않는다.
+- 바로 위 [이전 대화]가 주어지면 그 흐름을 이어서 답한다(같은 이야기를 처음부터 다시
+  설명하지 않는다).
+"""
+
+
+def _format_alert_context(alert_id: str) -> str | None:
+    """Module O 경보 상태를 LLM 프롬프트에 넣을 한국어 컨텍스트로 요약한다.
+
+    필드 의미는 §5 Module O 계약(ARCHITECTURE.md) 그대로 — 여기서 새 숫자를
+    계산하지 않고 이미 계산된 값만 옮겨 적는다(위 시스템 프롬프트 원칙과 동일).
+    """
+    alert = alert_store.get(alert_id)
+    if alert is None:
+        return None
+    data = alert.envelope.get("data", {})
+    package = data.get("alert_package", {})
+    landslide = package.get("landslide", {})
+    flood = package.get("flood", {})
+    shelter = package.get("shelter_route", {})
+    citizen = data.get("citizen_verification", {})
+    mock_note = "(현재 목업/example 데이터 — 트랙①②④ 실제 모델 연동 전)" if os.environ.get("AQUAGUARD_MOCK_MODE", "1") != "0" else ""
+
+    lines = [f"alert_id: {alert_id} {mock_note}".strip()]
+    if "golden_time_saved_min" in data:
+        lines.append(f"골든타임 확보: {data['golden_time_saved_min']}분")
+    if "landslide_prob" in landslide:
+        lines.append(
+            f"산사태 위험확률(Module A, MODEL): {landslide['landslide_prob']*100:.0f}% "
+            f"(신뢰구간 {landslide.get('confidence_interval')})"
+        )
+    if "flood_prob" in flood:
+        lines.append(f"하천범람 위험확률(Module B, MODEL): {flood['flood_prob']*100:.0f}%")
+    if "verification_status" in citizen:
+        lines.append(f"시민 신고 역검증(Module H, OBSERVED): {citizen['verification_status']}")
+    if "time_feasible" in shelter:
+        margin = shelter.get("time_margin_min")
+        lines.append(
+            f"대피 경로(Module E, MODEL): {'시간 내 도달 가능' if shelter['time_feasible'] else '시간 부족'}"
+            + (f", 여유 {margin:.0f}분" if margin is not None else "")
+        )
+    approval = alert.resolve_status()
+    lines.append(f"승인 상태: {approval}" + (f" (escalation {alert.escalation_level}차)" if alert.escalation_level else ""))
+    return "\n".join(lines)
+
+
+_MAX_CHAT_REPLY_CHARS = 800
+
+
+def _format_history(history: list[ChatHistoryTurn] | None) -> str | None:
+    """직전 대화 몇 턴을 프롬프트에 넣어 멀티턴 맥락을 유지한다.
+
+    전체 히스토리를 다 보내면 프롬프트가 무한정 커지므로 최근 6턴만 자른다 —
+    "그럼 얼마나 남았어?" 같은 후속 질문이 이전 turn을 참조할 수 있을 만큼만.
+    """
+    if not history:
+        return None
+    recent = history[-6:]
+    lines = [f"{'사용자' if t.role == 'user' else '챗봇'}: {t.text.strip()[:300]}" for t in recent if t.text.strip()]
+    return "\n".join(lines) if lines else None
+
+
+def _strip_markdown(text: str) -> str:
+    """LLM이 시스템 프롬프트를 어기고 마크다운을 섞어 보내는 경우를 대비한 방어막 —
+    ChatWidget은 plain text만 렌더링하므로 별표/헤더/불릿 기호가 그대로 노출되면 지저분해진다.
+    """
+    text = re.sub(r"\*\*(.+?)\*\*", r"\1", text)
+    text = re.sub(r"(?m)^\s*[*#-]\s+", "", text)
+    return text.replace("**", "").strip()
+
+
+def _clip_reply(text: str, limit: int = _MAX_CHAT_REPLY_CHARS) -> str:
+    """800자 지시를 모델이 안 지켰을 때를 대비한 서버 측 안전망(§7 폴백 계층과 같은 원칙:
+    프롬프트 지시 하나에 기대지 않는다). 문장 경계에서 자르고, 못 찾으면 말줄임표로 끊는다.
+    """
+    if len(text) <= limit:
+        return text
+    window = text[:limit]
+    cut = max(window.rfind("."), window.rfind("!"), window.rfind("?"), window.rfind("\n"))
+    if cut >= limit * 0.5:
+        return window[: cut + 1].strip()
+    return window.rstrip() + "…"
+
+
+def _chat_reply(message: str, alert_id: str | None, history: list[ChatHistoryTurn] | None = None) -> str:
+    if not GEMINI_API_KEY:
+        return _clip_reply(_rule_based_chat_reply(message))
+    try:
+        client = genai.Client(api_key=GEMINI_API_KEY)
+        contents = message.strip()[:2000] or "안녕"
+        context = _format_alert_context(alert_id) if alert_id else None
+        history_block = _format_history(history)
+        parts = []
+        if context:
+            parts.append(f"[현재 경보 데이터]\n{context}")
+        if history_block:
+            parts.append(f"[이전 대화]\n{history_block}")
+        parts.append(f"[사용자 질문]\n{contents}")
+        contents = "\n\n".join(parts)
+        response = client.models.generate_content(
+            model=GEMINI_MODEL,
+            contents=contents,
+            config=genai_types.GenerateContentConfig(
+                system_instruction=_CHAT_SYSTEM_INSTRUCTION,
+                temperature=0.3,
+                # gemini-3.6-flash는 reasoning 모델이라 답변 전에 내부적으로 "생각"하는
+                # 토큰을 max_output_tokens에서 먼저 소비한다 — 예산이 너무 작으면(예: 400)
+                # 그 사고 과정 중간에 잘리거나 체크리스트 형태 그대로 응답에 새어나온다
+                # (실측 확인됨). thinking_budget=0으로 꺼보려 했으나 이 모델은 그 값 자체를
+                # 거부한다(400 INVALID_ARGUMENT) — 대신 max_output_tokens를 넉넉히 줘서
+                # (800자 목표 답변 + 사고 과정 모두 감당할 여유를) 확보한다.
+                max_output_tokens=2048,
+            ),
+        )
+        reply = _strip_markdown((response.text or "").strip())
+        return _clip_reply(reply) if reply else _clip_reply(_rule_based_chat_reply(message))
+    except Exception as e:
+        # LLM 호출 실패(키 오류·네트워크·레이트리밋 등)는 단일 실패점이 되면 안 된다 —
+        # §7 폴백 계층과 같은 원칙으로 규칙 기반 응답으로 내려간다. 단, 조용히 삼키면
+        # 디버깅이 불가능해지므로 서버 콘솔에는 실제 원인을 남긴다.
+        print(f"[chat] Gemini call failed, falling back to rule-based reply: {type(e).__name__}: {e}")
+        return _clip_reply(_rule_based_chat_reply(message))
+
+
 @app.post("/chat")
 def chat(req: ChatRequest) -> dict:
-    return {"reply": _chat_reply(req.message)}
+    return {"reply": _chat_reply(req.message, req.alert_id, req.history)}
 
 
 @app.get("/health")

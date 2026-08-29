@@ -90,11 +90,20 @@ export async function getAlertGeojson(alertId: string): Promise<GeoJSON.FeatureC
   return res.json();
 }
 
-export async function sendChatMessage(message: string): Promise<string> {
+export interface ChatHistoryTurn {
+  role: "user" | "bot";
+  text: string;
+}
+
+export async function sendChatMessage(
+  message: string,
+  alertId?: string,
+  history?: ChatHistoryTurn[]
+): Promise<string> {
   const res = await fetch(`${API_BASE}/chat`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ message }),
+    body: JSON.stringify({ message, alert_id: alertId, history }),
   });
   if (!res.ok) throw new Error(`chat failed: ${res.status}`);
   const data: { reply: string } = await res.json();
