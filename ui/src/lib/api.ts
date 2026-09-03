@@ -146,7 +146,7 @@ export interface IsolationCheckResult {
 export async function checkIsolation(
   bbox: [number, number, number, number],
   shelterCandidates: { lon: number; lat: number }[],
-  hazardPolygon?: GeoJSON.Polygon
+  hazardPolygon?: GeoJSON.Polygon | GeoJSON.MultiPolygon
 ): Promise<IsolationCheckResult> {
   const res = await fetch(`${API_BASE}/isolation-check`, {
     method: "POST",

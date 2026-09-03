@@ -2,20 +2,16 @@
 
 import { useState } from "react";
 import { checkIsolation, type IsolationCheckResult } from "@/lib/api";
+import { DEMO_SHELTERS as SHELTERS, DEMO_ISOLATION_BBOX as DEMO_BBOX } from "@/lib/demoShelters";
 
 // §7(독창성 축 4) — 도로망 그래프에서 위험 구간을 제거한 뒤 대피소까지 도달 가능한
 // 경로가 하나도 안 남는 건물을 찾는다. module_e_routing/isolation.py가 VWorld
 // 도로망(LT_L_MOCTLINK)·건물(LT_C_SPBD) 실데이터로 networkx 그래프를 만들어 계산한다.
-//
-// 지금은 EvacuationPanel과 같은 산청 상능마을 대피소 2곳(S001·S002) 주변 bbox로
-// 고정돼 있다 — 화면 뷰포트 연동은 다음 단계(TODO).
-const DEMO_BBOX: [number, number, number, number] = [128.045, 35.343, 128.065, 35.358];
-const DEMO_SHELTERS = [
-  { lon: 128.057, lat: 35.349 },
-  { lon: 128.052, lat: 35.353 },
-];
+// 대피소 목록·bbox는 lib/demoShelters.ts 공통 정의(EvacuationPanel·MapExplorer와 동일).
+const DEMO_SHELTERS = SHELTERS.map(({ lon, lat }) => ({ lon, lat }));
 // 마을 중앙 진입로를 세로로 끊는 위험폴리곤 — "위험 시나리오 적용" 버튼용 데모 지오메트리.
-// 실제 서비스에서는 Module A/B의 토사·침수 폴리곤이 여기 들어가야 한다(TODO).
+// 실제 침수·토사 슬라이더 값은 MapExplorer.tsx가 자동으로 /isolation-check에 넘긴다
+// (아래 버튼은 슬라이더 없이도 이 화면 단독으로 테스트해볼 수 있게 남겨둔 수동 트리거).
 const DEMO_HAZARD: GeoJSON.Polygon = {
   type: "Polygon",
   coordinates: [

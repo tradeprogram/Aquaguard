@@ -18,6 +18,7 @@ import { lineString as turfLineString } from "@turf/helpers";
 import type { Feature, FeatureCollection, LineString, MultiLineString, Polygon, MultiPolygon } from "geojson";
 import {
   API_BASE,
+  checkIsolation,
   getBoundaries,
   getVWorldBuildings,
   getVWorldRivers,
@@ -26,6 +27,7 @@ import {
   type AdminLevel,
   type AdminSearchResult,
 } from "@/lib/api";
+import { DEMO_ISOLATION_BBOX, DEMO_SHELTERS } from "@/lib/demoShelters";
 import { useSlowLoading } from "@/lib/useSlowLoading";
 
 // 산청군 생비량면 — data/vector/adm_dong_5179.geojson 실측 centroid. 초기 카메라 위치일
@@ -393,6 +395,9 @@ export default function MapExplorer({
   // 현재 카메라 중심이 산청·서울 AOI 안인지 — 안이면 정적 타일을 보여주고 실시간
   // V-World fetch는 건너뛴다(아래 syncAOILayers/updateVWorld* 참조).
   const aoiRef = useRef<AOIKey | null>(null);
+  // §7 슬라이더 연동 — 침수/토사 볼륨이 바뀔 때마다 /isolation-check를 다시 부르는데,
+  // 드래그 중 매 프레임 호출하면 과하므로 디바운스 타이머를 여기 들고 있는다.
+  const isolationDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const [mapReady, setMapReady] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
@@ -404,6 +409,7 @@ export default function MapExplorer({
   const [debrisDepth, setDebrisDepth] = useState(0);
   const [floodDepth, setFloodDepth] = useState(0);
   const [floodedBuildingCount, setFloodedBuildingCount] = useState<number | null>(null);
+  const [hazardIsolatedCount, setHazardIsolatedCount] = useState<number | null>(null);
 
   // 지도 초기화 (1회)
   useEffect(() => {
@@ -957,6 +963,53 @@ export default function MapExplorer({
         },
       });
 
+      // §7 — 토사/침수 슬라이더가 만드는 3D 볼륨의 가장 바깥 밴드를 그대로
+      // /isolation-check의 hazard_polygon으로 재사용한다. Module A/B의 실제 예측
+      // 폴리곤이 아니라 what-if 슬라이더값 기반이지만, 지오메트리 자체는 진짜라
+      // 도로망 그래프 연산에 그대로 쓸 수 있다 — 슬라이더가 0이면 위험지역 없음으로
+      // 취급(고립 레이어 비움).
+      //
+      // 알려진 한계(2026-09-03): buildFlowBands의 밴드 폭(width)은 depthM과 무관하게
+      // 고정이라(depthM은 fill-extrusion-height, 즉 3D로 "높게 보이는 정도"에만 영향)
+      // 슬라이더가 0보다 크기만 하면 폭·따라서 이 hazard_polygon도 항상 동일 —
+      // 0.4m든 3.4m든 고립 건물 수가 같게 나오는 게 정상(버그 아님, 설계상 한계).
+      // 심각도에 따라 고립 범위가 커지게 하려면 width를 depthM에 비례시켜야 함(TODO).
+      const scheduleIsolationCheck = (
+        debrisOuter: Feature<Polygon | MultiPolygon> | undefined,
+        floodOuter: Feature<Polygon | MultiPolygon> | undefined
+      ) => {
+        if (isolationDebounceRef.current) clearTimeout(isolationDebounceRef.current);
+
+        const hazardPolys = [debrisOuter, floodOuter].filter(
+          (f): f is Feature<Polygon> => !!f && f.geometry.type === "Polygon"
+        );
+        if (hazardPolys.length === 0) {
+          const src = mapRef.current?.getSource("isolated-areas") as GeoJSONSource | undefined;
+          src?.setData({ type: "FeatureCollection", features: [] });
+          setHazardIsolatedCount(null);
+          return;
+        }
+
+        const hazardGeometry: GeoJSON.Polygon | GeoJSON.MultiPolygon =
+          hazardPolys.length === 1
+            ? hazardPolys[0].geometry
+            : { type: "MultiPolygon", coordinates: hazardPolys.map((p) => p.geometry.coordinates) };
+
+        isolationDebounceRef.current = setTimeout(() => {
+          checkIsolation(
+            DEMO_ISOLATION_BBOX,
+            DEMO_SHELTERS.map(({ lon, lat }) => ({ lon, lat })),
+            hazardGeometry
+          )
+            .then((result) => {
+              const src = mapRef.current?.getSource("isolated-areas") as GeoJSONSource | undefined;
+              src?.setData(result.isolated_areas);
+              setHazardIsolatedCount(result.isolated_building_count);
+            })
+            .catch(() => setHazardIsolatedCount(null));
+        }, 600);
+      };
+
       simUpdateRef.current = (debrisM: number, floodM: number) => {
         const currentMap = mapRef.current;
         if (!currentMap) return;
@@ -972,6 +1025,8 @@ export default function MapExplorer({
           type: "FeatureCollection",
           features: floodFeatures,
         } as FeatureCollection);
+
+        scheduleIsolationCheck(debrisFeatures[0], floodFeatures[0]);
 
         // 침수 범위(가장 바깥 밴드) 안에 들어오는 렌더링된 건물 수를 세서 "몇 개 건물이
         // 잠기는지"를 텍스트로도 보여준다 — 3D 볼륨 자체가 건물을 시각적으로 덮는 게
@@ -1359,6 +1414,11 @@ export default function MapExplorer({
           {floodedBuildingCount !== null && (
             <p className="mt-3 rounded-md bg-sky-950/50 px-2 py-1.5 text-sky-300">
               침수 범위 안 건물 약 <span className="font-bold">{floodedBuildingCount}</span>개
+            </p>
+          )}
+          {hazardIsolatedCount !== null && (
+            <p className="mt-2 rounded-md bg-fuchsia-950/50 px-2 py-1.5 text-fuchsia-300">
+              §7 고립 위험 건물 약 <span className="font-bold">{hazardIsolatedCount}</span>개 (대피소 도달 불가)
             </p>
           )}
         </div>

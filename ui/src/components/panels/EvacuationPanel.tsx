@@ -3,27 +3,12 @@
 import { useEffect, useState } from "react";
 import type { EvacuationRoute } from "@/components/MapExplorer";
 import { getEvacuationRoutes, type EvacuationRouteResult } from "@/lib/api";
+import { DEMO_SHELTERS as SHELTERS } from "@/lib/demoShelters";
 
-// Module E(대피소·경로 라우팅) 확장판 미리보기 — HANDOFF.md §6.
-// 카카오/네이버 길찾기 API 키가 아직 없어 실제 도로 경로는 못 붙였다 — "내 위치로
-// 찾기"를 누르면 브라우저 Geolocation(§6.8)으로 받은 실제 좌표에서 아래 대피소들까지
-// 직선거리(하버사인) ÷ 가정 속도로 근사 계산한다(§6.3과 같은 원칙). 누르기 전엔
-// contracts/module_e.example.json 기준 고정 예시값을 그대로 보여준다.
-interface Shelter {
-  id: string;
-  name: string;
-  lon: number;
-  lat: number;
-  capacity: number;
-}
-
-// 산청 상능마을(트리거 지점) 근처에 손으로 넣은 대피소 후보 — HANDOFF §6.2. S003은
-// 실제 산청군청(산청읍) 좌표라 일부러 멀어서 "도달 불가" 사례를 보여준다.
-const SHELTERS: Shelter[] = [
-  { id: "S001", name: "산청 상능마을회관", lon: 128.057, lat: 35.349, capacity: 200 },
-  { id: "S002", name: "생비량초등학교", lon: 128.052, lat: 35.353, capacity: 300 },
-  { id: "S003", name: "산청군청 대피소", lon: 127.900325, lat: 35.40737, capacity: 500 },
-];
+// Module E(대피소·경로 라우팅) — HANDOFF.md §6. 대피소 목록(SHELTERS)은
+// lib/demoShelters.ts 공통 정의를 쓴다 — IsolationPanel·MapExplorer도 같은 대피소
+// 기준으로 계산해야 화면 간 앞뒤가 맞는다. S003은 실제 산청군청(산청읍) 좌표라
+// 일부러 멀어서 "도달 불가" 사례를 보여준다.
 
 // 위치를 아직 못 받았을 때 보여줄 고정 데모 값 — contracts/module_e.example.json
 // (S001, eta_min 14.5)과 HANDOFF §6.6 제안 스키마 예시값(walk 52.0) 그대로.

@@ -184,6 +184,41 @@ def get_alert_geojson(alert_id: str) -> dict:
     return {"type": "FeatureCollection", "features": features}
 
 
+SHELTERS_PATH = DATA_VECTOR_DIR / "shelters_national.geojson"
+_shelters_cache: list[dict] | None = None
+
+
+def _get_shelters() -> list[dict]:
+    """scripts/fetch_shelters.py가 미리 받아둔 전국 지진옥외대피소(DSSP-IF-00103)를
+    최초 요청 시 한 번만 읽어 메모리에 캐시한다 — 하루 호출 1,000건 한도 API라 매
+    요청마다 실시간으로 부르지 않는다. 2026-09-03 확인: 이 데이터셋은 경상남도·
+    전라남북도·충청남도·세종이 아직 없다(지자체별 등록 진행 중으로 추정) — 그 지역은
+    빈 리스트가 정상이며, 손데이터(예: 산청 데모 대피소)로 계속 보완해야 한다.
+    """
+    global _shelters_cache
+    if _shelters_cache is None:
+        if not SHELTERS_PATH.exists():
+            _shelters_cache = []
+        else:
+            with open(SHELTERS_PATH, encoding="utf-8") as f:
+                _shelters_cache = json.load(f)["features"]
+    return _shelters_cache
+
+
+@app.get("/shelters")
+def get_shelters(bbox: str) -> dict:
+    """§6.4 — bbox 안에 있는 실제 대피소 목록(GeoJSON Point FeatureCollection).
+    커버리지 없는 지역(예: 경남)은 features가 빈 배열로 온다 — 프론트에서 그 경우
+    손데이터로 폴백할지는 화면별로 판단."""
+    minx, miny, maxx, maxy = _parse_bbox(bbox)
+    features = [
+        f
+        for f in _get_shelters()
+        if minx <= f["geometry"]["coordinates"][0] <= maxx and miny <= f["geometry"]["coordinates"][1] <= maxy
+    ]
+    return {"type": "FeatureCollection", "features": features}
+
+
 ADM_LEVELS = ("sido", "sigungu", "dong")
 ADM_GEOJSON_PATHS = {level: DATA_VECTOR_DIR / f"adm_{level}_5179.geojson" for level in ADM_LEVELS}
 ADM_SEARCH_INDEX_PATH = DATA_VECTOR_DIR / "adm_index.json"
