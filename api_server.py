@@ -22,6 +22,8 @@ from google import genai
 from google.genai import types as genai_types
 from pydantic import BaseModel
 
+import module_e_routing
+from module_e_routing import isolation as module_e_isolation
 from module_o_orchestrator import geo
 from module_o_orchestrator.orchestrator import DEFAULT_SHELTER_CANDIDATES, run as run_orchestrator
 from module_o_orchestrator.store import alert_store
@@ -637,6 +639,70 @@ def _chat_reply(message: str, alert_id: str | None, history: list[ChatHistoryTur
 @app.post("/chat")
 def chat(req: ChatRequest) -> dict:
     return {"reply": _chat_reply(req.message, req.alert_id, req.history)}
+
+
+class EvacuationRouteShelter(BaseModel):
+    shelter_id: str
+    lon: float
+    lat: float
+    capacity: int
+
+
+class EvacuationRouteRequest(BaseModel):
+    origin: dict[str, float]  # {"lon": ..., "lat": ...} — 브라우저 Geolocation/지도 클릭 좌표(EPSG:4326)
+    shelter_candidates: list[EvacuationRouteShelter]
+    time_budget_hours: float = 2.0
+
+
+@app.post("/evacuation-route")
+def evacuation_route(req: EvacuationRouteRequest) -> dict:
+    """§6.4 — module_e_routing.evaluate_candidates()를 감싸는 REST 엔드포인트.
+
+    module_e_routing 자체는(오케스트레이터의 module_e.schema.json 계약대로) EPSG:5179만
+    주고받으므로, 여기서만 브라우저가 보낸 4326 좌표를 5179로 바꿔 넣고, 결과 경로도
+    지도에 바로 그릴 수 있게 4326으로 다시 붙여서 돌려준다(§4.1: 재투영은 UI 출력
+    직전에만 — 이 엔드포인트가 그 "직전" 지점).
+    """
+    origin_x, origin_y = module_e_routing.point_lonlat_to_5179(req.origin["lon"], req.origin["lat"])
+    shelter_candidates_5179 = []
+    for s in req.shelter_candidates:
+        x, y = module_e_routing.point_lonlat_to_5179(s.lon, s.lat)
+        shelter_candidates_5179.append({"shelter_id": s.shelter_id, "x_5179": x, "y_5179": y, "capacity": s.capacity})
+
+    results, warnings = module_e_routing.evaluate_candidates(
+        {
+            "origin": {"x_5179": origin_x, "y_5179": origin_y},
+            "risk_polygons": [],
+            "shelter_candidates": shelter_candidates_5179,
+            "road_graph_source": "standard_node_link_v1",
+            "time_budget_hours": req.time_budget_hours,
+        }
+    )
+    for r in results:
+        r["route_lonlat"] = [
+            list(module_e_routing.point_5179_to_lonlat(x, y)) for x, y in r["route_5179"]["coordinates"]
+        ]
+
+    return {"results": results, "warnings": warnings}
+
+
+class IsolationCheckRequest(BaseModel):
+    bbox: tuple[float, float, float, float]  # (minLon, minLat, maxLon, maxLat)
+    shelter_candidates: list[dict[str, float]]  # [{"lon": ..., "lat": ...}, ...]
+    hazard_polygon: dict | None = None  # GeoJSON Polygon, EPSG:4326 — 없으면 베이스라인 연결성만 계산
+
+
+@app.post("/isolation-check")
+def isolation_check(req: IsolationCheckRequest) -> dict:
+    """§7 — module_e_routing.isolation.check_isolation()을 감싸는 REST 엔드포인트.
+    bbox가 넓으면(VWorld 9km² 한도) 내부에서 자동으로 타일을 나눠 순차 조회하므로
+    화면 뷰포트가 클수록 응답이 느려진다(캐싱은 아직 없음 — TODO).
+    """
+    try:
+        shelters_lonlat = [(s["lon"], s["lat"]) for s in req.shelter_candidates]
+        return module_e_isolation.check_isolation(req.bbox, shelters_lonlat, req.hazard_polygon)
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=str(e))
 
 
 @app.get("/health")

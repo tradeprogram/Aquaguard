@@ -4,8 +4,10 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Map as MapLibreMap,
   NavigationControl,
+  Popup,
   type ExpressionSpecification,
   type GeoJSONSource,
+  type MapGeoJSONFeature,
   type StyleSpecification,
 } from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
@@ -358,6 +360,9 @@ export interface EvacuationRoute {
   origin: [number, number]; // [lon, lat]
   destination: [number, number]; // [lon, lat]
   label: string;
+  // module_e_routing이 네이버 Directions로 실제 도로 경로를 받아온 경우 여기에 담긴다
+  // (§6.4 /evacuation-route). 없으면(키 미설정·API 실패) 기존처럼 origin→destination 직선.
+  path?: [number, number][];
 }
 
 interface MapExplorerProps {
@@ -366,9 +371,21 @@ interface MapExplorerProps {
   // 동안 커서가 십자선으로 바뀌고, 다음 클릭 좌표를 onOriginPicked로 한 번 올려보낸다.
   pickOrigin?: boolean;
   onOriginPicked?: (lonLat: [number, number]) => void;
+  // §7 IsolationPanel에서 계산한 고립 건물 클러스터(hull, 단독 건물은 Point) — 마젠타로 표시.
+  isolatedAreas?: GeoJSON.FeatureCollection | null;
+  // 패널에서 "고립 구역 N"을 클릭하면 그 구역으로 지도를 이동시키는 용도. nonce를
+  // 넣는 이유는 같은 구역을 연달아 두 번 눌러도(같은 bbox) 매번 다시 이동해야 하는데
+  // React effect는 값이 안 바뀌면 재실행을 안 하기 때문 — 클릭마다 nonce를 올려 강제한다.
+  focusBbox?: { bbox: [number, number, number, number]; nonce: number } | null;
 }
 
-export default function MapExplorer({ route = null, pickOrigin = false, onOriginPicked }: MapExplorerProps = {}) {
+export default function MapExplorer({
+  route = null,
+  pickOrigin = false,
+  onOriginPicked,
+  isolatedAreas = null,
+  focusBbox = null,
+}: MapExplorerProps = {}) {
   const mapContainer = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
   const simUpdateRef = useRef<((debrisM: number, floodM: number) => void) | null>(null);
@@ -1012,6 +1029,54 @@ export default function MapExplorer({ route = null, pickOrigin = false, onOrigin
         },
       });
 
+      // 고립마을 자동탐지(§7) — 대피소까지 도로가 하나도 안 남은 건물 클러스터.
+      // 건물 1채짜리 클러스터는 Point, 여러 채는 convex hull Polygon으로 오므로
+      // geometry-type으로 나눠 각각 원/채움영역으로 그린다(마젠타 — 기존 빨강 위험
+      // 폴리곤·파랑 대피경로와 구분).
+      map.addSource("isolated-areas", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
+      map.addLayer({
+        id: "isolated-areas-fill",
+        type: "fill",
+        source: "isolated-areas",
+        filter: ["==", ["geometry-type"], "Polygon"],
+        paint: { "fill-color": "#d946ef", "fill-opacity": 0.3 },
+      });
+      map.addLayer({
+        id: "isolated-areas-outline",
+        type: "line",
+        source: "isolated-areas",
+        filter: ["==", ["geometry-type"], "Polygon"],
+        paint: { "line-color": "#d946ef", "line-width": 2 },
+      });
+      map.addLayer({
+        id: "isolated-areas-points",
+        type: "circle",
+        source: "isolated-areas",
+        filter: ["==", ["geometry-type"], "Point"],
+        paint: { "circle-radius": 6, "circle-color": "#d946ef", "circle-stroke-width": 1.5, "circle-stroke-color": "#0f172a" },
+      });
+      // 고립 구역을 클릭하면 몇 채인지 팝업으로 바로 보여준다 — 지도 위 도형만 봐서는
+      // "이게 뭔지" 알 길이 없다는 문제(2026-09-03 피드백)를 직접 해결하는 부분.
+      const isolationPopup = new Popup({ closeButton: false, closeOnClick: false, offset: 10 });
+      const showIsolationPopup = (e: { lngLat: { lng: number; lat: number }; features?: MapGeoJSONFeature[] }) => {
+        const feature = e.features?.[0];
+        const count = feature?.properties?.building_count;
+        if (count == null) return;
+        map.getCanvas().style.cursor = "pointer";
+        isolationPopup
+          .setLngLat(e.lngLat)
+          .setHTML(`<div style="font:12px sans-serif;color:#1e1b2e;">고립 구역 · 약 ${count}채<br/>대피소 도달 가능 경로 0개</div>`)
+          .addTo(map);
+      };
+      const hideIsolationPopup = () => {
+        map.getCanvas().style.cursor = "";
+        isolationPopup.remove();
+      };
+      map.on("mouseenter", "isolated-areas-fill", showIsolationPopup);
+      map.on("mouseleave", "isolated-areas-fill", hideIsolationPopup);
+      map.on("mouseenter", "isolated-areas-points", showIsolationPopup);
+      map.on("mouseleave", "isolated-areas-points", hideIsolationPopup);
+
       setMapReady(true);
     });
     map.on("error", (e) => console.error("[maplibre error]", e.error?.message ?? e));
@@ -1097,11 +1162,12 @@ export default function MapExplorer({ route = null, pickOrigin = false, onOrigin
       markerSource?.setData({ type: "FeatureCollection", features: [] });
       return;
     }
-    const { origin, destination, label } = route;
+    const { origin, destination, label, path } = route;
+    const lineCoordinates = path && path.length > 1 ? path : [origin, destination];
     routeSource?.setData({
       type: "FeatureCollection",
       features: [
-        { type: "Feature", properties: {}, geometry: { type: "LineString", coordinates: [origin, destination] } },
+        { type: "Feature", properties: {}, geometry: { type: "LineString", coordinates: lineCoordinates } },
       ],
     } as FeatureCollection);
     markerSource?.setData({
@@ -1121,6 +1187,27 @@ export default function MapExplorer({ route = null, pickOrigin = false, onOrigin
       { padding: 120, pitch: DEFAULT_PITCH, bearing: -20, duration: 1500 }
     );
   }, [mapReady, route]);
+
+  useEffect(() => {
+    if (!mapReady) return;
+    const areasSource = mapRef.current?.getSource("isolated-areas") as GeoJSONSource | undefined;
+    areasSource?.setData(isolatedAreas ?? { type: "FeatureCollection", features: [] });
+  }, [mapReady, isolatedAreas]);
+
+  useEffect(() => {
+    if (!mapReady || !focusBbox) return;
+    const currentMap = mapRef.current;
+    if (!currentMap) return;
+    const [minLon, minLat, maxLon, maxLat] = focusBbox.bbox;
+    currentMap.fitBounds(
+      [
+        [minLon, minLat],
+        [maxLon, maxLat],
+      ],
+      { padding: 100, pitch: DEFAULT_PITCH, bearing: -20, duration: 1200, maxZoom: 17 }
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mapReady, focusBbox?.nonce]);
 
   // §6.8 폴백 ① — 지도 클릭으로 출발지 선택. pickOrigin이 켜져 있는 동안만 커서를
   // 십자선으로 바꾸고 다음 클릭 한 번만 잡아서 부모(EvacuationPanel)로 올려보낸다.

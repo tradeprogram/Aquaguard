@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import type { EvacuationRoute } from "@/components/MapExplorer";
+import { getEvacuationRoutes, type EvacuationRouteResult } from "@/lib/api";
 
 // Module E(대피소·경로 라우팅) 확장판 미리보기 — HANDOFF.md §6.
 // 카카오/네이버 길찾기 API 키가 아직 없어 실제 도로 경로는 못 붙였다 — "내 위치로
@@ -64,6 +65,9 @@ export default function EvacuationPanel({
   const [locError, setLocError] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [awaitingMapPick, setAwaitingMapPick] = useState(false);
+  const [backendResults, setBackendResults] = useState<Record<string, EvacuationRouteResult> | null>(null);
+  const [backendLoading, setBackendLoading] = useState(false);
+  const [backendError, setBackendError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!mapPickedOrigin) return;
@@ -80,6 +84,40 @@ export default function EvacuationPanel({
     setLocError(null);
     onRequestMapPick?.();
   };
+
+  // origin이 잡히면 실제 백엔드(module_e_routing, 네이버 Directions)로 차량 경로를
+  // 조회한다. 실패(서버 미기동·API 키 문제 등)해도 화면이 멈추지 않도록 아래 rows에서
+  // 이 결과가 없으면 기존 직선거리 근사로 조용히 폴백한다.
+  useEffect(() => {
+    if (!origin) {
+      setBackendResults(null);
+      setBackendError(null);
+      return;
+    }
+    let cancelled = false;
+    setBackendLoading(true);
+    setBackendError(null);
+    getEvacuationRoutes(
+      { lon: origin[0], lat: origin[1] },
+      SHELTERS.map((s) => ({ shelter_id: s.id, lon: s.lon, lat: s.lat, capacity: s.capacity })),
+      TIME_BUDGET_MIN / 60
+    )
+      .then(({ results }) => {
+        if (cancelled) return;
+        const byId: Record<string, EvacuationRouteResult> = {};
+        for (const r of results) byId[r.shelter_id] = r;
+        setBackendResults(byId);
+      })
+      .catch(() => {
+        if (!cancelled) setBackendError("실제 경로 조회 실패 — 직선거리 근사로 대체");
+      })
+      .finally(() => {
+        if (!cancelled) setBackendLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [origin]);
 
   const locate = () => {
     if (!navigator.geolocation) {
@@ -103,17 +141,31 @@ export default function EvacuationPanel({
 
   const rows = SHELTERS.map((s) => {
     if (!origin) {
-      return { ...s, ...DEMO_ETA[s.id], distanceKm: null as number | null };
+      return { ...s, ...DEMO_ETA[s.id], distanceKm: null as number | null, real: false as const };
+    }
+    const backend = backendResults?.[s.id];
+    if (backend) {
+      return {
+        ...s,
+        carMin: backend.eta_min,
+        walkMin: backend.modes.walk.eta_min,
+        feasible: backend.time_feasible,
+        distanceKm: null as number | null,
+        real: !backend.fallback_used,
+        routeLonlat: backend.route_lonlat,
+      };
     }
     const distanceKm = haversineKm(origin, [s.lon, s.lat]);
     const carMin = (distanceKm / CAR_KMH) * 60;
     const walkMin = (distanceKm / WALK_KMH) * 60;
-    return { ...s, carMin, walkMin, feasible: carMin <= TIME_BUDGET_MIN, distanceKm };
+    return { ...s, carMin, walkMin, feasible: carMin <= TIME_BUDGET_MIN, distanceKm, real: false as const };
   }).sort((a, b) => a.carMin - b.carMin);
 
   const select = (s: (typeof rows)[number]) => {
     setSelectedId(s.id);
-    if (origin) onSelectRoute?.({ origin, destination: [s.lon, s.lat], label: s.name });
+    if (!origin) return;
+    const path = "routeLonlat" in s ? s.routeLonlat : undefined;
+    onSelectRoute?.({ origin, destination: [s.lon, s.lat], label: s.name, path });
   };
 
   return (
@@ -123,11 +175,28 @@ export default function EvacuationPanel({
         보여준다. &ldquo;네이버 지도 최적경로처럼&rdquo;이 사용자 요청 원문.
       </p>
 
-      <div className="rounded-lg border border-dashed border-amber-800/40 bg-amber-950/10 p-3 text-[11px] text-amber-300/80">
-        미리보기 — 카카오/네이버 길찾기 API 키 연동 전이라 아래 숫자는 실제 도로 경로가 아니라
-        직선거리 근사 기반 예시값이다(HANDOFF.md §6). 실제 키가 들어오면 이 화면 그대로 실데이터로
-        교체된다.
-      </div>
+      {!origin && (
+        <div className="rounded-lg border border-dashed border-amber-800/40 bg-amber-950/10 p-3 text-[11px] text-amber-300/80">
+          미리보기 — 아래 숫자는 위치를 아직 안 정해서 보여주는 고정 예시값이다. &ldquo;내 위치로
+          찾기&rdquo;나 &ldquo;지도에서 선택&rdquo;을 누르면 실제 경로로 바뀐다.
+        </div>
+      )}
+      {origin && backendLoading && (
+        <div className="rounded-lg border border-dashed border-sky-800/40 bg-sky-950/10 p-3 text-[11px] text-sky-300/80">
+          실제 도로 경로 조회 중…
+        </div>
+      )}
+      {origin && !backendLoading && rows.some((r) => r.real) && (
+        <div className="rounded-lg border border-dashed border-emerald-800/40 bg-emerald-950/10 p-3 text-[11px] text-emerald-300/80">
+          네이버 Directions 실제 도로 경로 기준 — 차량 시간은 실경로, 도보 시간은 여전히
+          직선거리 근사(공개 API에 도보 길찾기가 없음, HANDOFF.md §6.3).
+        </div>
+      )}
+      {origin && !backendLoading && !rows.some((r) => r.real) && (
+        <div className="rounded-lg border border-dashed border-amber-800/40 bg-amber-950/10 p-3 text-[11px] text-amber-300/80">
+          {backendError ?? "실제 경로 API 응답 없음"} — 아래 숫자는 직선거리 근사 기반 예시값이다.
+        </div>
+      )}
 
       <div>
         <div className="flex gap-2">
