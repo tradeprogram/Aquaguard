@@ -437,7 +437,7 @@ UI 표기 시 신뢰도 배지를 A/B와 다르게(모델 아님을 명시).
     "warning_escalated": "2025-07-19T12:37:00+09:00" },
   "timeline_agent": { "detected": "2025-07-19T09:15:00+09:00", "alert_sent": "2025-07-19T09:20:00+09:00" },
   "golden_time_saved_min": 197,
-  "approval_status": "권고중(escalation)", // "권고중" | "권고중(escalation)" | "승인됨" | "보류" — 자동승인 값 없음(2026-08-29)
+  "approval_status": "권고중(escalation)", // "대기" | "승인" | "거부" | "권고중(escalation)" — 자동승인 값 없음(2026-08-29)
   "escalation_level": 1,
   "citizen_verification": { "verification_status": "현장확인", "confidence_adjustment": 0.12 },
   "alert_package": { "landslide": {}, "flood": {}, "shelter_route": {}, "damage_cost": {} } }
