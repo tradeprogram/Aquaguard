@@ -1,0 +1,151 @@
+{
+  "policy_version": "module_h_v1",
+  "description": "Module H 시민 역검증 집계 규칙(2026-09-04 나정우 결정). 검증된 신뢰도 모델이 아니라 계약을 충족하면서 규칙을 문서화한 초기판이다 — 실제 파일럿 응답 데이터를 확보하면 재보정한다.",
+  "rows": [
+    {
+      "id": "report_type_weights",
+      "value": { "이상징후_목격": 1.0, "이미_대피함": 0.5, "오탐_신고": -1.0 },
+      "unit": null,
+      "status": "TEAM_DECISION",
+      "source": {
+        "agency": null,
+        "document": "트랙② 내부 결정(2026-09-04, 나정우)",
+        "clause": null,
+        "url": null,
+        "retrieved": null,
+        "effective": "2026-09-04"
+      },
+      "note": "경보 이후의 대피 보고는 경보 순응 신호 성격이 있어(현장 위험의 독립 확인이 아님) 0.5로 절하 — 경보 전/후 시각별 차등 가중은 향후 검토 항목. 이상징후_목격만이 현장 위험의 독립 확인이고, 오탐_신고는 같은 크기로 음의 방향으로 센다."
+    },
+    {
+      "id": "shrinkage_k",
+      "value": 9.0,
+      "unit": null,
+      "status": "PLACEHOLDER",
+      "source": { "agency": null, "document": null, "clause": null, "url": null, "retrieved": null },
+      "note": "계약 예시 역산값 — 검증된 신뢰도 모델이 아니며, 실제 파일럿 응답 데이터 확보 시 재보정. contracts/module_h.example.json의 report_count=6 → confidence_adjustment=0.12를 재현하도록 역산했다(6/(6+9)=0.4, ×0.3=0.12). 이 항이 있어야 1~2건으로 최대 조정이 나오지 않고 건수가 늘수록 포화하는 곡선이 되며, §7의 '응답 소수(낮은 가중치)' 폴백이 별도 분기 없이 수식에서 나온다."
+    },
+    {
+      "id": "max_adjustment",
+      "value": 0.3,
+      "unit": null,
+      "status": "DERIVED",
+      "source": {
+        "agency": null,
+        "document": "contracts/module_h.schema.json",
+        "clause": "confidence_adjustment: minimum -0.3, maximum 0.3",
+        "url": null,
+        "retrieved": null,
+        "effective": null
+      },
+      "note": "계약 스키마가 못박은 범위라 우리가 고를 값이 아니다. 계약이 바뀌면 여기도 따라가야 한다(4인 합의 사안)."
+    },
+    {
+      "id": "confirm_threshold",
+      "value": { "min_weighted_positive": 3.0 },
+      "unit": null,
+      "status": "PLACEHOLDER",
+      "source": { "agency": null, "document": null, "clause": null, "url": null, "retrieved": null },
+      "note": "가중 긍정(1.0×목격 + 0.5×대피)이 이 값 이상이면 '현장확인'. 근거 없는 초기값 — 파일럿에서 오경보율·미탐율을 보고 조정할 것."
+    },
+    {
+      "id": "false_positive_threshold",
+      "value": { "min_false_reports": 2, "min_false_ratio": 0.5 },
+      "unit": null,
+      "status": "PLACEHOLDER",
+      "source": { "agency": null, "document": null, "clause": null, "url": null, "retrieved": null },
+      "note": "오탐 신고가 2건 이상이면서 유효 신고의 절반 이상일 때만 '오탐판정'. 1건으로 경보를 내리지 못하게 두 조건을 함께 건다 — 생명안전 쪽으로 보수적. 근거 없는 초기값."
+    },
+    {
+      "id": "full_weight_min_reports",
+      "value": 3,
+      "unit": null,
+      "status": "PLACEHOLDER",
+      "source": { "agency": null, "document": null, "clause": null, "url": null, "retrieved": null },
+      "note": "§7 폴백 계층의 '응답 다수 확보'(1순위)와 '응답 소수'(2순위)를 가르는 유효 신고 수. §7이 숫자를 주지 않아 트랙②가 정한 값이다."
+    },
+    {
+      "id": "valid_window_min",
+      "value": 60,
+      "unit": "min",
+      "status": "PLACEHOLDER",
+      "source": { "agency": null, "document": null, "clause": null, "url": null, "retrieved": null },
+      "note": "경보 이후 이 시간 안에 들어온 신고만 집계한다. 경보 시각을 모르면 시간창 필터 자체를 적용하지 않는다. 근거 없는 초기값."
+    },
+    {
+      "id": "distance_filter",
+      "value": { "mode": "hard_radius", "decay_enabled": false, "decay_multiplier": 2.0 },
+      "unit": null,
+      "status": "TEAM_DECISION",
+      "source": {
+        "agency": null,
+        "document": "트랙② 내부 결정(2026-09-04, 나정우)",
+        "clause": null,
+        "url": null,
+        "retrieved": null,
+        "effective": "2026-09-04"
+      },
+      "note": "계약이 trigger_radius_m을 명시적으로 주므로 반경 안/밖 이분법으로 자른다. 거리 감쇠 가중은 근거가 없어 기본 비활성 — 켜면 PLACEHOLDER만 늘어난다. 거리는 EPSG:5179 미터 위 유클리드로 계산하며 재투영하지 않는다(§4.1)."
+    },
+    {
+      "id": "photo_weight_bonus",
+      "value": 0.0,
+      "unit": null,
+      "status": "TEAM_DECISION",
+      "source": {
+        "agency": null,
+        "document": "트랙② 내부 결정(2026-09-04, 나정우)",
+        "clause": null,
+        "url": null,
+        "retrieved": null,
+        "effective": "2026-09-04"
+      },
+      "note": "사진 첨부는 판정에 가중하지 않는다. 진위를 검증할 수단이 없고, 사진 유무는 위험도가 아니라 신고자의 기기·여유 사정에 좌우돼 가중하면 근거 없는 편향이 들어간다. photo_url은 시민이 제출한 미검증 외부 URL이므로 절대 fetch하지 않는다 — 모듈이 네트워크를 타면 §4.2의 독립 테스트 요건도 깨진다. 첨부 건수는 explain()으로만 노출한다."
+    },
+    {
+      "id": "alert_id_pattern",
+      "value": "^AL-([0-9]{8})-([0-9]{4})$",
+      "unit": null,
+      "status": "TEAM_DECISION",
+      "source": {
+        "agency": null,
+        "document": "트랙② 내부 결정(2026-09-04, 나정우)",
+        "clause": null,
+        "url": null,
+        "retrieved": null,
+        "effective": "2026-09-04"
+      },
+      "note": "alert_issued_at이 없을 때만 쓰는 2순위 폴백. contracts/module_h.example.json의 AL-20250719-0915에서 관찰한 네이밍 관습일 뿐 계약 필드가 아니라, 이 패턴에 엄격히 맞을 때만 파싱하고 반드시 degraded로 내린다."
+    },
+    {
+      "id": "assumed_timezone",
+      "value": "+09:00",
+      "unit": null,
+      "status": "DERIVED",
+      "source": {
+        "agency": null,
+        "document": "ARCHITECTURE.md §4.1 값 표기 규칙",
+        "clause": "시간: ISO 8601 + 타임존 명시(KST). UTC 절대 쓰지 않는다",
+        "url": null,
+        "retrieved": null,
+        "effective": null
+      },
+      "note": "타임존이 없는 timestamp를 만나면 KST로 가정하되 반드시 warning을 남긴다. +09:00이 아닌 타임존은 KST로 변환하고 역시 warning을 남긴다."
+    },
+    {
+      "id": "rounding",
+      "value": { "adjustment_digits": 2, "latency_digits": 1 },
+      "unit": null,
+      "status": "TEAM_DECISION",
+      "source": {
+        "agency": null,
+        "document": "트랙② 내부 결정(2026-09-04, 나정우)",
+        "clause": null,
+        "url": null,
+        "retrieved": null,
+        "effective": "2026-09-04"
+      },
+      "note": "contracts/module_h.example.json의 0.12·4.5와 자리수를 맞춘다."
+    }
+  ]
+}

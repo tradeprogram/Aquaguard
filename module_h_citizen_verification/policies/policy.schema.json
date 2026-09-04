@@ -1,0 +1,48 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "module_h_citizen_verification policy",
+  "description": "Module H 집계 규칙과 그 근거. contracts/의 계약 파일이 아니라 트랙② 내부 정책이므로 4인 합의 없이 수정 가능하다 — 단 판정이 바뀌므로 스냅샷 테스트를 함께 갱신할 것.",
+  "type": "object",
+  "required": ["policy_version", "description", "rows"],
+  "properties": {
+    "policy_version": { "type": "string" },
+    "description": { "type": "string" },
+    "rows": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["id", "value", "unit", "status", "source", "note"],
+        "properties": {
+          "id": { "type": "string" },
+          "value": {},
+          "unit": { "type": ["string", "null"] },
+          "status": {
+            "type": "string",
+            "enum": [
+              "PLACEHOLDER",
+              "DERIVED",
+              "CONFIRMED",
+              "CONFIRMED_COMPONENT",
+              "POLICY_CONFIRMED_DIRECTION",
+              "TEAM_DECISION"
+            ]
+          },
+          "source": {
+            "type": "object",
+            "required": ["agency", "document", "clause", "url", "retrieved"],
+            "properties": {
+              "agency": { "type": ["string", "null"] },
+              "document": { "type": ["string", "null"] },
+              "clause": { "type": ["string", "null"] },
+              "url": { "type": ["string", "null"] },
+              "retrieved": { "type": ["string", "null"] },
+              "effective": { "type": ["string", "null"] }
+            }
+          },
+          "note": { "type": ["string", "null"] }
+        }
+      }
+    }
+  }
+}
