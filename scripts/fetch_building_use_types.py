@@ -8,7 +8,7 @@ AOI 건물의 주용도(건축물대장 표제부)를 받아 bd_mgt_sn -> 주용
 분류되는 것을 확인했다. 그래서 Module D의 use_type은 어휘를 고쳐서가 아니라 주용도를
 실어오는 소스를 붙여야 살아난다. 그 조인키가 bd_mgt_sn이다.
 
-bd_mgt_sn(건물관리번호, 25자리) 분해 — 2026-09-04 산청 57,681건 전수 검증:
+bd_mgt_sn(건물관리번호, 25자리) 분해 - 2026-09-04 산청 57,681건 전수 검증:
     [0:5]   시군구코드   (시도 앞 2자리가 sido 속성과 57,681/57,681 일치)
     [5:10]  법정동코드
     [10]    대지구분     (1=대지 54,548 / 2=산 3,132)
@@ -73,6 +73,16 @@ from pathlib import Path
 import requests
 from dotenv import load_dotenv
 
+# 이 저장소의 실행 환경은 콘솔이 cp949다. 진단 출력에 cp949로 인코딩할 수 없는
+# 문자가 하나만 섞여도 UnicodeEncodeError로 스크립트 전체가 죽는다(2026-09-05
+# 실측: em dash 하나 때문에 서울 매핑 재생성이 캐시 로드까지 끝낸 뒤 실패했다).
+# 출력은 진단용이므로 죽이지 말고 대체 문자로 흘려보낸다.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(errors="replace")
+    except (AttributeError, ValueError):  # 파이프로 리다이렉트된 경우 등
+        pass
+
 load_dotenv()
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -90,14 +100,14 @@ API_URL = "https://apis.data.go.kr/1613000/BldRgstHubService/getBrTitleInfo"
 # 2026-09-04 실측: numOfRows에 1000을 넣어도 서버가 100건으로 캡해서 돌려준다.
 # 요청값을 실제 상한과 맞춰두지 않으면 아래 종료 조건이 어긋난다.
 PAGE_SIZE = 100
-SLEEP_SEC = 0.2  # 연속 호출 간격 — 공공데이터포털 트래픽 초과 방지
+SLEEP_SEC = 0.2  # 연속 호출 간격 - 공공데이터포털 트래픽 초과 방지
 PAGE_MAX_RETRIES = 4   # 간헐적 빈 응답 대비 (2026-09-04 실측으로 확인)
 RETRY_BACKOFF_SEC = 1.5
 
 # 2026-09-04 --probe 실측으로 확정.
 USE_TYPE_FIELD = "mainPurpsCdNm"          # 확인됨: 실제 주용도 문자열이 들어온다
 
-# mgmBldrgstPk는 조인키로 쓸 수 없다 — JSON 숫자로 오고 길이가 10/14/22자리로
+# mgmBldrgstPk는 조인키로 쓸 수 없다 - JSON 숫자로 오고 길이가 10/14/22자리로
 # 제각각이라 25자리 bd_mgt_sn과 체계가 다르다. 대신 응답 필드로 bd_mgt_sn의
 # 앞 19자리(= 필지 식별부)를 재구성해 조인한다. 일련번호 [19:25]는 응답에 없어
 # 동 단위까지는 못 내려가고 필지 단위 조인이 된다.
@@ -260,7 +270,7 @@ def fetch_dong(service_key: str, sigungu_cd: str, bjdong_cd: str) -> list[dict]:
         total = int(body.get("totalCount", 0))
         # 종료 판정은 반드시 "실제로 받은 누적 건수"로 한다. 요청한 PAGE_SIZE로
         # 판정하면 서버가 100건으로 캡할 때 1페이지만 받고 조용히 끝난다
-        # (2026-09-04 실측: totalCount=695인 법정동에서 100건만 받고 종료 — 86% 누락).
+        # (2026-09-04 실측: totalCount=695인 법정동에서 100건만 받고 종료 - 86% 누락).
         if not raw_items or len(items) >= total:
             if total and len(items) < total:
                 print(f"    [WARN] {sigungu_cd}{bjdong_cd}: {len(items)}/{total}건만 수신",
@@ -381,7 +391,7 @@ def building_coverage(aoi_names: list[str], mapping: dict[str, str]) -> dict:
 
 def write_meta(aoi_names: list[str], mapping: dict[str, str], multi_record_parcels: int,
                coverage: dict, unusable_key: int, missing_use: int) -> None:
-    """산출물 옆 메타 파일 — 이 매핑이 어떤 조인으로 만들어졌는지 남긴다."""
+    """산출물 옆 메타 파일 - 이 매핑이 어떤 조인으로 만들어졌는지 남긴다."""
     meta = {
         "generated_by": "scripts/fetch_building_use_types.py",
         "generated_at": time.strftime("%Y-%m-%dT%H:%M:%S+09:00"),
@@ -456,7 +466,7 @@ def main() -> None:
     if CACHE_PATH.exists():
         with open(CACHE_PATH, encoding="utf-8") as f:
             cache = json.load(f)
-        print(f"캐시에서 법정동 {len(cache):,}개 복원 — 나머지만 받는다.")
+        print(f"캐시에서 법정동 {len(cache):,}개 복원 - 나머지만 받는다.")
 
     todo = [k for k in dong_keys if f"{k[0]}{k[1]}" not in cache]
     for i, (sgg, bjd) in enumerate(sorted(todo), 1):
