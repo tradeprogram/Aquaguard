@@ -114,3 +114,30 @@ def test_explain_reports_fallbacks_for_broken_input():
     assert detail["normalized_input"]["known_risk"] is True
     assert detail["normalized_input"]["drainage_capacity_class"] == "low"
     assert len(detail["input_warnings"]) == 2
+
+
+def test_sourced_rows_record_when_the_url_was_verified(any_ruleset):
+    """추가-c. URL을 적어둔 행은 retrieved(검증 시점)도 반드시 채워져 있어야 한다.
+
+    출처 URL만 적고 실제로 열어보지 않은 상태를 룰셋에 남기지 않기 위한 불변식.
+    심사 제출 시 '이 숫자 근거 있나요'에 대한 답이 링크 하나로 끝나지 않으려면
+    누가 언제 확인했는지가 파일에 남아 있어야 한다.
+    """
+    rs = ruleset.load(any_ruleset)
+    for row in rs.rows.values():
+        if row.source["url"]:
+            assert row.source["retrieved"], f"{row.id}: URL은 있는데 retrieved가 비어 있다"
+            assert row.source["agency"] and row.source["document"], row.id
+
+
+def test_kma_rows_cite_the_verified_press_release():
+    """추가-d. 기상청 근거 2행이 검증된 보도자료 제목·시행일을 그대로 들고 있다."""
+    rs = ruleset.load("v1_kma_mois")
+    for row_id in ("cutpoint_위험", "extreme_override"):
+        source = rs.row(row_id).source
+        assert source["agency"] == "기상청"
+        assert "호우 긴급재난문자 전국 확대 운영" in source["document"]
+        assert "2025-05-14" in source["document"]
+        assert source["effective"] == "2025-05-15"
+        assert source["retrieved"] == "2026-09-04"
+        assert "URL 접속 검증 완료" in rs.row(row_id).note
