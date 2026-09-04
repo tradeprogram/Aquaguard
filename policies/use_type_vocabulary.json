@@ -1,0 +1,100 @@
+{
+  "policy_version": "use_type_v1",
+  "description": "건축물 용도 어휘 — Module D의 exposed_buildings[].use_type이 곧 Module G의 원단위 테이블 키다. 두 모듈이 이 파일 하나만 본다.",
+  "rows": [
+    {
+      "id": "vocabulary",
+      "value": [
+        "주거",
+        "상업",
+        "공업",
+        "농업",
+        "공공",
+        "기타",
+        "미상"
+      ],
+      "unit": null,
+      "status": "TEAM_DECISION",
+      "source": {
+        "agency": null,
+        "document": "트랙② 내부 결정(2026-09-04, 나정우)",
+        "clause": null,
+        "url": null,
+        "retrieved": null,
+        "effective": "2026-09-04"
+      },
+      "note": "contracts/module_d.example.json의 '주거'를 포함하는 7종. Module G의 재해연보 원단위 표를 확보하면 그 분류에 맞춰 조정한다 — 이 파일 한 곳만 고치면 D와 G가 동시에 따라온다. '미상'은 용도를 못 읽은 건물용이며, G가 원단위를 못 고르는 경우이므로 G 쪽에서 별도 폴백이 필요하다."
+    },
+    {
+      "id": "source_value_mapping",
+      "value": {
+        "주거": [
+          "주거",
+          "단독주택",
+          "공동주택",
+          "아파트",
+          "연립주택",
+          "다세대주택",
+          "주택"
+        ],
+        "상업": [
+          "상업",
+          "제1종근린생활시설",
+          "제2종근린생활시설",
+          "근린생활시설",
+          "판매시설",
+          "숙박시설",
+          "업무시설"
+        ],
+        "공업": [
+          "공업",
+          "공장",
+          "창고시설",
+          "위험물저장및처리시설"
+        ],
+        "농업": [
+          "농업",
+          "축사",
+          "동물및식물관련시설",
+          "비닐하우스"
+        ],
+        "공공": [
+          "공공",
+          "교육연구시설",
+          "노유자시설",
+          "의료시설",
+          "공공업무시설",
+          "문화및집회시설"
+        ]
+      },
+      "unit": null,
+      "status": "PLACEHOLDER",
+      "source": {
+        "agency": null,
+        "document": null,
+        "clause": null,
+        "url": null,
+        "retrieved": null
+      },
+      "note": "건축물대장 주용도 문자열을 위 7종으로 접는 매핑. 실제 건축물대장 값 분포를 아직 못 봤으므로 PLACEHOLDER — 데이터 확보 후 실제 등장값으로 교체할 것. 어디에도 안 걸리면 '기타', 용도 속성 자체가 없으면 '미상'."
+    },
+    {
+      "id": "unmapped_use_type",
+      "value": {
+        "no_attribute": "미상",
+        "unrecognized_value": "기타"
+      },
+      "unit": null,
+      "status": "TEAM_DECISION",
+      "source": {
+        "agency": null,
+        "document": "트랙② 내부 결정(2026-09-04, 나정우)",
+        "clause": null,
+        "url": null,
+        "retrieved": null,
+        "effective": "2026-09-04"
+      },
+      "note": "'속성이 아예 없음'과 '값은 있는데 매핑에 없음'을 구분한다 — 전자는 데이터 결함, 후자는 매핑 미비라 대응이 다르다."
+    }
+  ]
+}
