@@ -104,7 +104,10 @@ def test_explain_carries_provenance_without_touching_contract():
     assert detail["ruleset"]["ruleset_version"] == "v1_kma_mois"
     assert detail["ruleset"]["status_counts"]["PLACEHOLDER"] == 2
     urls = {r["source"]["url"] for r in detail["ruleset"]["rows"] if r["source"]["url"]}
-    assert urls == {"https://www.kma.go.kr/kma/news/press.jsp?mode=view&num=1194492"}
+    assert urls == {
+        "https://www.kma.go.kr/kma/news/press.jsp?mode=view&num=1194492",  # 극한호우 보도자료
+        "https://www.weather.go.kr/w/forecast/guide/standard.do",           # 기상특보 발표기준
+    }
 
 
 def test_explain_reports_fallbacks_for_broken_input():
@@ -167,3 +170,39 @@ def test_policy_row_cites_two_verified_reports_but_no_primary_url():
     assert outlets == ["뉴시스", "아시아경제"]
     assert all("5㎝" in c["quote"] or "5㎝로" in c["quote"] for c in row.corroborating_sources)
     assert "침수 초기단계부터 통제" in row.corroborating_sources[1]["quote"]
+
+
+def test_special_report_cutpoints_cite_the_official_standard_page():
+    """추가-g. 주의/경계 절단점이 기상청 공식 '기상특보 발표기준' 페이지를 출처로 갖는다.
+
+    공식 페이지 접속이 확인돼 source.url을 채웠지만, 공식 기준은 3시간·12시간 누적이고
+    계약 입력에는 1시간 강우강도뿐이라 시간 균등환산 가정은 그대로 남는다 —
+    그래서 status는 CONFIRMED가 아니라 DERIVED로 고정한다.
+    """
+    rs = ruleset.load("v1_kma_mois")
+    expected_clause = {"cutpoint_주의": ("60mm", 20.0), "cutpoint_경계": ("90mm", 30.0)}
+
+    for row_id, (needle, value) in expected_clause.items():
+        row = rs.row(row_id)
+        assert row.status == "DERIVED", "환산 가정이 남아 있는 한 CONFIRMED로 올리지 않는다"
+        assert row.value == value
+        assert row.source["agency"] == "기상청"
+        assert row.source["url"] == "https://www.weather.go.kr/w/forecast/guide/standard.do"
+        assert row.source["retrieved"] == "2026-09-04"
+        assert needle in row.source["clause"]
+        assert "3시간" in row.source["clause"] and "12시간" in row.source["clause"]
+        assert "시간 균등환산" in row.note
+
+        outlets = [c["outlet"] for c in row.corroborating_sources]
+        assert outlets == ["세계일보", "YTN"]
+
+
+def test_twelve_hour_criterion_is_documented_as_unusable():
+    """추가-h. 공식 기준의 12시간 조건을 계약 입력으로 못 쓴다는 사실을 note에 남긴다.
+
+    cutpoint_위험의 3시간 조건과 같은 구조적 한계다 — 계약에 누적강우 필드가 추가되면
+    세 절단점 모두 승격 검토 대상이 된다(TRACK2_CONTRACT_AGENDA.md 1·6번).
+    """
+    rs = ruleset.load("v1_kma_mois")
+    for row_id in ("cutpoint_주의", "cutpoint_경계"):
+        assert "1시간 강우강도밖에" in rs.row(row_id).note

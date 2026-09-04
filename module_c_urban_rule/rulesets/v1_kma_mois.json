@@ -9,13 +9,31 @@
       "status": "DERIVED",
       "source": {
         "agency": "기상청",
-        "document": "호우주의보 특보 기준",
-        "clause": "3시간 강우량 60mm 이상",
-        "url": null,
-        "retrieved": null,
+        "document": "기상특보 발표기준 (기상청 날씨누리)",
+        "clause": "호우주의보: 3시간 누적강우량이 60mm 이상 예상되거나 12시간 누적강우량이 110mm 이상",
+        "url": "https://www.weather.go.kr/w/forecast/guide/standard.do",
+        "retrieved": "2026-09-04",
         "effective": null
       },
-      "note": "3시간 60mm를 시간 균등환산(60/3=20)한 값 — 환산 자체가 가정(ASSUMPTION)이며 호우주의보의 공식 시간당 기준이 아니다. 원출처는 기상청 특보 기준, URL은 추후 확정치로 교체"
+      "note": "3시간 60mm를 시간 균등환산(60/3=20)한 값. 원출처인 기상청 '기상특보 발표기준' 공식 페이지를 접속 검증(2026-09-04)해 기준 수치를 확인했으므로 source.url을 채웠다. 다만 공식 기준은 3시간·12시간 누적이고 Module C 계약 입력에는 1시간 강우강도밖에 없어, 시간 균등환산이라는 가정(ASSUMPTION)은 그대로 남는다 — 그래서 status는 CONFIRMED가 아닌 DERIVED다. 보도 2건(세계일보·YTN)도 같은 수치로 교차 확인했다.",
+      "corroborating_sources": [
+        {
+          "outlet": "세계일보",
+          "title": "기상청, 경북 상주 울진 등 호우경보",
+          "published": "2024-07-08",
+          "url": "https://www.segye.com/newsView/20240707510333",
+          "retrieved": "2026-09-04",
+          "quote": "호우주의보는 3시간 강우량이 60㎜ 또는 12시간 강우량이 110㎜ 이상 예상될 때, 호우경보는 3시간 강우량이 90㎜ 또는 12시간 강우량이 180㎜를 넘을 것으로 예상될 때"
+        },
+        {
+          "outlet": "YTN",
+          "title": "[짤막상식] '장마철 물 폭탄' 호우 특보란?",
+          "published": "2024-07-05",
+          "url": "https://www.ytn.co.kr/_ln/0108_202407050615410892",
+          "retrieved": "2026-09-04",
+          "quote": "호우 주의보는 3시간 동안 강우량이 60mm 이상 또는 12시간 동안 110mm 이상, 호우 경보는 3시간 동안 강우량이 90mm 이상 또는 12시간 동안 180mm 이상의 비"
+        }
+      ]
     },
     {
       "id": "cutpoint_경계",
@@ -24,13 +42,31 @@
       "status": "DERIVED",
       "source": {
         "agency": "기상청",
-        "document": "호우경보 특보 기준",
-        "clause": "3시간 강우량 90mm 이상",
-        "url": null,
-        "retrieved": null,
+        "document": "기상특보 발표기준 (기상청 날씨누리)",
+        "clause": "호우경보: 3시간 누적강우량이 90mm 이상 예상되거나 12시간 누적강우량이 180mm 이상",
+        "url": "https://www.weather.go.kr/w/forecast/guide/standard.do",
+        "retrieved": "2026-09-04",
         "effective": null
       },
-      "note": "3시간 90mm를 시간 균등환산(90/3=30)한 값 — 환산 자체가 가정(ASSUMPTION)이며 호우경보의 공식 시간당 기준이 아니다. 원출처는 기상청 특보 기준, URL은 추후 확정치로 교체"
+      "note": "3시간 90mm를 시간 균등환산(90/3=30)한 값. 원출처인 기상청 '기상특보 발표기준' 공식 페이지를 접속 검증(2026-09-04)해 기준 수치를 확인했으므로 source.url을 채웠다. 다만 공식 기준은 3시간·12시간 누적이고 Module C 계약 입력에는 1시간 강우강도밖에 없어, 시간 균등환산이라는 가정(ASSUMPTION)은 그대로 남는다 — 그래서 status는 CONFIRMED가 아닌 DERIVED다. 보도 2건(세계일보·YTN)도 같은 수치로 교차 확인했다.",
+      "corroborating_sources": [
+        {
+          "outlet": "세계일보",
+          "title": "기상청, 경북 상주 울진 등 호우경보",
+          "published": "2024-07-08",
+          "url": "https://www.segye.com/newsView/20240707510333",
+          "retrieved": "2026-09-04",
+          "quote": "호우주의보는 3시간 강우량이 60㎜ 또는 12시간 강우량이 110㎜ 이상 예상될 때, 호우경보는 3시간 강우량이 90㎜ 또는 12시간 강우량이 180㎜를 넘을 것으로 예상될 때"
+        },
+        {
+          "outlet": "YTN",
+          "title": "[짤막상식] '장마철 물 폭탄' 호우 특보란?",
+          "published": "2024-07-05",
+          "url": "https://www.ytn.co.kr/_ln/0108_202407050615410892",
+          "retrieved": "2026-09-04",
+          "quote": "호우 주의보는 3시간 동안 강우량이 60mm 이상 또는 12시간 동안 110mm 이상, 호우 경보는 3시간 동안 강우량이 90mm 이상 또는 12시간 동안 180mm 이상의 비"
+        }
+      ]
     },
     {
       "id": "cutpoint_위험",
