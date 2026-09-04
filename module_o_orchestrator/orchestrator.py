@@ -71,9 +71,18 @@ def run(input: dict[str, Any]) -> dict[str, Any]:  # noqa: A002 - §4.2 규약�
     }
     module_b_input = {"reach_id": input.get("reach_id"), **input.get("module_b_extra", {})}
 
-    # 1. 관측 → 예측: Module A/B
+    # 1. 관측 → 예측: Module A/B/C
     landslide = _merge_module_result("a", call_module("a", module_a_input), warnings, fallback_tier)
     flood = _merge_module_result("b", call_module("b", module_b_input), warnings, fallback_tier)
+
+    # Module C는 지하차도 1건 단위 계약인데 UI는 배열(road_flooding)을 기대한다 —
+    # 누가 순회할지가 미정이었고(TRACK2_CONTRACT_AGENDA.md 5번) 감시 주체인 O가 맡는 것으로
+    # 정했다. C가 계약 밖 편의함수 run_many()를 갖고 있지만 그걸 쓰면 modules_client의
+    # 어댑터 경계를 우회하게 되므로, 여기서 call_module을 건별로 돌린다(한 건이 degraded여도
+    # 나머지는 그대로 남는다). 입력이 없으면 호출 자체를 건너뛴다.
+    road_flooding: list[dict[str, Any]] = []
+    for underpass in input.get("underpasses", []):
+        road_flooding.append(_merge_module_result("c", call_module("c", underpass), warnings, fallback_tier))
 
     hours_candidates = [h for h in (landslide.get("hours_to_critical"), flood.get("hours_to_critical")) if h is not None]
     hours_to_critical = min(hours_candidates) if hours_candidates else None
@@ -85,9 +94,18 @@ def run(input: dict[str, Any]) -> dict[str, Any]:  # noqa: A002 - §4.2 규약�
     shelter_route: dict[str, Any] = {}
     damage_cost: dict[str, Any] = {}
     if triggered:
+        # Module B는 inundation_extent_5179(FeatureCollection)를 실제로 갖고 있는데 그동안
+        # 빈 dict를 넘기고 있었다(TRACK2_CONTRACT_AGENDA.md 1번) — D의 geometry.normalize가
+        # FeatureCollection을 그대로 받아 union으로 처리하므로 있는 값을 그대로 넘긴다.
+        # Module A는 계약 출력이 아직 점(location)뿐이라 D가 버퍼링으로 흡수한다(같은 안건의
+        # 미해결분 — A 계약에 폴리곤 필드가 생기기 전까지는 D가 ASSUMPTION으로 표시).
         risk_polygons = [
             {"source_module": "A", "geometry_5179": landslide.get("location", {}), "risk_prob": landslide["landslide_prob"]},
-            {"source_module": "B", "geometry_5179": {}, "risk_prob": flood["flood_prob"]},
+            {
+                "source_module": "B",
+                "geometry_5179": flood.get("inundation_extent_5179") or {},
+                "risk_prob": flood["flood_prob"],
+            },
         ]
         exposure = _merge_module_result(
             "d",
@@ -128,6 +146,12 @@ def run(input: dict[str, Any]) -> dict[str, Any]:  # noqa: A002 - §4.2 규약�
                     "trigger_location": trigger_location,
                     "trigger_radius_m": 500,
                     "citizen_reports": input.get("citizen_reports", []),
+                    # H의 response_latency_min은 "경보 발송 → 시민 응답" 시간이라 경보 시각이
+                    # 없으면 계산이 안 된다. 계약에 그 필드가 없어서 H가 alert_id 문자열을
+                    # 파싱하고 degraded로 내려가고 있었는데(TRACK2_CONTRACT_AGENDA.md 7번),
+                    # O는 그 값을 이미 갖고 있으므로 그대로 넘긴다. 스키마가 추가 속성을 막지
+                    # 않아 계약 위반이 아니고, 정식 필드 승격은 4인 합의 사안으로 남아 있다.
+                    "alert_issued_at": input["timestamp"],
                 },
             ),
             warnings,
@@ -163,6 +187,10 @@ def run(input: dict[str, Any]) -> dict[str, Any]:  # noqa: A002 - §4.2 규약�
             "flood": flood,
             "shelter_route": shelter_route,
             "damage_cost": damage_cost,
+            # UI의 ModuleOData.alert_package.road_flooding?: UnderpassAlert[]에 대응.
+            # module_o.schema.json의 alert_package는 additionalProperties를 막지 않아
+            # 계약 위반이 아니다. 입력에 underpasses가 없으면 빈 배열이다.
+            "road_flooding": road_flooding,
         },
     }
 
