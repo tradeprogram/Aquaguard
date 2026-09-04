@@ -1,0 +1,57 @@
+{
+  "generated_by": "scripts/fetch_building_use_types.py",
+  "generated_at": "2026-09-04T23:52:13+09:00",
+  "aoi": [
+    "sancheong"
+  ],
+  "source": {
+    "agency": "국토교통부",
+    "service": "건축물대장정보 서비스 - 표제부(getBrTitleInfo)",
+    "endpoint": "https://apis.data.go.kr/1613000/BldRgstHubService/getBrTitleInfo",
+    "use_type_field": "mainPurpsCdNm"
+  },
+  "join": {
+    "granularity": "parcel",
+    "key": "bd_mgt_sn[0:19]",
+    "key_composition": "시군구(5) + 법정동(5) + 대지구분(1) + 번(4) + 지(4)",
+    "reconstructed_from": [
+      "sigunguCd",
+      "bjdongCd",
+      "platGbCd",
+      "bun",
+      "ji"
+    ],
+    "plat_gb_cd_mapping": {
+      "0": "1",
+      "1": "2"
+    },
+    "caveat": "필지 단위 조인이며 동(棟) 단위가 아니다. bd_mgt_sn의 일련번호 [19:25]에 해당하는 필드가 표제부 응답에 없어서, 한 필지에 여러 동이 있으면 모든 동이 같은 주용도를 받는다 (ASSUMPTION).",
+    "why_not_mgmBldrgstPk": "mgmBldrgstPk는 JSON 숫자로 오고 길이가 10/14/22자리로 제각각이라 25자리 bd_mgt_sn과 체계가 다르다. 조인키로 쓸 수 없다 (2026-09-04 실측)."
+  },
+  "representative_rule": {
+    "description": "한 필지에 표제부가 여러 건일 때 대표 1건을 고르는 규칙",
+    "steps": [
+      "주건축물(mainAtchGbCd == '0') 우선",
+      "동률이면 연면적(totArea) 최대"
+    ],
+    "status": "ASSUMPTION",
+    "multi_record_parcels": 10967
+  },
+  "counts": {
+    "parcels_with_use_type": 31364,
+    "parcel_key_rebuild_failed": 0,
+    "records_without_use_type": 10
+  },
+  "coverage": {
+    "per_aoi": {
+      "sancheong": {
+        "buildings": 57681,
+        "matched": 37418,
+        "matched_ratio_pct": 64.9
+      }
+    },
+    "total_buildings": 57681,
+    "matched_buildings": 37418,
+    "matched_ratio_pct": 64.9
+  }
+}

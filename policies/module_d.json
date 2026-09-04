@@ -91,6 +91,30 @@
         "effective": "2026-09-04"
       },
       "note": "exposed_farmland_ha 반올림 자리수. contracts/module_d.example.json의 4.2와 자리수를 맞춘다. 계산은 EPSG:5179 미터에서 하므로 재투영 없음(§4.1)."
+    },
+    {
+      "id": "use_type_join",
+      "value": {
+        "source_file": "data/precomputed/building_use_types.json",
+        "meta_file": "data/precomputed/building_use_types.meta.json",
+        "join_key": "bd_mgt_sn[0:19]",
+        "granularity": "parcel",
+        "representative_rule": [
+          "주건축물(mainAtchGbCd=='0') 우선",
+          "동률이면 연면적(totArea) 최대"
+        ]
+      },
+      "unit": null,
+      "status": "ASSUMPTION",
+      "source": {
+        "agency": "국토교통부",
+        "document": "건축물대장정보 서비스 - 표제부(getBrTitleInfo)",
+        "clause": "mainPurpsCdNm(주용도)",
+        "url": "https://apis.data.go.kr/1613000/BldRgstHubService/getBrTitleInfo",
+        "retrieved": "2026-09-04",
+        "effective": null
+      },
+      "note": "필지 단위 조인 - 동 단위 아님, 다중 표제부는 주건축물 우선/연면적 최대 (ASSUMPTION). 표제부 응답에 bd_mgt_sn 일련번호[19:25]에 해당하는 필드가 없어서 조인 정밀도가 필지에서 멈춘다. 한 필지에 여러 동이 있으면 전부 같은 주용도를 받는다. mgmBldrgstPk는 조인키로 쓸 수 없다(JSON 숫자, 길이 10/14/22자리로 제각각이라 25자리 bd_mgt_sn과 체계가 다름 - 2026-09-04 실측). 대신 sigunguCd+bjdongCd+platGbCd+bun+ji로 앞 19자리를 재구성하며, platGbCd는 0->1(대지)/1->2(산)로 치환한다(48860/37023 산 필지 197건으로 검증). 커버리지와 대표 선택 통계는 meta_file 참조. 주의: Module D는 아직 이 파일을 읽지 않는다 - 조인 배선은 미구현이며, 배선 시 use_type_keys 탐색보다 이 매핑을 우선하도록 해야 한다."
     }
   ]
 }
