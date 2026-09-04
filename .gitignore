@@ -16,3 +16,6 @@ build/
 # 이 원본·타일 캐시는 git에 안 올린다. 재생성: python scripts/fetch_aoi_data.py
 data/precomputed/*.geojson
 data/precomputed/_tile_cache/
+
+# SSH 개인키 — EC2 배포용(subeom.pem 등). 절대 커밋 금지.
+*.pem

@@ -71,12 +71,12 @@
       "status": "PLACEHOLDER",
       "source": {
         "agency": null,
-        "document": null,
+        "document": "실측 근거: data/precomputed/{sancheong,seoul}_buildings.geojson 전수 분류(2026-09-04)",
         "clause": null,
         "url": null,
-        "retrieved": null
+        "retrieved": "2026-09-04"
       },
-      "note": "건축물대장 주용도 문자열을 위 7종으로 접는 매핑. 실제 건축물대장 값 분포를 아직 못 봤으므로 PLACEHOLDER — 데이터 확보 후 실제 등장값으로 교체할 것. 어디에도 안 걸리면 '기타', 용도 속성 자체가 없으면 '미상'."
+      "note": "건축물대장 주용도 문자열을 위 7종으로 접는 매핑. 좌변 값들은 건축법 시행령 별표1 '용도별 건축물의 종류' 계열 명칭이라 어휘 자체는 근거가 있으나, 2026-09-04 실측 결과 현재 데이터 소스(VWorld LT_C_SPBD)가 주용도를 아예 싣지 않아 이 매핑이 한 번도 적용되지 않는다(709,707건 100% '미상'). 즉 미검증이라기보다 '입력이 없어 검증 불가' 상태다. bd_mgt_sn으로 건축물대장 표제부를 조인해 실제 주용도 값 분포를 확보하면 그때 등장값 기준으로 좌변을 교체하고 status를 올린다. 어디에도 안 걸리면 '기타', 용도 속성 자체가 없으면 '미상'."
     },
     {
       "id": "unmapped_use_type",

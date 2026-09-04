@@ -4,10 +4,19 @@
   "rows": [
     {
       "id": "point_buffer_radius_m",
-      "value": { "enabled": true, "radius_m": 100.0 },
+      "value": {
+        "enabled": true,
+        "radius_m": 100.0
+      },
       "unit": "m",
       "status": "PLACEHOLDER",
-      "source": { "agency": null, "document": null, "clause": null, "url": null, "retrieved": null },
+      "source": {
+        "agency": null,
+        "document": null,
+        "clause": null,
+        "url": null,
+        "retrieved": null
+      },
       "note": "산사태 도달거리 자릿수 가정 — 트랙①이 실제 위험 폴리곤을 출력하면 버퍼 경로는 폴백으로만 남음. Module A의 계약 출력에는 폴리곤 필드가 아예 없고 location(점)뿐이라(contracts/module_a.example.json), 현재 Module O는 그 점을 그대로 D에 risk_polygons[].geometry_5179로 넘긴다. 버퍼가 적용되면 status=degraded + warning을 반드시 남기고 explain()에 ASSUMPTION으로 표기한다."
     },
     {
@@ -27,19 +36,45 @@
     },
     {
       "id": "building_id_keys",
-      "value": ["building_id", "bld_id", "BLD_ID", "id", "고유번호", "건물관리번호"],
+      "value": [
+        "building_id",
+        "bld_id",
+        "BLD_ID",
+        "id",
+        "고유번호",
+        "건물관리번호"
+      ],
       "unit": null,
       "status": "PLACEHOLDER",
-      "source": { "agency": null, "document": null, "clause": null, "url": null, "retrieved": null },
+      "source": {
+        "agency": null,
+        "document": null,
+        "clause": null,
+        "url": null,
+        "retrieved": null
+      },
       "note": "feature.properties에서 이 순서로 탐색하고, 없으면 feature의 최상위 id, 그것도 없으면 인덱스 기반 결정적 합성 id(D-AUTO-0001)를 만든다. 실제 건축물 데이터 확보 후 실제 키명으로 교체."
     },
     {
       "id": "use_type_keys",
-      "value": ["use_type", "주용도", "주용도코드명", "BLDG_USE", "USABILITY"],
+      "value": [
+        "use_type",
+        "주용도",
+        "주용도코드명",
+        "mainPurpsCdNm",
+        "BLDG_USE",
+        "USABILITY"
+      ],
       "unit": null,
       "status": "PLACEHOLDER",
-      "source": { "agency": null, "document": null, "clause": null, "url": null, "retrieved": null },
-      "note": "값 자체의 어휘 매핑은 policies/use_type_vocabulary.json이 담당한다. 실제 건축물대장 확보 후 실제 키명으로 교체."
+      "source": {
+        "agency": null,
+        "document": null,
+        "clause": null,
+        "url": null,
+        "retrieved": null
+      },
+      "note": "값 자체의 어휘 매핑은 policies/use_type_vocabulary.json이 담당한다. 2026-09-04 실측: 아쿠아가드가 실제로 쓰는 VWorld LT_C_SPBD(건물통합정보) 레이어에는 이 키가 하나도 없다 — 속성은 bd_mgt_sn/buld_nm/gro_flo_co/주소 계열뿐이라 산청 57,681건·서울 652,026건 전부(709,707건, 100%) '미상'으로 분류된다. 따라서 이 행은 '실제 키명 확인 대기'가 아니라 '주용도를 실어오는 소스 확보 대기' 상태다. 경로는 bd_mgt_sn(25자리 건물관리번호, 100% 채워짐·99.97% 유니크)으로 국토교통부 건축물대장 표제부를 조인하는 것 — mainPurpsCdNm은 그 응답 필드명 후보이며 실호출로 확인 전이다."
     },
     {
       "id": "farmland_area_round_digits",
