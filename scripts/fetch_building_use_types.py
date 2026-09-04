@@ -82,6 +82,9 @@ CACHE_PATH = PRECOMPUTED_DIR / "_bldrgst_cache.json"
 # 산출물 옆에 조인 방식·대표 선택 규칙·커버리지를 남긴다. 필지 단위 조인이라는
 # 사실이 파일만 보고도 드러나야 Module D 쪽에서 오해 없이 쓴다.
 META_PATH = PRECOMPUTED_DIR / "building_use_types.meta.json"
+# fetch_aoi_data.py의 타일 캐시. 서울(652,026건)은 병합본을 메모리에 통째로 올릴 수
+# 없어(2026-09-05 MemoryError 실측) 여기서 타일 단위로 스트리밍한다.
+TILE_CACHE_DIR = PRECOMPUTED_DIR / "_tile_cache"
 
 API_URL = "https://apis.data.go.kr/1613000/BldRgstHubService/getBrTitleInfo"
 # 2026-09-04 실측: numOfRows에 1000을 넣어도 서버가 100건으로 캡해서 돌려준다.
@@ -118,6 +121,41 @@ def split_bd_mgt_sn(sn: str) -> tuple[str, str, str, str, str] | None:
     if not isinstance(sn, str) or len(sn) != 25 or not sn.isdigit():
         return None
     return sn[0:5], sn[5:10], sn[10], sn[11:15], sn[15:19]
+
+
+def iter_building_sn(aoi_name: str):
+    """AOI 건물의 bd_mgt_sn을 하나씩 흘려보낸다.
+
+    1순위는 fetch_aoi_data.py의 타일 캐시다 - 타일 한 개씩만 메모리에 올리므로
+    서울 규모(652,026건)에서도 안전하다. 병합본 geojson은 400MB급이라 json.load가
+    MemoryError로 죽는다(2026-09-05 실측). 타일 캐시가 없으면 병합본으로 폴백한다.
+
+    중복 판정은 fetch_aoi_data.merge_region_layer와 같은 규칙을 쓴다
+    (feature id, 없으면 properties 직렬화) - 그래야 건물 수가 병합본과 일치한다.
+    """
+    tile_dir = TILE_CACHE_DIR / aoi_name / "buildings"
+    seen: set[str] = set()
+
+    if tile_dir.is_dir():
+        for tile in sorted(tile_dir.glob("tile_*.json")):
+            features = json.loads(tile.read_text(encoding="utf-8"))
+            for feat in features:
+                key = feat.get("id") or json.dumps(feat.get("properties", {}), sort_keys=True)
+                if key in seen:
+                    continue
+                seen.add(key)
+                yield (feat.get("properties") or {}).get("bd_mgt_sn", "")
+            del features
+        return
+
+    path = AOI_FILES[aoi_name]
+    if not path.exists():
+        print(f"  [건너뜀] {tile_dir} 와 {path} 둘 다 없음 - "
+              f"scripts/fetch_aoi_data.py로 먼저 생성", file=sys.stderr)
+        return
+    with open(path, encoding="utf-8") as f:
+        for feat in json.load(f)["features"]:
+            yield (feat.get("properties") or {}).get("bd_mgt_sn", "")
 
 
 def parcel_key(item: dict) -> str | None:
@@ -158,24 +196,21 @@ def pick_representative(items: list[dict]) -> dict:
 
 
 def collect_dong_keys(aoi_names: list[str]) -> dict[tuple[str, str], int]:
-    """AOI 건물 파일에서 조회해야 할 (시군구코드, 법정동코드)와 건물 수를 모은다."""
+    """AOI 건물에서 조회해야 할 (시군구코드, 법정동코드)와 건물 수를 모은다."""
     counts: Counter[tuple[str, str]] = Counter()
     for name in aoi_names:
-        path = AOI_FILES[name]
-        if not path.exists():
-            print(f"  [건너뜀] {path} 없음 — scripts/fetch_aoi_data.py로 먼저 생성", file=sys.stderr)
-            continue
-        with open(path, encoding="utf-8") as f:
-            features = json.load(f)["features"]
-        skipped = 0
-        for feat in features:
-            parts = split_bd_mgt_sn((feat.get("properties") or {}).get("bd_mgt_sn", ""))
+        buildings = skipped = 0
+        before = len(counts)
+        for sn in iter_building_sn(name):
+            buildings += 1
+            parts = split_bd_mgt_sn(sn)
             if parts is None:
                 skipped += 1
                 continue
             counts[(parts[0], parts[1])] += 1
-        print(f"  {name}: 건물 {len(features):,}건 → 법정동 {len({k for k in counts}):,}개"
-              + (f" (형식 불일치 {skipped:,}건 제외)" if skipped else ""))
+        if buildings:
+            print(f"  {name}: 건물 {buildings:,}건 -> 법정동 {len(counts) - before:,}개"
+                  + (f" (형식 불일치 {skipped:,}건 제외)" if skipped else ""))
     return dict(counts)
 
 
@@ -306,42 +341,33 @@ def probe(service_key: str, aoi_names: list[str], dong: str | None = None) -> No
 
 
 def _load_building_parcels(aoi_names: list[str], sgg: str, bjd: str) -> dict[str, int]:
-    """건물 파일에서 해당 법정동의 필지키(bd_mgt_sn 앞 19자리) -> 건물 수."""
+    """건물에서 해당 법정동의 필지키(bd_mgt_sn 앞 19자리) -> 건물 수."""
     counts: Counter[str] = Counter()
     for name in aoi_names:
-        path = AOI_FILES[name]
-        if not path.exists():
-            continue
-        with open(path, encoding="utf-8") as f:
-            for feat in json.load(f)["features"]:
-                sn = (feat.get("properties") or {}).get("bd_mgt_sn", "")
-                if isinstance(sn, str) and len(sn) == 25 and sn[:10] == f"{sgg}{bjd}":
-                    counts[sn[:19]] += 1
+        for sn in iter_building_sn(name):
+            if isinstance(sn, str) and len(sn) == 25 and sn[:10] == f"{sgg}{bjd}":
+                counts[sn[:19]] += 1
     return dict(counts)
 
 
 def building_coverage(aoi_names: list[str], mapping: dict[str, str]) -> dict:
-    """만들어진 매핑이 실제 건물 몇 건을 덮는지 AOI별로 센다."""
+    """만들어진 매핑이 실제 건물 몇 건을 덮는지 AOI별로 센다 (타일 캐시 스트리밍)."""
     per_aoi: dict[str, dict] = {}
     total = matched = 0
     for name in aoi_names:
-        path = AOI_FILES[name]
-        if not path.exists():
-            continue
-        with open(path, encoding="utf-8") as f:
-            features = json.load(f)["features"]
         n = hit = 0
-        for feat in features:
-            sn = (feat.get("properties") or {}).get("bd_mgt_sn", "")
+        for sn in iter_building_sn(name):
             if not (isinstance(sn, str) and len(sn) == 25):
                 continue
             n += 1
             if sn[:19] in mapping:
                 hit += 1
+        if not n:
+            continue
         per_aoi[name] = {
             "buildings": n,
             "matched": hit,
-            "matched_ratio_pct": round(hit / n * 100, 1) if n else 0.0,
+            "matched_ratio_pct": round(hit / n * 100, 1),
         }
         total += n
         matched += hit
