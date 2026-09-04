@@ -75,6 +75,10 @@ export default function EvacuationPanel({
   // 이 결과가 없으면 기존 직선거리 근사로 조용히 폴백한다.
   useEffect(() => {
     if (!origin) {
+      // origin이 풀리면 이전 좌표로 받아둔 경로 결과를 버린다 — 아래 rows와 렌더는
+      // 전부 origin으로 가드돼 있어 당장 화면에 보이지는 않지만, 다음 origin이
+      // 잡히는 순간 이전 좌표의 결과가 한 프레임 새어나오는 걸 막는 정리 작업이다.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setBackendResults(null);
       setBackendError(null);
       return;
