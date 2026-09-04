@@ -1,0 +1,165 @@
+{
+  "policy_version": "module_g_v1",
+  "description": "Module G 피해비용 단가와 산정 규칙. 단가는 자연재난 '복구비 지원' 단가 고시라 실제 경제적 손실이 아니라 그 하한으로 읽어야 한다.",
+  "rows": [
+    {
+      "id": "housing_flood_unit_krw",
+      "value": 3500000,
+      "unit": "KRW/세대",
+      "status": "CONFIRMED",
+      "source": {
+        "agency": "국토교통부",
+        "document": "자연재난 복구비용 산정기준 및 사회재난 생활안정지원 항목별 단가 (국토교통부고시 제2026-90호)",
+        "clause": "주택 침수 3,500,000원/세대",
+        "url": null,
+        "retrieved": "2026-09-05",
+        "effective": "2026-02-19",
+        "local_file": "docs/sources/(국토교통부) 자연재난 복구비용 산정기준 및 사회재난 생활안정지원 항목별 단가(국토교통부고시)(제2026-90호)(20260219).pdf"
+      },
+      "note": "점추정의 건물 항목은 이 단가 하나만 쓴다. 주거 use_type 건물 수 x 이 값. 고시는 복구비 지원 단가이므로 경제적 손실의 하한이다."
+    },
+    {
+      "id": "farmland_replant_unit_krw_per_m2",
+      "value": {
+        "일반작물": 381,
+        "채소_엽근채류": 530
+      },
+      "unit": "KRW/m2",
+      "status": "CONFIRMED",
+      "source": {
+        "agency": "농림축산식품부",
+        "document": "자연재난 복구비용 산정기준 (농림축산식품부고시 제2026-78호)",
+        "clause": "농작물 대파대 - 일반작물 381원/m2, 채소(엽근채류) 530원/m2",
+        "url": null,
+        "retrieved": "2026-09-05",
+        "effective": "2026-07-30",
+        "local_file": "docs/sources/(농림축산식품부) 자연재난 복구비용 산정기준(농림축산식품부고시)(제2026-78호)(20260730).pdf"
+      },
+      "note": "점추정에는 '일반작물' 381원/m2를 쓴다. Module D 출력에 작물 구분이 없어 채소 단가는 explain()의 민감도 참고값으로만 낸다."
+    },
+    {
+      "id": "landslide_reference_unit_krw",
+      "value": {
+        "농경지_유실_per_m2": 7528,
+        "농경지_매몰_per_m2": 5719,
+        "건물_소파_per_dong": 900000,
+        "건물_반파_per_dong_range": [
+          36500000,
+          65500000
+        ],
+        "건물_유실전파_per_dong_range": [
+          73000000,
+          131000000
+        ]
+      },
+      "unit": "KRW",
+      "status": "CONFIRMED",
+      "source": {
+        "agency": "국토교통부·농림축산식품부",
+        "document": "국토교통부고시 제2026-90호 / 농림축산식품부고시 제2026-78호",
+        "clause": "농경지 유실·매몰 단가, 건물 소파·반파·유실전파 단가(연면적 5구간)",
+        "url": null,
+        "retrieved": "2026-09-05",
+        "effective": "2026-07-30",
+        "local_file": "docs/sources/(농림축산식품부) 자연재난 복구비용 산정기준(농림축산식품부고시)(제2026-78호)(20260730).pdf"
+      },
+      "note": "산사태 시나리오 참고값. 점추정에 넣지 않고 explain()에만 낸다. 농경지 유실 7,528원/m2는 대파대 381원/m2의 약 20배라 시나리오 선택이 자릿수를 바꾼다. 건물 반파·전파는 고시가 연면적 5구간으로 나누는데 Module D 출력에 연면적이 없어 구간 범위로만 제시한다."
+    },
+    {
+      "id": "unknown_use_type_housing_ratio",
+      "value": 0.744,
+      "unit": null,
+      "status": "DERIVED",
+      "source": {
+        "agency": null,
+        "document": "산청 실측(2026-09-05)",
+        "clause": "주거 27,824건 / 건축물대장 매칭 37,418건 = 0.744",
+        "url": null,
+        "retrieved": "2026-09-05",
+        "effective": "2026-09-05"
+      },
+      "note": "'미상' 건물이 주거일 확률의 대리값. 산청에서 용도가 확인된 건물 중 주거 비율이다. 상한 계산에만 쓰고 점추정에는 넣지 않는다. 다른 지역에 그대로 쓰면 안 된다 - 서울 등 다른 AOI를 붙일 때 재산출할 것."
+    },
+    {
+      "id": "min_upper_band_pct",
+      "value": 0.3,
+      "unit": null,
+      "status": "PLACEHOLDER",
+      "source": {
+        "agency": null,
+        "document": null,
+        "clause": null,
+        "url": null,
+        "retrieved": "2026-09-05",
+        "effective": null
+      },
+      "note": "근거 없는 최소 불확실성 폭. '미상' 건물이 0건이면 상한이 점추정과 같아져 폭 0인 구간이 나오는데, 그건 완벽한 확신을 주장하는 셈이라 §6 불확실성 표기 원칙과 어긋난다. high = max(점추정x(1+p), 점추정 + 미상x주거비율x주택단가)."
+    },
+    {
+      "id": "one_building_one_household",
+      "value": true,
+      "unit": null,
+      "status": "ASSUMPTION",
+      "source": {
+        "agency": null,
+        "document": "트랙② 판단(2026-09-05)",
+        "clause": null,
+        "url": null,
+        "retrieved": "2026-09-05",
+        "effective": "2026-09-05"
+      },
+      "note": "주거 건물 1동을 1세대로 센다. 공동주택은 실제로 수십 세대라 과소추정이 된다. TODO: 건축물대장 표제부의 hhldCnt(세대수)를 building_use_types 파이프라인에 추가로 실어오면 해소된다 - 산청 주거 27,824건 전체에 이 가정이 걸려 있다."
+    },
+    {
+      "id": "risk_prob_weighting",
+      "value": false,
+      "unit": null,
+      "status": "TEAM_DECISION",
+      "source": {
+        "agency": null,
+        "document": "트랙② 결정(2026-09-05, 나정우)",
+        "clause": null,
+        "url": null,
+        "retrieved": "2026-09-05",
+        "effective": "2026-09-05"
+      },
+      "note": "점추정에 risk_prob를 곱하지 않는다. 즉 '침수되면 얼마'인 조건부 피해액이지 기대손실이 아니다. 위험도 가중값은 explain()에 '노출 자산 기준 조건부 피해액' 라벨과 함께 참고로만 낸다."
+    },
+    {
+      "id": "excluded_use_types",
+      "value": [
+        "상업",
+        "공업",
+        "공공",
+        "기타",
+        "미상"
+      ],
+      "unit": null,
+      "status": "TEAM_DECISION",
+      "source": {
+        "agency": null,
+        "document": "트랙② 결정(2026-09-05, 나정우)",
+        "clause": null,
+        "url": null,
+        "retrieved": "2026-09-05",
+        "effective": "2026-09-05"
+      },
+      "note": "비주거는 공식 침수 단가가 없어 점추정에서 제외한다. '미상'도 제외하되 상한 계산에는 반영한다. 제외 건수는 explain()에 분류별로 노출한다."
+    },
+    {
+      "id": "notice_review_years",
+      "value": 3,
+      "unit": "year",
+      "status": "CONFIRMED",
+      "source": {
+        "agency": null,
+        "document": "훈령·예규 등의 발령 및 관리에 관한 규정",
+        "clause": "고시 재검토기한 3년",
+        "url": null,
+        "retrieved": "2026-09-05",
+        "effective": "2026-02-19"
+      },
+      "note": "두 고시 모두 발령일 기준 3년마다 타당성을 재검토한다. 국토부고시는 2029-02-19, 농식품부고시는 2029-07-30 이전에 단가를 다시 확인할 것."
+    }
+  ]
+}
