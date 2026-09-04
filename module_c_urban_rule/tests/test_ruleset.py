@@ -1,0 +1,116 @@
+"""E. 룰셋 무결성 + 근거(provenance) 노출."""
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import jsonschema
+import pytest
+
+from module_c_urban_rule import explain, run, ruleset
+
+RULESETS_DIR = Path(ruleset.RULESETS_DIR)
+BASE = {
+    "underpass_id": "SC-UP-003",
+    "rainfall_intensity_1h_mm": 45.0,
+    "known_risk": True,
+    "drainage_capacity_class": "low",
+}
+
+
+def test_every_ruleset_file_validates_and_loads(any_ruleset):
+    """15. 룰셋 JSON이 자체 스키마를 통과하고, 절단점 오름차순·계수 양수 검증을 통과한다."""
+    with open(ruleset.RULESET_SCHEMA_PATH, encoding="utf-8") as f:
+        schema = json.load(f)
+    with open(RULESETS_DIR / f"{any_ruleset}.json", encoding="utf-8") as f:
+        doc = json.load(f)
+
+    jsonschema.validate(doc, schema)
+    loaded = ruleset.load(any_ruleset)  # _validate_semantics까지 통과해야 성공
+    assert loaded.version == any_ruleset
+    values = [v for _, v in loaded.cutpoints()]
+    assert values == sorted(values)
+
+
+def test_descending_cutpoints_are_rejected(tmp_path, monkeypatch):
+    """15-b. 절단점을 잘못 넣으면 조용히 통과하지 않고 RulesetError로 걸린다."""
+    with open(RULESETS_DIR / "v1_kma_mois.json", encoding="utf-8") as f:
+        doc = json.load(f)
+    for row in doc["rows"]:
+        if row["id"] == "cutpoint_주의":
+            row["value"] = 999.0
+    doc["ruleset_version"] = "broken"
+    (tmp_path / "broken.json").write_text(json.dumps(doc, ensure_ascii=False), encoding="utf-8")
+
+    monkeypatch.setattr(ruleset, "RULESETS_DIR", tmp_path)
+    ruleset.load.cache_clear()
+    try:
+        with pytest.raises(ruleset.RulesetError, match="오름차순"):
+            ruleset.load("broken")
+    finally:
+        ruleset.load.cache_clear()
+
+
+def test_strict_provenance_warning_is_opt_in(monkeypatch):
+    """16. PLACEHOLDER 경고는 기본 off(계약 예시의 warnings=[]와 충돌하므로), 스위치로 켠다."""
+    assert run(BASE)["warnings"] == []
+
+    monkeypatch.setenv("AQUAGUARD_MODULE_C_STRICT_PROVENANCE", "1")
+    warnings = run(BASE)["warnings"]
+    assert len(warnings) == 1
+    assert "근거 미확정" in warnings[0]
+    assert "drainage_factor=PLACEHOLDER" in warnings[0]
+
+
+def test_v1_confirms_the_rows_we_claimed_to_source():
+    """16-b. v1에서 근거를 주입했다고 말한 행이 실제로 그 상태·출처를 갖고 있다."""
+    rs = ruleset.load("v1_kma_mois")
+    expected = {
+        "cutpoint_주의": "DERIVED",
+        "cutpoint_경계": "DERIVED",
+        "cutpoint_위험": "CONFIRMED_COMPONENT",
+        "extreme_override": "CONFIRMED",
+        "known_risk_min_level": "POLICY_CONFIRMED_DIRECTION",
+        "drainage_factor": "PLACEHOLDER",
+        "known_risk_factor": "PLACEHOLDER",
+    }
+    assert {rid: rs.row(rid).status for rid in expected} == expected
+
+    # 출처가 있다고 표시한 행은 최소한 기관·문서가 채워져 있어야 한다.
+    for row_id, status in expected.items():
+        source = rs.row(row_id).source
+        if status == "PLACEHOLDER":
+            assert source["agency"] is None, row_id
+        else:
+            assert source["agency"] and source["document"], row_id
+
+
+def test_v0_is_entirely_unsourced():
+    """16-c. v0는 기준선이므로 전 행이 PLACEHOLDER여야 비교 대상으로 의미가 있다."""
+    rs = ruleset.load("v0_placeholder")
+    assert {r.status for r in rs.rows.values()} == {"PLACEHOLDER"}
+    assert all(r.source["agency"] is None for r in rs.rows.values())
+
+
+def test_explain_carries_provenance_without_touching_contract():
+    """추가. 판정 근거는 data가 아니라 explain()으로만 나간다 (§6.1)."""
+    detail = explain(BASE)
+    assert detail["is_model"] is False
+    assert detail["decision"]["alert_level"] == "위험"
+    assert detail["decision"]["applied_factors"] == {
+        "drainage_factor": 1.3,
+        "known_risk_factor": 1.15,
+    }
+    assert detail["ruleset"]["ruleset_version"] == "v1_kma_mois"
+    assert detail["ruleset"]["status_counts"]["PLACEHOLDER"] == 2
+    urls = {r["source"]["url"] for r in detail["ruleset"]["rows"] if r["source"]["url"]}
+    assert urls == {"https://www.kma.go.kr/kma/news/press.jsp?mode=view&num=1194492"}
+
+
+def test_explain_reports_fallbacks_for_broken_input():
+    """추가-b. 폴백이 걸린 입력도 explain()으로 왜 그렇게 판정됐는지 추적할 수 있다."""
+    detail = explain({"underpass_id": "SC-UP-003", "rainfall_intensity_1h_mm": 45.0})
+    assert detail["fallback_tier"] == 2
+    assert detail["normalized_input"]["known_risk"] is True
+    assert detail["normalized_input"]["drainage_capacity_class"] == "low"
+    assert len(detail["input_warnings"]) == 2

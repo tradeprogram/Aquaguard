@@ -1,0 +1,97 @@
+{
+  "ruleset_version": "v1_kma_mois",
+  "description": "기상청 극한호우 긴급재난문자 기준 + 특보 기준 환산 + 행안부 지하차도 통제기준 정책방향을 주입한 룰셋(2026-09-04, 나정우 조사). 배수능력·지정위험 가중은 여전히 공식 출처가 없어 PLACEHOLDER로 남아 있다.",
+  "rows": [
+    {
+      "id": "cutpoint_주의",
+      "value": 20.0,
+      "unit": "mm/h",
+      "status": "DERIVED",
+      "source": {
+        "agency": "기상청",
+        "document": "호우주의보 특보 기준",
+        "clause": "3시간 강우량 60mm 이상",
+        "url": null,
+        "retrieved": null,
+        "effective": null
+      },
+      "note": "3시간 60mm를 시간 균등환산(60/3=20)한 값 — 환산 자체가 가정(ASSUMPTION)이며 호우주의보의 공식 시간당 기준이 아니다. 원출처는 기상청 특보 기준, URL은 추후 확정치로 교체"
+    },
+    {
+      "id": "cutpoint_경계",
+      "value": 30.0,
+      "unit": "mm/h",
+      "status": "DERIVED",
+      "source": {
+        "agency": "기상청",
+        "document": "호우경보 특보 기준",
+        "clause": "3시간 강우량 90mm 이상",
+        "url": null,
+        "retrieved": null,
+        "effective": null
+      },
+      "note": "3시간 90mm를 시간 균등환산(90/3=30)한 값 — 환산 자체가 가정(ASSUMPTION)이며 호우경보의 공식 시간당 기준이 아니다. 원출처는 기상청 특보 기준, URL은 추후 확정치로 교체"
+    },
+    {
+      "id": "cutpoint_위험",
+      "value": 50.0,
+      "unit": "mm/h",
+      "status": "CONFIRMED_COMPONENT",
+      "source": {
+        "agency": "기상청",
+        "document": "호우 긴급재난문자(극한호우) 발송 기준 전국 확대 보도자료",
+        "clause": "1시간 50mm 이상 & 3시간 90mm 이상 동시 관측, 또는 1시간 72mm 이상",
+        "url": "https://www.kma.go.kr/kma/news/press.jsp?mode=view&num=1194492",
+        "retrieved": null,
+        "effective": "2025-05-15"
+      },
+      "note": "공식 기준은 '1시간 50mm & 3시간 90mm 동시' 조건 — Module C 계약 입력에 3시간 누적이 없어 1시간 성분만 단독 적용한 보수적 변형(ASSUMPTION)이다. 따라서 CONFIRMED가 아니라 CONFIRMED_COMPONENT. contracts/module_c에 rainfall_cumulative_3h_mm를 추가하면 완전한 CONFIRMED로 올릴 수 있으며, 이는 4인 합의 안건 후보. URL은 나정우 제공(2026-09-04)이며 구현 단계에서 접속 검증하지 않았다"
+    },
+    {
+      "id": "extreme_override",
+      "value": 72.0,
+      "unit": "mm/h",
+      "status": "CONFIRMED",
+      "source": {
+        "agency": "기상청",
+        "document": "호우 긴급재난문자(극한호우) 발송 기준 전국 확대 보도자료",
+        "clause": "1시간 72mm 이상 단독 조건",
+        "url": "https://www.kma.go.kr/kma/news/press.jsp?mode=view&num=1194492",
+        "retrieved": null,
+        "effective": "2025-05-15"
+      },
+      "note": "3시간 누적 없이 1시간 값만으로 성립하는 단독 기준이라 계약 입력만으로 완전 재현 가능 — 유일한 CONFIRMED 행. 배수능력·지정위험 가중을 적용하기 전의 원시 강우강도로 비교하며, 넘으면 무조건 '위험'. URL은 나정우 제공(2026-09-04)이며 구현 단계에서 접속 검증하지 않았다"
+    },
+    {
+      "id": "drainage_factor",
+      "value": { "low": 1.3, "medium": 1.0, "high": 0.85 },
+      "unit": null,
+      "status": "PLACEHOLDER",
+      "source": { "agency": null, "document": null, "clause": null, "url": null, "retrieved": null },
+      "note": "배수능력 등급별 가중. 공식 출처 없음 — 우리 가정치이며 v1에서도 미확정 상태로 남는다"
+    },
+    {
+      "id": "known_risk_factor",
+      "value": 1.15,
+      "unit": null,
+      "status": "PLACEHOLDER",
+      "source": { "agency": null, "document": null, "clause": null, "url": null, "retrieved": null },
+      "note": "지정 위험 지하차도 가중. 공식 출처 없음 — 우리 가정치이며 v1에서도 미확정 상태로 남는다"
+    },
+    {
+      "id": "known_risk_min_level",
+      "value": { "enabled": true, "level": "주의", "requires_rainfall_gt_mm": 0.0 },
+      "unit": null,
+      "status": "POLICY_CONFIRMED_DIRECTION",
+      "source": {
+        "agency": "행정안전부",
+        "document": "여름철 자연재난 대비 TF — 지하차도 진입 통제기준 강화(오송 지하차도 참사 3주기 점검에서 시행 확인)",
+        "clause": "지하차도 진입 통제 최대침수심 기준 15cm → 5cm 강화",
+        "url": null,
+        "retrieved": null,
+        "effective": "2026-05"
+      },
+      "note": "침수심(cm) 기준이라 mm/h 절단점의 직접 출처가 될 수 없다. '지정 위험 지하차도는 침수 초기단계부터 통제한다'는 행정 방향의 근거로만 인용하며, 그래서 status는 CONFIRMED가 아닌 POLICY_CONFIRMED_DIRECTION. 강수>0일 때 최소 '주의' 하한을 거는 정책은 2026-09-04 나정우 결정"
+    }
+  ]
+}

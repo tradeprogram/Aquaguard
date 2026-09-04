@@ -1,0 +1,54 @@
+{
+  "ruleset_version": "v0_placeholder",
+  "description": "근거 주입 이전의 기준선(baseline) 룰셋. 모든 행이 PLACEHOLDER이며 공식 출처가 없다. v1과의 판정 차이를 비교하기 위해 남겨둔다 — 운영 기본값은 v1_kma_mois.",
+  "rows": [
+    {
+      "id": "cutpoint_주의",
+      "value": 20.0,
+      "unit": "mm/h",
+      "status": "PLACEHOLDER",
+      "source": { "agency": null, "document": null, "clause": null, "url": null, "retrieved": null },
+      "note": "근거 미확정 — 행안부·국토부 기준으로 교체 예정"
+    },
+    {
+      "id": "cutpoint_경계",
+      "value": 30.0,
+      "unit": "mm/h",
+      "status": "PLACEHOLDER",
+      "source": { "agency": null, "document": null, "clause": null, "url": null, "retrieved": null },
+      "note": "근거 미확정 — 행안부·국토부 기준으로 교체 예정"
+    },
+    {
+      "id": "cutpoint_위험",
+      "value": 50.0,
+      "unit": "mm/h",
+      "status": "PLACEHOLDER",
+      "source": { "agency": null, "document": null, "clause": null, "url": null, "retrieved": null },
+      "note": "근거 미확정 — 행안부·국토부 기준으로 교체 예정"
+    },
+    {
+      "id": "drainage_factor",
+      "value": { "low": 1.3, "medium": 1.0, "high": 0.85 },
+      "unit": null,
+      "status": "PLACEHOLDER",
+      "source": { "agency": null, "document": null, "clause": null, "url": null, "retrieved": null },
+      "note": "배수능력 등급별 가중. 공식 출처 없음 — 우리 가정치"
+    },
+    {
+      "id": "known_risk_factor",
+      "value": 1.15,
+      "unit": null,
+      "status": "PLACEHOLDER",
+      "source": { "agency": null, "document": null, "clause": null, "url": null, "retrieved": null },
+      "note": "지정 위험 지하차도 가중. 공식 출처 없음 — 우리 가정치"
+    },
+    {
+      "id": "known_risk_min_level",
+      "value": { "enabled": true, "level": "주의", "requires_rainfall_gt_mm": 0.0 },
+      "unit": null,
+      "status": "PLACEHOLDER",
+      "source": { "agency": null, "document": null, "clause": null, "url": null, "retrieved": null },
+      "note": "정책 결정(2026-09-04 나정우 승인): 지정 위험 지하차도는 강수 발생 시 최소 '주의'. v0에서는 근거 미주입 상태"
+    }
+  ]
+}
