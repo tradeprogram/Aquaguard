@@ -110,6 +110,53 @@ export async function sendChatMessage(
   return data.reply;
 }
 
+export interface EvacuationRouteResult {
+  shelter_id: string;
+  route_5179: { type: "LineString"; coordinates: number[][] };
+  route_lonlat: [number, number][];
+  eta_min: number;
+  route_confidence: "high" | "medium" | "low";
+  time_feasible: boolean;
+  time_margin_min: number | null;
+  fallback_used: boolean;
+  modes: { car: { eta_min: number; source: string }; walk: { eta_min: number; source: string } };
+}
+
+export async function getEvacuationRoutes(
+  origin: { lon: number; lat: number },
+  shelterCandidates: { shelter_id: string; lon: number; lat: number; capacity: number }[],
+  timeBudgetHours = 2.0
+): Promise<{ results: EvacuationRouteResult[]; warnings: string[] }> {
+  const res = await fetch(`${API_BASE}/evacuation-route`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ origin, shelter_candidates: shelterCandidates, time_budget_hours: timeBudgetHours }),
+  });
+  if (!res.ok) throw new Error(`evacuation route failed: ${res.status}`);
+  return res.json();
+}
+
+export interface IsolationCheckResult {
+  isolated_areas: GeoJSON.FeatureCollection;
+  isolated_buildings: GeoJSON.FeatureCollection;
+  isolated_building_count: number;
+  warnings: string[];
+}
+
+export async function checkIsolation(
+  bbox: [number, number, number, number],
+  shelterCandidates: { lon: number; lat: number }[],
+  hazardPolygon?: GeoJSON.Polygon | GeoJSON.MultiPolygon
+): Promise<IsolationCheckResult> {
+  const res = await fetch(`${API_BASE}/isolation-check`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ bbox, shelter_candidates: shelterCandidates, hazard_polygon: hazardPolygon ?? null }),
+  });
+  if (!res.ok) throw new Error(`isolation check failed: ${res.status}`);
+  return res.json();
+}
+
 export async function approveAlert(
   alertId: string,
   decision: "승인" | "거부",

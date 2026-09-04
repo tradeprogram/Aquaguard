@@ -4,8 +4,10 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Map as MapLibreMap,
   NavigationControl,
+  Popup,
   type ExpressionSpecification,
   type GeoJSONSource,
+  type MapGeoJSONFeature,
   type StyleSpecification,
 } from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
@@ -16,6 +18,7 @@ import { lineString as turfLineString } from "@turf/helpers";
 import type { Feature, FeatureCollection, LineString, MultiLineString, Polygon, MultiPolygon } from "geojson";
 import {
   API_BASE,
+  checkIsolation,
   getBoundaries,
   getVWorldBuildings,
   getVWorldRivers,
@@ -24,6 +27,7 @@ import {
   type AdminLevel,
   type AdminSearchResult,
 } from "@/lib/api";
+import { DEMO_ISOLATION_BBOX, DEMO_SHELTERS } from "@/lib/demoShelters";
 import { useSlowLoading } from "@/lib/useSlowLoading";
 
 // 산청군 생비량면 — data/vector/adm_dong_5179.geojson 실측 centroid. 초기 카메라 위치일
@@ -358,6 +362,9 @@ export interface EvacuationRoute {
   origin: [number, number]; // [lon, lat]
   destination: [number, number]; // [lon, lat]
   label: string;
+  // module_e_routing이 네이버 Directions로 실제 도로 경로를 받아온 경우 여기에 담긴다
+  // (§6.4 /evacuation-route). 없으면(키 미설정·API 실패) 기존처럼 origin→destination 직선.
+  path?: [number, number][];
 }
 
 interface MapExplorerProps {
@@ -366,9 +373,21 @@ interface MapExplorerProps {
   // 동안 커서가 십자선으로 바뀌고, 다음 클릭 좌표를 onOriginPicked로 한 번 올려보낸다.
   pickOrigin?: boolean;
   onOriginPicked?: (lonLat: [number, number]) => void;
+  // §7 IsolationPanel에서 계산한 고립 건물 클러스터(hull, 단독 건물은 Point) — 마젠타로 표시.
+  isolatedAreas?: GeoJSON.FeatureCollection | null;
+  // 패널에서 "고립 구역 N"을 클릭하면 그 구역으로 지도를 이동시키는 용도. nonce를
+  // 넣는 이유는 같은 구역을 연달아 두 번 눌러도(같은 bbox) 매번 다시 이동해야 하는데
+  // React effect는 값이 안 바뀌면 재실행을 안 하기 때문 — 클릭마다 nonce를 올려 강제한다.
+  focusBbox?: { bbox: [number, number, number, number]; nonce: number } | null;
 }
 
-export default function MapExplorer({ route = null, pickOrigin = false, onOriginPicked }: MapExplorerProps = {}) {
+export default function MapExplorer({
+  route = null,
+  pickOrigin = false,
+  onOriginPicked,
+  isolatedAreas = null,
+  focusBbox = null,
+}: MapExplorerProps = {}) {
   const mapContainer = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
   const simUpdateRef = useRef<((debrisM: number, floodM: number) => void) | null>(null);
@@ -376,6 +395,9 @@ export default function MapExplorer({ route = null, pickOrigin = false, onOrigin
   // 현재 카메라 중심이 산청·서울 AOI 안인지 — 안이면 정적 타일을 보여주고 실시간
   // V-World fetch는 건너뛴다(아래 syncAOILayers/updateVWorld* 참조).
   const aoiRef = useRef<AOIKey | null>(null);
+  // §7 슬라이더 연동 — 침수/토사 볼륨이 바뀔 때마다 /isolation-check를 다시 부르는데,
+  // 드래그 중 매 프레임 호출하면 과하므로 디바운스 타이머를 여기 들고 있는다.
+  const isolationDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const [mapReady, setMapReady] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
@@ -387,6 +409,7 @@ export default function MapExplorer({ route = null, pickOrigin = false, onOrigin
   const [debrisDepth, setDebrisDepth] = useState(0);
   const [floodDepth, setFloodDepth] = useState(0);
   const [floodedBuildingCount, setFloodedBuildingCount] = useState<number | null>(null);
+  const [hazardIsolatedCount, setHazardIsolatedCount] = useState<number | null>(null);
 
   // 지도 초기화 (1회)
   useEffect(() => {
@@ -940,6 +963,53 @@ export default function MapExplorer({ route = null, pickOrigin = false, onOrigin
         },
       });
 
+      // §7 — 토사/침수 슬라이더가 만드는 3D 볼륨의 가장 바깥 밴드를 그대로
+      // /isolation-check의 hazard_polygon으로 재사용한다. Module A/B의 실제 예측
+      // 폴리곤이 아니라 what-if 슬라이더값 기반이지만, 지오메트리 자체는 진짜라
+      // 도로망 그래프 연산에 그대로 쓸 수 있다 — 슬라이더가 0이면 위험지역 없음으로
+      // 취급(고립 레이어 비움).
+      //
+      // 알려진 한계(2026-09-03): buildFlowBands의 밴드 폭(width)은 depthM과 무관하게
+      // 고정이라(depthM은 fill-extrusion-height, 즉 3D로 "높게 보이는 정도"에만 영향)
+      // 슬라이더가 0보다 크기만 하면 폭·따라서 이 hazard_polygon도 항상 동일 —
+      // 0.4m든 3.4m든 고립 건물 수가 같게 나오는 게 정상(버그 아님, 설계상 한계).
+      // 심각도에 따라 고립 범위가 커지게 하려면 width를 depthM에 비례시켜야 함(TODO).
+      const scheduleIsolationCheck = (
+        debrisOuter: Feature<Polygon | MultiPolygon> | undefined,
+        floodOuter: Feature<Polygon | MultiPolygon> | undefined
+      ) => {
+        if (isolationDebounceRef.current) clearTimeout(isolationDebounceRef.current);
+
+        const hazardPolys = [debrisOuter, floodOuter].filter(
+          (f): f is Feature<Polygon> => !!f && f.geometry.type === "Polygon"
+        );
+        if (hazardPolys.length === 0) {
+          const src = mapRef.current?.getSource("isolated-areas") as GeoJSONSource | undefined;
+          src?.setData({ type: "FeatureCollection", features: [] });
+          setHazardIsolatedCount(null);
+          return;
+        }
+
+        const hazardGeometry: GeoJSON.Polygon | GeoJSON.MultiPolygon =
+          hazardPolys.length === 1
+            ? hazardPolys[0].geometry
+            : { type: "MultiPolygon", coordinates: hazardPolys.map((p) => p.geometry.coordinates) };
+
+        isolationDebounceRef.current = setTimeout(() => {
+          checkIsolation(
+            DEMO_ISOLATION_BBOX,
+            DEMO_SHELTERS.map(({ lon, lat }) => ({ lon, lat })),
+            hazardGeometry
+          )
+            .then((result) => {
+              const src = mapRef.current?.getSource("isolated-areas") as GeoJSONSource | undefined;
+              src?.setData(result.isolated_areas);
+              setHazardIsolatedCount(result.isolated_building_count);
+            })
+            .catch(() => setHazardIsolatedCount(null));
+        }, 600);
+      };
+
       simUpdateRef.current = (debrisM: number, floodM: number) => {
         const currentMap = mapRef.current;
         if (!currentMap) return;
@@ -955,6 +1025,8 @@ export default function MapExplorer({ route = null, pickOrigin = false, onOrigin
           type: "FeatureCollection",
           features: floodFeatures,
         } as FeatureCollection);
+
+        scheduleIsolationCheck(debrisFeatures[0], floodFeatures[0]);
 
         // 침수 범위(가장 바깥 밴드) 안에 들어오는 렌더링된 건물 수를 세서 "몇 개 건물이
         // 잠기는지"를 텍스트로도 보여준다 — 3D 볼륨 자체가 건물을 시각적으로 덮는 게
@@ -1011,6 +1083,54 @@ export default function MapExplorer({ route = null, pickOrigin = false, onOrigin
           "circle-stroke-color": "#0f172a",
         },
       });
+
+      // 고립마을 자동탐지(§7) — 대피소까지 도로가 하나도 안 남은 건물 클러스터.
+      // 건물 1채짜리 클러스터는 Point, 여러 채는 convex hull Polygon으로 오므로
+      // geometry-type으로 나눠 각각 원/채움영역으로 그린다(마젠타 — 기존 빨강 위험
+      // 폴리곤·파랑 대피경로와 구분).
+      map.addSource("isolated-areas", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
+      map.addLayer({
+        id: "isolated-areas-fill",
+        type: "fill",
+        source: "isolated-areas",
+        filter: ["==", ["geometry-type"], "Polygon"],
+        paint: { "fill-color": "#d946ef", "fill-opacity": 0.3 },
+      });
+      map.addLayer({
+        id: "isolated-areas-outline",
+        type: "line",
+        source: "isolated-areas",
+        filter: ["==", ["geometry-type"], "Polygon"],
+        paint: { "line-color": "#d946ef", "line-width": 2 },
+      });
+      map.addLayer({
+        id: "isolated-areas-points",
+        type: "circle",
+        source: "isolated-areas",
+        filter: ["==", ["geometry-type"], "Point"],
+        paint: { "circle-radius": 6, "circle-color": "#d946ef", "circle-stroke-width": 1.5, "circle-stroke-color": "#0f172a" },
+      });
+      // 고립 구역을 클릭하면 몇 채인지 팝업으로 바로 보여준다 — 지도 위 도형만 봐서는
+      // "이게 뭔지" 알 길이 없다는 문제(2026-09-03 피드백)를 직접 해결하는 부분.
+      const isolationPopup = new Popup({ closeButton: false, closeOnClick: false, offset: 10 });
+      const showIsolationPopup = (e: { lngLat: { lng: number; lat: number }; features?: MapGeoJSONFeature[] }) => {
+        const feature = e.features?.[0];
+        const count = feature?.properties?.building_count;
+        if (count == null) return;
+        map.getCanvas().style.cursor = "pointer";
+        isolationPopup
+          .setLngLat(e.lngLat)
+          .setHTML(`<div style="font:12px sans-serif;color:#1e1b2e;">고립 구역 · 약 ${count}채<br/>대피소 도달 가능 경로 0개</div>`)
+          .addTo(map);
+      };
+      const hideIsolationPopup = () => {
+        map.getCanvas().style.cursor = "";
+        isolationPopup.remove();
+      };
+      map.on("mouseenter", "isolated-areas-fill", showIsolationPopup);
+      map.on("mouseleave", "isolated-areas-fill", hideIsolationPopup);
+      map.on("mouseenter", "isolated-areas-points", showIsolationPopup);
+      map.on("mouseleave", "isolated-areas-points", hideIsolationPopup);
 
       setMapReady(true);
     });
@@ -1097,11 +1217,12 @@ export default function MapExplorer({ route = null, pickOrigin = false, onOrigin
       markerSource?.setData({ type: "FeatureCollection", features: [] });
       return;
     }
-    const { origin, destination, label } = route;
+    const { origin, destination, label, path } = route;
+    const lineCoordinates = path && path.length > 1 ? path : [origin, destination];
     routeSource?.setData({
       type: "FeatureCollection",
       features: [
-        { type: "Feature", properties: {}, geometry: { type: "LineString", coordinates: [origin, destination] } },
+        { type: "Feature", properties: {}, geometry: { type: "LineString", coordinates: lineCoordinates } },
       ],
     } as FeatureCollection);
     markerSource?.setData({
@@ -1121,6 +1242,27 @@ export default function MapExplorer({ route = null, pickOrigin = false, onOrigin
       { padding: 120, pitch: DEFAULT_PITCH, bearing: -20, duration: 1500 }
     );
   }, [mapReady, route]);
+
+  useEffect(() => {
+    if (!mapReady) return;
+    const areasSource = mapRef.current?.getSource("isolated-areas") as GeoJSONSource | undefined;
+    areasSource?.setData(isolatedAreas ?? { type: "FeatureCollection", features: [] });
+  }, [mapReady, isolatedAreas]);
+
+  useEffect(() => {
+    if (!mapReady || !focusBbox) return;
+    const currentMap = mapRef.current;
+    if (!currentMap) return;
+    const [minLon, minLat, maxLon, maxLat] = focusBbox.bbox;
+    currentMap.fitBounds(
+      [
+        [minLon, minLat],
+        [maxLon, maxLat],
+      ],
+      { padding: 100, pitch: DEFAULT_PITCH, bearing: -20, duration: 1200, maxZoom: 17 }
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mapReady, focusBbox?.nonce]);
 
   // §6.8 폴백 ① — 지도 클릭으로 출발지 선택. pickOrigin이 켜져 있는 동안만 커서를
   // 십자선으로 바꾸고 다음 클릭 한 번만 잡아서 부모(EvacuationPanel)로 올려보낸다.
@@ -1272,6 +1414,11 @@ export default function MapExplorer({ route = null, pickOrigin = false, onOrigin
           {floodedBuildingCount !== null && (
             <p className="mt-3 rounded-md bg-sky-950/50 px-2 py-1.5 text-sky-300">
               침수 범위 안 건물 약 <span className="font-bold">{floodedBuildingCount}</span>개
+            </p>
+          )}
+          {hazardIsolatedCount !== null && (
+            <p className="mt-2 rounded-md bg-fuchsia-950/50 px-2 py-1.5 text-fuchsia-300">
+              §7 고립 위험 건물 약 <span className="font-bold">{hazardIsolatedCount}</span>개 (대피소 도달 불가)
             </p>
           )}
         </div>

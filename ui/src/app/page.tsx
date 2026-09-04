@@ -60,6 +60,9 @@ export default function HomePage() {
   // §6.8 폴백 ① — "지도에서 선택" 모드와, 클릭으로 받은 좌표도 같은 방식으로 연결.
   const [pickingOrigin, setPickingOrigin] = useState(false);
   const [pickedOrigin, setPickedOrigin] = useState<[number, number] | null>(null);
+  // §7 IsolationPanel↔MapExplorer도 형제 컴포넌트라 같은 방식으로 상태를 끌어올린다.
+  const [isolatedAreas, setIsolatedAreas] = useState<GeoJSON.FeatureCollection | null>(null);
+  const [focusBbox, setFocusBbox] = useState<{ bbox: [number, number, number, number]; nonce: number } | null>(null);
 
   return (
     <div className="relative h-full w-full">
@@ -70,6 +73,8 @@ export default function HomePage() {
           setPickedOrigin(coord);
           setPickingOrigin(false);
         }}
+        isolatedAreas={isolatedAreas}
+        focusBbox={focusBbox}
       />
 
       {/* 지도가 메인 화면 — 메뉴는 더 이상 페이지를 이동시키지 않고 지도 위에
@@ -132,7 +137,18 @@ export default function HomePage() {
                   mapPickedOrigin={pickedOrigin}
                 />
               )}
-              {active === "isolation" && <IsolationPanel />}
+              {active === "isolation" && (
+                <IsolationPanel
+                  onResult={(r) => setIsolatedAreas(r?.isolated_areas ?? null)}
+                  onFocusCluster={(bbox) => {
+                    // 패널이 화면을 넓게 덮고 있으면 지도가 이동해도 가려서 안 보이므로
+                    // (2026-09-03 사용자 피드백 — "눌러도 아무 반응 없음"), 클릭 즉시
+                    // 패널을 닫아 이동한 결과가 바로 보이게 한다.
+                    setFocusBbox({ bbox, nonce: Date.now() });
+                    setActive(null);
+                  }}
+                />
+              )}
               {active === "whatif" && <WhatifPanel />}
               {active === "approve" && <ApprovePanel />}
             </GlassPanel>

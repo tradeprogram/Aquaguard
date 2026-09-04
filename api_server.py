@@ -22,6 +22,8 @@ from google import genai
 from google.genai import types as genai_types
 from pydantic import BaseModel
 
+import module_e_routing
+from module_e_routing import isolation as module_e_isolation
 from module_o_orchestrator import geo
 from module_o_orchestrator.orchestrator import DEFAULT_SHELTER_CANDIDATES, run as run_orchestrator
 from module_o_orchestrator.store import alert_store
@@ -179,6 +181,41 @@ def get_alert_geojson(alert_id: str) -> dict:
             }
         )
 
+    return {"type": "FeatureCollection", "features": features}
+
+
+SHELTERS_PATH = DATA_VECTOR_DIR / "shelters_national.geojson"
+_shelters_cache: list[dict] | None = None
+
+
+def _get_shelters() -> list[dict]:
+    """scripts/fetch_shelters.py가 미리 받아둔 전국 지진옥외대피소(DSSP-IF-00103)를
+    최초 요청 시 한 번만 읽어 메모리에 캐시한다 — 하루 호출 1,000건 한도 API라 매
+    요청마다 실시간으로 부르지 않는다. 2026-09-03 확인: 이 데이터셋은 경상남도·
+    전라남북도·충청남도·세종이 아직 없다(지자체별 등록 진행 중으로 추정) — 그 지역은
+    빈 리스트가 정상이며, 손데이터(예: 산청 데모 대피소)로 계속 보완해야 한다.
+    """
+    global _shelters_cache
+    if _shelters_cache is None:
+        if not SHELTERS_PATH.exists():
+            _shelters_cache = []
+        else:
+            with open(SHELTERS_PATH, encoding="utf-8") as f:
+                _shelters_cache = json.load(f)["features"]
+    return _shelters_cache
+
+
+@app.get("/shelters")
+def get_shelters(bbox: str) -> dict:
+    """§6.4 — bbox 안에 있는 실제 대피소 목록(GeoJSON Point FeatureCollection).
+    커버리지 없는 지역(예: 경남)은 features가 빈 배열로 온다 — 프론트에서 그 경우
+    손데이터로 폴백할지는 화면별로 판단."""
+    minx, miny, maxx, maxy = _parse_bbox(bbox)
+    features = [
+        f
+        for f in _get_shelters()
+        if minx <= f["geometry"]["coordinates"][0] <= maxx and miny <= f["geometry"]["coordinates"][1] <= maxy
+    ]
     return {"type": "FeatureCollection", "features": features}
 
 
@@ -637,6 +674,70 @@ def _chat_reply(message: str, alert_id: str | None, history: list[ChatHistoryTur
 @app.post("/chat")
 def chat(req: ChatRequest) -> dict:
     return {"reply": _chat_reply(req.message, req.alert_id, req.history)}
+
+
+class EvacuationRouteShelter(BaseModel):
+    shelter_id: str
+    lon: float
+    lat: float
+    capacity: int
+
+
+class EvacuationRouteRequest(BaseModel):
+    origin: dict[str, float]  # {"lon": ..., "lat": ...} — 브라우저 Geolocation/지도 클릭 좌표(EPSG:4326)
+    shelter_candidates: list[EvacuationRouteShelter]
+    time_budget_hours: float = 2.0
+
+
+@app.post("/evacuation-route")
+def evacuation_route(req: EvacuationRouteRequest) -> dict:
+    """§6.4 — module_e_routing.evaluate_candidates()를 감싸는 REST 엔드포인트.
+
+    module_e_routing 자체는(오케스트레이터의 module_e.schema.json 계약대로) EPSG:5179만
+    주고받으므로, 여기서만 브라우저가 보낸 4326 좌표를 5179로 바꿔 넣고, 결과 경로도
+    지도에 바로 그릴 수 있게 4326으로 다시 붙여서 돌려준다(§4.1: 재투영은 UI 출력
+    직전에만 — 이 엔드포인트가 그 "직전" 지점).
+    """
+    origin_x, origin_y = module_e_routing.point_lonlat_to_5179(req.origin["lon"], req.origin["lat"])
+    shelter_candidates_5179 = []
+    for s in req.shelter_candidates:
+        x, y = module_e_routing.point_lonlat_to_5179(s.lon, s.lat)
+        shelter_candidates_5179.append({"shelter_id": s.shelter_id, "x_5179": x, "y_5179": y, "capacity": s.capacity})
+
+    results, warnings = module_e_routing.evaluate_candidates(
+        {
+            "origin": {"x_5179": origin_x, "y_5179": origin_y},
+            "risk_polygons": [],
+            "shelter_candidates": shelter_candidates_5179,
+            "road_graph_source": "standard_node_link_v1",
+            "time_budget_hours": req.time_budget_hours,
+        }
+    )
+    for r in results:
+        r["route_lonlat"] = [
+            list(module_e_routing.point_5179_to_lonlat(x, y)) for x, y in r["route_5179"]["coordinates"]
+        ]
+
+    return {"results": results, "warnings": warnings}
+
+
+class IsolationCheckRequest(BaseModel):
+    bbox: tuple[float, float, float, float]  # (minLon, minLat, maxLon, maxLat)
+    shelter_candidates: list[dict[str, float]]  # [{"lon": ..., "lat": ...}, ...]
+    hazard_polygon: dict | None = None  # GeoJSON Polygon, EPSG:4326 — 없으면 베이스라인 연결성만 계산
+
+
+@app.post("/isolation-check")
+def isolation_check(req: IsolationCheckRequest) -> dict:
+    """§7 — module_e_routing.isolation.check_isolation()을 감싸는 REST 엔드포인트.
+    bbox가 넓으면(VWorld 9km² 한도) 내부에서 자동으로 타일을 나눠 순차 조회하므로
+    화면 뷰포트가 클수록 응답이 느려진다(캐싱은 아직 없음 — TODO).
+    """
+    try:
+        shelters_lonlat = [(s["lon"], s["lat"]) for s in req.shelter_candidates]
+        return module_e_isolation.check_isolation(req.bbox, shelters_lonlat, req.hazard_polygon)
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=str(e))
 
 
 @app.get("/health")
