@@ -25,7 +25,7 @@
 
 ### 1.2 Module O 오케스트레이터 (`module_o_orchestrator/`)
 - `orchestrator.py`: `run(input) -> envelope`. A/B 호출 → 임계치(`landslide_prob≥0.7` 또는 `flood_prob≥0.7`) 초과 시 D/E/G 순차 호출 → `precursor_flag`면 H 호출 → `golden_time_saved_min` 계산 → `AlertStore`에 등록.
-- `modules_client.py`: `AQUAGUARD_MOCK_MODE`(기본 `1`)로 목업/실제 모듈 호출을 스위칭. `MODULE_PACKAGES` 딕셔너리에 트랙①②의 실제 패키지명이 매핑돼 있음 — **트랙①②가 코드를 넣으면 이 파일 수정 없이 `AQUAGUARD_MOCK_MODE=0`만으로 실제 연동됨.**
+- `modules_client.py`: `AQUAGUARD_MOCK_MODE`(기본 `1`)로 목업/실제 모듈 호출을 스위칭. `MODULE_PACKAGES` 딕셔너리에 각 트랙의 실제 패키지명이 매핑돼 있음 — **트랙이 코드를 넣으면 이 파일 수정 없이 `AQUAGUARD_MOCK_MODE=0`만으로 실제 연동됨.** 2026-09-04 변경: `0`이 이제 **모듈 단위**로 동작한다. 예전엔 `0`이면 전 모듈을 import해서 아직 없는 `module_a_landslide`에서 `ModuleNotFoundError`로 파이프라인 전체가 죽었다 — 트랙별 진도가 다른 동안 real 모드를 아예 못 쓰는 상태였다. 지금은 설치된 모듈만 실물로 돌고 나머지는 example.json으로 메워지며, 모듈별 출처는 `modules_client.resolve_source()` / 봉투의 `meta.module_sources`로 확인한다.
 - `store.py`: 인메모리 `AlertStore`. 원클릭 승인 상태머신(`대기`/`승인`/`거부`/`자동승인(timeout)`), 오탐(`오탐판정`)이면 자동승인 안 함. **2026-08-28부로 관공서 모드 전용**(시민 모드는 이 상태머신을 안 거치고 곧바로 경보격상, §9.5 참조) — 여전히 활발히 쓰이는 코드, 삭제 대상 아님.
 - `geo.py`: EPSG:5179→4326 재투영 헬퍼(점/원). **§4.1 규약상 재투영은 UI 출력 직전에만** — 이 파일과 `api_server.py`의 지도 관련 엔드포인트가 그 유일한 지점.
 - `tests/test_orchestrator.py`: pytest 6개, 전부 통과 중. 문서에 나온 예시값(`golden_time_saved_min=197`)을 정확히 재현하는지까지 검증함.

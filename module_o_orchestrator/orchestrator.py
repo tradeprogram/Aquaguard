@@ -13,7 +13,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from typing import Any
 
-from .modules_client import call_module
+from .modules_client import call_module, module_sources
 from .store import Alert, alert_store
 
 LANDSLIDE_THRESHOLD = 0.7
@@ -198,6 +198,9 @@ def run(input: dict[str, Any]) -> dict[str, Any]:  # noqa: A002 - §4.2 규약�
     }
 
     envelope = _envelope("ok" if fallback_tier[0] == 1 else "degraded", fallback_tier[0], data, warnings)
+    # 계약(§4.2)의 4개 필드 밖에 붙는 부가 메타 — 어느 모듈이 실물로 돌았고 어느 것이
+    # 아직 example.json 대체인지 UI가 알아야 Provenance 배지(§6.1)를 정직하게 찍는다.
+    envelope["meta"] = {"module_sources": module_sources()}
 
     if triggered:
         # 승인 대기 타임아웃은 재연 데모의 과거 이벤트 시각(timestamp)이 아니라

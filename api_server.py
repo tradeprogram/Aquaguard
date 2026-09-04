@@ -82,8 +82,10 @@ def get_alert(alert_id: str) -> dict:
         "approval_status": alert.resolve_status(),
         "escalation_level": alert.escalation_level,
     }
-    # 계약(§4.2)의 4개 필드 밖에 붙는 부가 메타 — UI의 escalation 카운트다운용
+    # 계약(§4.2)의 4개 필드 밖에 붙는 부가 메타 — UI의 escalation 카운트다운용.
+    # Module O가 이미 넣어둔 meta(module_sources)를 덮지 않도록 병합한다.
     envelope["meta"] = {
+        **envelope.get("meta", {}),
         "created_at": alert.created_at.isoformat(),
         "escalation_timeout_min": alert.escalation_timeout_min,
     }

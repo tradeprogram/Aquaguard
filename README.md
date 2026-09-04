@@ -8,7 +8,7 @@
 
 ## 빠른 시작 (트랙③ 프로토타입 — Module O + 대시보드, 전부 목업 모드)
 
-`module_o_orchestrator`가 A~H를 `contracts/`의 example.json으로 목업 호출하고, `ui/`의 Next.js 대시보드가 그 결과를 그린다. 팀원 모듈이 실제로 들어오면 `AQUAGUARD_MOCK_MODE=0`으로 바꾸는 것만으로 실제 모듈 호출로 전환된다(코드 변경 없음, `module_o_orchestrator/modules_client.py` 참조).
+`module_o_orchestrator`가 A~H를 `contracts/`의 example.json으로 목업 호출하고, `ui/`의 Next.js 대시보드가 그 결과를 그린다. `AQUAGUARD_MOCK_MODE=0`으로 바꾸면 **설치된 모듈만** 실제 `run()`으로 전환되고 아직 없는 모듈은 example.json으로 메워진다(코드 변경 없음, `module_o_orchestrator/modules_client.py` 참조) — 트랙별 진도가 달라도 real 모드를 쓸 수 있게 모듈 단위로 내려간다. 어느 모듈이 실물이고 어느 것이 예시값인지는 봉투의 `meta.module_sources`로 나오며, UI의 Provenance 배지(§7)가 이 값을 근거로 삼는다. 기본값 `1`은 전 모듈을 example로 고정하므로 §9 데모 리허설처럼 출력이 결정적이어야 할 때 쓴다.
 
 ```bash
 # 1) 백엔드 (FastAPI + Module O)

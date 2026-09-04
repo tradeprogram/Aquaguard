@@ -104,3 +104,37 @@ def test_no_escalation_when_false_positive():
 
     alert = store.get("X3")
     assert alert.resolve_status() == "대기"
+
+
+def test_mock_mode_replaces_every_module(monkeypatch):
+    """기본값(AQUAGUARD_MOCK_MODE=1)에서는 설치된 모듈이 있어도 전부 example로 간다.
+
+    §9 데모 리허설은 출력이 결정적이어야 해서 이 모드를 쓴다 — 실제 모듈이 들어왔다고
+    조용히 real로 바뀌면 리허설 숫자가 흔들린다.
+    """
+    from module_o_orchestrator import modules_client
+
+    monkeypatch.setenv("AQUAGUARD_MOCK_MODE", "1")
+    assert set(modules_client.module_sources().values()) == {"example"}
+
+
+def test_real_mode_falls_back_per_module(monkeypatch):
+    """AQUAGUARD_MOCK_MODE=0은 설치된 모듈만 real로 돌리고 나머지는 example로 메운다.
+
+    예전 구현은 0이면 전 모듈을 import해서, 아직 없는 module_a_landslide에서
+    ModuleNotFoundError로 파이프라인 전체가 죽었다 — 트랙별 진도가 다른 동안
+    real 모드를 아예 못 쓰는 상태였다.
+    """
+    from module_o_orchestrator import modules_client
+
+    monkeypatch.setenv("AQUAGUARD_MOCK_MODE", "0")
+    sources = modules_client.module_sources()
+
+    for letter, package in modules_client.MODULE_PACKAGES.items():
+        installed = modules_client._import_module(package) is not None
+        assert sources[letter] == ("real" if installed else "example"), letter
+
+    # 미설치 모듈이 섞여 있어도 파이프라인이 끝까지 돈다.
+    envelope = run(_load_example("o")["input"])
+    assert set(envelope) >= {"status", "fallback_tier", "data", "warnings"}
+    assert envelope["meta"]["module_sources"] == sources
