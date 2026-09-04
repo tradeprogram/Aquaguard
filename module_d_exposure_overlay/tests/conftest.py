@@ -14,6 +14,8 @@ from pathlib import Path
 
 import pytest
 
+from module_d_exposure_overlay import use_types
+
 CONTRACTS_DIR = Path(__file__).resolve().parent.parent.parent / "contracts"
 
 # 산청 AOI 부근 EPSG:5179 기준점 (module_o_orchestrator의 데모 대피소 좌표대와 같은 영역)
@@ -85,3 +87,25 @@ def documented_case() -> dict:
         ),
         "farmland_parcels_5179": collection(feature(offset_rect(90, 100, 400, 500))),
     }
+
+
+@pytest.fixture(autouse=True)
+def isolated_repo_root(tmp_path, monkeypatch):
+    """§4.2 - D의 테스트는 data/precomputed 산출물 없이도 돌아야 한다.
+
+    건축물대장 주용도 매핑은 API 산출물이라 저장소에 없다(.gitignore). 테스트가
+    개발자 머신에 그 파일이 있는지에 따라 달라지면 안 되므로 매번 빈 임시 루트를
+    보게 하고, 조인을 테스트할 때만 write_parcel_mapping으로 채워 넣는다.
+    """
+    monkeypatch.setattr(use_types, "REPO_ROOT", tmp_path)
+    use_types.load.cache_clear()
+    yield tmp_path
+    use_types.load.cache_clear()
+
+
+def write_parcel_mapping(root, mapping: dict) -> None:
+    """임시 루트에 소형 픽스처 매핑을 심는다 (실제 산출물과 같은 경로·형식)."""
+    path = root / "data" / "precomputed" / "building_use_types.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(mapping, ensure_ascii=False), encoding="utf-8")
+    use_types.load.cache_clear()

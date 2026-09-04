@@ -136,6 +136,18 @@ class ExposurePolicy:
         return dict(self.use_type.value("source_value_mapping"))
 
     @property
+    def use_type_join_source_file(self) -> str:
+        return str(self.module_d.value("use_type_join")["source_file"])
+
+    @property
+    def use_type_building_key_property(self) -> str:
+        return str(self.module_d.value("use_type_join")["building_key_property"])
+
+    @property
+    def use_type_key_prefix_len(self) -> int:
+        return int(self.module_d.value("use_type_join")["key_prefix_len"])
+
+    @property
     def use_type_when_no_attribute(self) -> str:
         return str(self.use_type.value("unmapped_use_type")["no_attribute"])
 

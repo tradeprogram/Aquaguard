@@ -13,6 +13,7 @@ from shapely.ops import unary_union
 from shapely.strtree import STRtree
 
 from .policy import ExposurePolicy
+from .use_types import ParcelUseTypes
 
 SQUARE_METERS_PER_HECTARE = 10_000.0
 
@@ -68,11 +69,8 @@ def extract_building_id(feature: dict[str, Any], index: int, policy: ExposurePol
     return f"D-AUTO-{index:04d}"
 
 
-def extract_use_type(feature: dict[str, Any], policy: ExposurePolicy) -> str:
-    properties = feature.get("properties") or {}
-    raw = _first_present(properties, policy.use_type_keys) if isinstance(properties, dict) else None
-    if raw is None:
-        return policy.use_type_when_no_attribute
+def _canonicalize(raw: Any, policy: ExposurePolicy) -> str:
+    """건축물대장 주용도 문자열을 7종 어휘로 접는다 (policies/use_type_vocabulary.json)."""
     text = str(raw).strip()
     for canonical, candidates in policy.source_value_mapping.items():
         if text in candidates:
@@ -80,11 +78,78 @@ def extract_use_type(feature: dict[str, Any], policy: ExposurePolicy) -> str:
     return policy.use_type_when_unrecognized
 
 
+def parcel_key_of(feature: dict[str, Any], policy: ExposurePolicy) -> str | None:
+    """건물 feature에서 필지키(bd_mgt_sn 앞 19자리)를 뽑는다."""
+    properties = feature.get("properties") or {}
+    if not isinstance(properties, dict):
+        return None
+    raw = properties.get(policy.use_type_building_key_property)
+    if not isinstance(raw, str):
+        return None
+    prefix_len = policy.use_type_key_prefix_len
+    return raw[:prefix_len] if len(raw) >= prefix_len else None
+
+
+def resolve_use_type(
+    feature: dict[str, Any],
+    policy: ExposurePolicy,
+    parcel_use_types: ParcelUseTypes | None = None,
+) -> tuple[str, str]:
+    """(use_type, 출처) — 출처는 "property" | "parcel_join" | "none".
+
+    우선순위: ① feature 속성의 use_type_keys ② 필지 단위 조인 매핑 ③ '미상'.
+    ①이 있으면 조인하지 않는다 — 데이터가 직접 실어온 값이 항상 더 정확하다.
+    """
+    properties = feature.get("properties") or {}
+    if isinstance(properties, dict):
+        raw = _first_present(properties, policy.use_type_keys)
+        if raw is not None:
+            return _canonicalize(raw, policy), "property"
+
+    if parcel_use_types is not None:
+        key = parcel_key_of(feature, policy)
+        if key is not None:
+            joined = parcel_use_types.get(key)
+            if joined is not None:
+                return _canonicalize(joined, policy), "parcel_join"
+
+    return policy.use_type_when_no_attribute, "none"
+
+
+def resolve_use_types(
+    features: list[dict[str, Any]],
+    policy: ExposurePolicy,
+    parcel_use_types: ParcelUseTypes | None,
+) -> tuple[list[str], dict[str, int]]:
+    """전체 건물에 대해 한 번만 계산한다 — explain()의 커버리지도 여기서 나온다."""
+    resolved: list[str] = []
+    counts = {"property": 0, "parcel_join": 0, "none": 0}
+    for feature in features:
+        use_type, origin = resolve_use_type(feature, policy, parcel_use_types)
+        resolved.append(use_type)
+        counts[origin] += 1
+    return resolved, counts
+
+
+def needs_parcel_join(features: list[dict[str, Any]], policy: ExposurePolicy) -> bool:
+    """속성으로 용도를 못 채우는 건물이 하나라도 있는가.
+
+    매핑 파일이 없을 때 warning을 낼지 결정한다 — 어차피 조인이 필요 없는 입력에서는
+    파일 부재가 문제가 아니므로 조용히 넘어간다.
+    """
+    for feature in features:
+        properties = feature.get("properties") or {}
+        if not isinstance(properties, dict) or _first_present(properties, policy.use_type_keys) is None:
+            return True
+    return False
+
+
 def find_exposed_buildings(
     areas: list[RiskArea],
     features: list[dict[str, Any]],
     geometries: list[BaseGeometry | None],
     policy: ExposurePolicy,
+    use_types: list[str] | None = None,
 ) -> list[dict[str, Any]]:
     """위험영역과 실제로 겹치는 건물만 골라 risk_prob를 배정한다.
 
@@ -111,7 +176,9 @@ def find_exposed_buildings(
         {
             "building_id": extract_building_id(features[index], index, policy),
             "risk_prob": risk_prob,
-            "use_type": extract_use_type(features[index], policy),
+            "use_type": use_types[index]
+            if use_types is not None
+            else resolve_use_type(features[index], policy)[0],
         }
         for index, risk_prob in best.items()
         if risk_prob >= policy.min_risk_prob

@@ -19,7 +19,7 @@ from typing import Any
 from shapely.geometry.base import BaseGeometry
 
 from . import geometry as geom_util
-from . import overlay, policy
+from . import overlay, policy, use_types
 from .envelope import envelope, error_envelope
 from .overlay import RiskArea
 
@@ -36,6 +36,11 @@ class _Prepared:
     warnings: list[str] = field(default_factory=list)
     used_point_buffer: bool = False
     fatal: bool = False
+    building_use_types: list[str] = field(default_factory=list)
+    use_type_origin_counts: dict[str, int] = field(default_factory=dict)
+    parcel_mapping_available: bool = False
+    parcel_mapping_size: int = 0
+    parcel_mapping_path: str = ""
 
 
 def _prepare_risk_areas(raw_polygons, pol, prepared):
@@ -98,6 +103,26 @@ def _prepare_collection(raw, label, prepared):
     return features, geometries
 
 
+def _resolve_building_use_types(prepared, pol):
+    """건물 용도를 한 번에 해석한다. 매핑 파일이 없으면 조용히 폴백하되,
+    실제로 조인이 필요한 건물이 있을 때만 warning을 남긴다(§4.2 모듈 독립성)."""
+    parcels = use_types.load(pol.use_type_join_source_file)
+    prepared.parcel_mapping_available = parcels.available
+    prepared.parcel_mapping_size = len(parcels)
+    prepared.parcel_mapping_path = pol.use_type_join_source_file
+
+    if not parcels.available and overlay.needs_parcel_join(prepared.building_features, pol):
+        prepared.warnings.append(
+            f"건축물대장 주용도 매핑({pol.use_type_join_source_file})을 읽을 수 없음"
+            f"({parcels.error}) -> 속성 탐색만으로 판정, 나머지는 '미상'."
+            " 재생성: python scripts/fetch_building_use_types.py"
+        )
+
+    prepared.building_use_types, prepared.use_type_origin_counts = overlay.resolve_use_types(
+        prepared.building_features, pol, parcels if parcels.available else None
+    )
+
+
 def _prepare(raw, pol):
     prepared = _Prepared()
 
@@ -118,6 +143,7 @@ def _prepare(raw, pol):
     prepared.building_features, prepared.building_geometries = _prepare_collection(
         raw.get("building_footprints_5179"), "building_footprints_5179", prepared
     )
+    _resolve_building_use_types(prepared, pol)
     _, prepared.farmland_geometries = _prepare_collection(
         raw.get("farmland_parcels_5179"), "farmland_parcels_5179", prepared
     )
@@ -134,7 +160,11 @@ def _overlay(prepared, pol):
     risk_union = overlay.build_risk_union(prepared.areas)
     return overlay.OverlayResult(
         exposed_buildings=overlay.find_exposed_buildings(
-            prepared.areas, prepared.building_features, prepared.building_geometries, pol
+            prepared.areas,
+            prepared.building_features,
+            prepared.building_geometries,
+            pol,
+            prepared.building_use_types,
         ),
         exposed_farmland_ha=overlay.farmland_area_ha(risk_union, prepared.farmland_geometries, pol),
         risk_union_area_m2=0.0 if risk_union is None else risk_union.area,
@@ -166,6 +196,26 @@ def run(input: dict) -> dict:  # noqa: A002 - §4.2 규약이 지정한 이름
         )
 
 
+def _use_type_join_summary(prepared) -> dict:
+    """조인 커버리지 — 매핑 적용 건수/전체와 '미상' 잔여 (§6.1 Provenance)."""
+    counts = prepared.use_type_origin_counts or {"property": 0, "parcel_join": 0, "none": 0}
+    total = sum(counts.values())
+    return {
+        "source_file": prepared.parcel_mapping_path,
+        "mapping_available": prepared.parcel_mapping_available,
+        "mapping_size": prepared.parcel_mapping_size,
+        "granularity": "parcel",
+        "is_assumption": True,
+        "assumption": "필지 단위 조인 - 동 단위 아님, 다중 표제부는 주건축물 우선/연면적 최대",
+        "buildings": total,
+        "from_property": counts.get("property", 0),
+        "from_parcel_join": counts.get("parcel_join", 0),
+        "unknown": counts.get("none", 0),
+        "resolved_ratio_pct": round((total - counts.get("none", 0)) / total * 100, 1) if total else 0.0,
+        "parcel_join_ratio_pct": round(counts.get("parcel_join", 0) / total * 100, 1) if total else 0.0,
+    }
+
+
 def explain(input: dict):
     """계약 밖 판정 근거 — Provenance 배지(§6.1)와 디버깅용."""
     pol = policy.active_policy()
@@ -182,6 +232,7 @@ def explain(input: dict):
         "used_point_buffer": prepared.used_point_buffer,
         "buffer_is_assumption": prepared.used_point_buffer,
         "building_feature_count": len(prepared.building_features),
+        "use_type_join": _use_type_join_summary(prepared),
         "farmland_feature_count": len(prepared.farmland_geometries),
         "result": None
         if result is None
