@@ -1,0 +1,105 @@
+{
+  "meta": {
+    "purpose": "Module A Infinite-Slope FoS 물리 파라미터 룩업 (농진청 정밀토양도 기반)",
+    "crs_soilmap": "EPSG:5174",
+    "no_synthetic_data": true,
+    "sources": {
+      "P1": "Frontiers Forests & Global Change 2026, DOI 10.3389/ffgc.2026.1842027, Table 1",
+      "P2": "PSU GEOL 615 'Some Useful Numbers' (Waltham/Holtz&Kovacs 계열)",
+      "P3": "Hwangryeong Mt. Busan, MDPI Sustainability 2020, 12(7):2839"
+    },
+    "fos_equation": "FoS = [c' + Cr + (gamma - m*gamma_w)*z*cos^2(beta)*tan(phi')] / [gamma*z*sin(beta)*cos(beta)]"
+  },
+  "texture_strength_ST": {
+    "사질": {
+      "c_kpa": 1.2,
+      "phi_deg": 30,
+      "gamma_kn_m3": 19.33,
+      "ksat_m_s": 1.48e-05,
+      "provenance": "MODEL",
+      "source": "Frontiers 2026 (10.3389/ffgc.2026.1842027) Table 1; xcheck PSU GEOL615, Busan MDPI Sustainability 2020 12(7):2839"
+    },
+    "사양질": {
+      "c_kpa": 4.0,
+      "phi_deg": 28,
+      "gamma_kn_m3": 18.57,
+      "ksat_m_s": 1.18e-05,
+      "provenance": "MODEL",
+      "source": "Frontiers 2026 (10.3389/ffgc.2026.1842027) Table 1; xcheck PSU GEOL615, Busan MDPI Sustainability 2020 12(7):2839"
+    },
+    "미사사양질": {
+      "c_kpa": 3.9,
+      "phi_deg": 28,
+      "gamma_kn_m3": 18.64,
+      "ksat_m_s": 6.02e-06,
+      "provenance": "MODEL",
+      "source": "Frontiers 2026 (10.3389/ffgc.2026.1842027) Table 1; xcheck PSU GEOL615, Busan MDPI Sustainability 2020 12(7):2839"
+    },
+    "식양질": {
+      "c_kpa": 8.7,
+      "phi_deg": 20,
+      "gamma_kn_m3": 17.65,
+      "ksat_m_s": 6.68e-07,
+      "provenance": "MODEL",
+      "source": "Frontiers 2026 (10.3389/ffgc.2026.1842027) Table 1; xcheck PSU GEOL615, Busan MDPI Sustainability 2020 12(7):2839"
+    },
+    "미사식양질": {
+      "c_kpa": 10.6,
+      "phi_deg": 22,
+      "gamma_kn_m3": 17.0,
+      "ksat_m_s": 1.54e-06,
+      "provenance": "MODEL",
+      "source": "Frontiers 2026 (10.3389/ffgc.2026.1842027) Table 1; xcheck PSU GEOL615, Busan MDPI Sustainability 2020 12(7):2839"
+    },
+    "식질": {
+      "c_kpa": 12.0,
+      "phi_deg": 20,
+      "gamma_kn_m3": 16.5,
+      "ksat_m_s": 3e-07,
+      "provenance": "EXTRAPOLATED",
+      "source": "EXTRAPOLATED: P1 silty_clay_loam 경향 외삽 + P2 PSU Clay(phi 20, gamma 18); xcheck PSU GEOL615, Busan 2020"
+    },
+    "역질": {
+      "c_kpa": 0.5,
+      "phi_deg": 35,
+      "gamma_kn_m3": 19.5,
+      "ksat_m_s": 5e-05,
+      "provenance": "EXTRAPOLATED",
+      "source": "EXTRAPOLATED: P2 PSU Gravel(phi 35, gamma 19); xcheck PSU GEOL615, Busan 2020"
+    },
+    "사력질": {
+      "c_kpa": 1.0,
+      "phi_deg": 33,
+      "gamma_kn_m3": 19.3,
+      "ksat_m_s": 3e-05,
+      "provenance": "EXTRAPOLATED",
+      "source": "EXTRAPOLATED: P1 Sand ~ P2 Gravel 보간; xcheck PSU GEOL615, Busan 2020"
+    }
+  },
+  "soil_depth_AD": {
+    "<20": 0.2,
+    "20-50": 0.35,
+    "50-100": 0.75,
+    ">100": 1.2
+  },
+  "drainage_wetness_DC": {
+    "매우양호": 0.1,
+    "양호": 0.2,
+    "약간양호": 0.3,
+    "약간불량": 0.45,
+    "불량": 0.6,
+    "매우불량": 0.75
+  },
+  "root_cohesion": {
+    "Cr_root_cohesion_scenarios_kpa": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5
+    ],
+    "source": "Frontiers 2026 Table/text — 뿌리점착력 0~5 kPa 시나리오. 산불로 뿌리 소실 시 Cr->0 접근.",
+    "fire_link": "f(dNBR,dt): 미피해 산림 Cr(healthy) -> 피해지 Cr 감소. ARCHITECTURE §2.5 A_max(dNBR)와 결합."
+  }
+}
