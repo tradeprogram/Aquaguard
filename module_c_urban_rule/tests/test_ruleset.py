@@ -141,3 +141,29 @@ def test_kma_rows_cite_the_verified_press_release():
         assert source["effective"] == "2025-05-15"
         assert source["retrieved"] == "2026-09-04"
         assert "URL 접속 검증 완료" in rs.row(row_id).note
+
+
+def test_corroborating_sources_are_verified_and_quoted(any_ruleset):
+    """추가-e. 보도 확인 근거도 URL·검증시점·원문 인용을 반드시 갖춘다."""
+    rs = ruleset.load(any_ruleset)
+    for row in rs.rows.values():
+        for item in row.corroborating_sources:
+            assert item["url"].startswith("http"), f"{row.id}: 보도 URL 형식 오류"
+            assert item["retrieved"], f"{row.id}: 보도 근거에 retrieved가 없다"
+            assert item["quote"].strip(), f"{row.id}: 인용문이 비어 있다"
+
+
+def test_policy_row_cites_two_verified_reports_but_no_primary_url():
+    """추가-f. known_risk_min_level은 보도 2건으로 뒷받침되지만 1차 자료 URL은 아직 없다.
+
+    2차 출처가 1차 자료 자리를 슬쩍 차지하지 않도록 source.url이 null인 것까지 고정한다.
+    """
+    row = ruleset.load("v1_kma_mois").row("known_risk_min_level")
+    assert row.status == "POLICY_CONFIRMED_DIRECTION"
+    assert row.source["agency"] == "행정안전부"
+    assert row.source["url"] is None, "행안부 1차 자료 URL은 아직 미확보 상태여야 한다"
+
+    outlets = [c["outlet"] for c in row.corroborating_sources]
+    assert outlets == ["뉴시스", "아시아경제"]
+    assert all("5㎝" in c["quote"] or "5㎝로" in c["quote"] for c in row.corroborating_sources)
+    assert "침수 초기단계부터 통제" in row.corroborating_sources[1]["quote"]

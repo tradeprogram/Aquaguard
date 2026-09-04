@@ -45,6 +45,8 @@ class Row:
     status: str
     source: dict[str, Any]
     note: str | None
+    # 1차 자료(기관 원문) URL이 아직 없을 때의 보도 확인 근거. source를 대체하지 않는다.
+    corroborating_sources: tuple[dict[str, Any], ...] = ()
 
     @property
     def is_fully_confirmed(self) -> bool:
@@ -102,6 +104,7 @@ class Ruleset:
                     "id": r.id,
                     "status": r.status,
                     "source": r.source,
+                    "corroborating_sources": list(r.corroborating_sources),
                     "note": r.note,
                 }
                 for r in self.rows.values()
@@ -175,6 +178,7 @@ def load(name: str) -> Ruleset:
             status=r["status"],
             source=r["source"],
             note=r["note"],
+            corroborating_sources=tuple(r.get("corroborating_sources", ())),
         )
         for r in doc["rows"]
     }
