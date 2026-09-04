@@ -94,13 +94,16 @@ def run(input: dict[str, Any]) -> dict[str, Any]:  # noqa: A002 - §4.2 규약�
     shelter_route: dict[str, Any] = {}
     damage_cost: dict[str, Any] = {}
     if triggered:
-        # Module B는 inundation_extent_5179(FeatureCollection)를 실제로 갖고 있는데 그동안
-        # 빈 dict를 넘기고 있었다(TRACK2_CONTRACT_AGENDA.md 1번) — D의 geometry.normalize가
-        # FeatureCollection을 그대로 받아 union으로 처리하므로 있는 값을 그대로 넘긴다.
-        # Module A는 계약 출력이 아직 점(location)뿐이라 D가 버퍼링으로 흡수한다(같은 안건의
-        # 미해결분 — A 계약에 폴리곤 필드가 생기기 전까지는 D가 ASSUMPTION으로 표시).
+        # A는 risk_polygon_5179, B는 inundation_extent_5179가 실제 위험영역이다
+        # (TRACK2_CONTRACT_AGENDA.md 1번, 2026-09-04 합의로 A 계약에 폴리곤 필드 추가).
+        # A의 폴리곤이 null이면 — FoS 격자에서 영역을 못 뽑은 경우 — location(점)으로
+        # 폴백하고, 그때 D가 반경 버퍼로 흡수하면서 status: degraded로 내린다(ASSUMPTION 표기).
         risk_polygons = [
-            {"source_module": "A", "geometry_5179": landslide.get("location", {}), "risk_prob": landslide["landslide_prob"]},
+            {
+                "source_module": "A",
+                "geometry_5179": landslide.get("risk_polygon_5179") or landslide.get("location", {}),
+                "risk_prob": landslide["landslide_prob"],
+            },
             {
                 "source_module": "B",
                 "geometry_5179": flood.get("inundation_extent_5179") or {},

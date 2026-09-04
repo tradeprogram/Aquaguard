@@ -1,18 +1,124 @@
 {
   "input": {
     "risk_polygons": [
-      { "source_module": "A", "geometry_5179": { "type": "Polygon", "coordinates": [] }, "risk_prob": 0.78 },
-      { "source_module": "B", "geometry_5179": { "type": "Polygon", "coordinates": [] }, "risk_prob": 0.61 }
+      {
+        "source_module": "A",
+        "geometry_5179": {
+          "type": "Polygon",
+          "coordinates": [
+            [
+              [
+                1050000.0,
+                1707000.0
+              ],
+              [
+                1050300.0,
+                1707000.0
+              ],
+              [
+                1050300.0,
+                1707300.0
+              ],
+              [
+                1050000.0,
+                1707300.0
+              ],
+              [
+                1050000.0,
+                1707000.0
+              ]
+            ]
+          ]
+        },
+        "risk_prob": 0.78
+      }
     ],
-    "building_footprints_5179": { "type": "FeatureCollection", "features": [] },
-    "farmland_parcels_5179": { "type": "FeatureCollection", "features": [] }
+    "building_footprints_5179": {
+      "type": "FeatureCollection",
+      "features": [
+        {
+          "type": "Feature",
+          "geometry": {
+            "type": "Polygon",
+            "coordinates": [
+              [
+                [
+                  1050050.0,
+                  1707050.0
+                ],
+                [
+                  1050070.0,
+                  1707050.0
+                ],
+                [
+                  1050070.0,
+                  1707070.0
+                ],
+                [
+                  1050050.0,
+                  1707070.0
+                ],
+                [
+                  1050050.0,
+                  1707050.0
+                ]
+              ]
+            ]
+          },
+          "properties": {
+            "building_id": "B12345",
+            "주용도": "공동주택"
+          }
+        }
+      ]
+    },
+    "farmland_parcels_5179": {
+      "type": "FeatureCollection",
+      "features": [
+        {
+          "type": "Feature",
+          "geometry": {
+            "type": "Polygon",
+            "coordinates": [
+              [
+                [
+                  1050090.0,
+                  1707100.0
+                ],
+                [
+                  1050400.0,
+                  1707100.0
+                ],
+                [
+                  1050400.0,
+                  1707500.0
+                ],
+                [
+                  1050090.0,
+                  1707500.0
+                ],
+                [
+                  1050090.0,
+                  1707100.0
+                ]
+              ]
+            ]
+          },
+          "properties": {}
+        }
+      ]
+    }
   },
   "output": {
     "status": "ok",
     "fallback_tier": 1,
     "data": {
       "exposed_buildings": [
-        { "building_id": "B12345", "risk_prob": 0.78, "use_type": "주거" }
+        {
+          "building_id": "B12345",
+          "risk_prob": 0.78,
+          "use_type": "주거"
+        }
       ],
       "exposed_farmland_ha": 4.2
     },

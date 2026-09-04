@@ -9,22 +9,25 @@ from module_h_citizen_verification import run
 from .conftest import payload, report, sightings
 
 
-def test_contract_example_input_cannot_produce_its_own_output(contract):
-    """0. 계약 예시의 input은 자기 output을 낼 수 없다 — 이 사실 자체를 고정해둔다.
+def test_contract_example_input_reproduces_its_own_output(contract):
+    """0. 계약 예시의 input이 자기 output을 그대로 재현한다 (Module C와 같은 기준).
 
-    input의 citizen_reports는 1건인데 output은 report_count 6이다. 게다가 경보 발송
-    시각 필드가 없어 response_latency_min 4.5도 어디서도 유도되지 않는다
-    (alert_id의 09:15 기준이면 유일한 신고 09:22은 7분이다).
-    Day 1 계약 회의 안건 7·8번(TRACK2_CONTRACT_AGENDA.md).
+    2026-09-04 4인 합의로 안건 7·8번이 해결되면서 example.json의 input에 신고 6건과
+    alert_issued_at이 채워졌다(alert_issued_at은 스키마의 정식 입력 필드로 승격).
+    그 전까지 이 자리에 있던 test_contract_example_input_cannot_produce_its_own_output —
+    신고 1건 대 report_count 6의 불일치를 고정하던 테스트 — 는 역할이 끝나 이 재현
+    테스트로 승격했다.
     """
     result = run(contract["input"])
-    assert result["data"] != contract["output"]["data"]
-    assert result["data"]["report_count"] == 1
-    assert result["data"]["response_latency_min"] == 7.0
+    assert result == contract["output"]
 
 
 def test_documented_output_is_reproducible(documented_case, contract):
-    """1. 신고 6건 + 첫 응답 4.5분 입력으로 계약이 문서화한 output data를 정확히 재현한다."""
+    """1. 신고 6건 + 첫 응답 4.5분 입력으로 계약이 문서화한 output data를 정확히 재현한다.
+
+    위 계약 재현 테스트와 입력이 같다(계약 input이 이 픽스처에서 왔다). 픽스처 쪽이
+    깨지면 계약 파일이 아니라 헬퍼가 틀어진 것이므로 둘 다 남겨둔다.
+    """
     result = run(documented_case)
     assert result["status"] == "ok"
     assert result["fallback_tier"] == 1

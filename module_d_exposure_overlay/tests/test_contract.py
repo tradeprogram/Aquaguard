@@ -9,23 +9,24 @@ from module_d_exposure_overlay import run
 from .conftest import collection, feature, offset_rect, risk
 
 
-def test_contract_example_input_cannot_produce_its_own_output(contract):
-    """0. 계약 예시의 input은 자기 output을 낼 수 없다 — 이 사실 자체를 고정해둔다.
+def test_contract_example_input_reproduces_its_own_output(contract):
+    """0. 계약 예시의 input이 자기 output을 그대로 재현한다 (Module C와 같은 기준).
 
-    example.json의 input은 coordinates·features가 전부 비어 있는데 output에는
-    건물 B12345와 4.2ha가 들어 있다. Module C처럼 '예시 input → 예시 output' 완전
-    재현 테스트를 D에 둘 수 없는 이유이며, Day 1 계약 회의 안건이다
-    (TRACK2_CONTRACT_AGENDA.md 2번). 계약이 고쳐지면 이 테스트가 깨지고, 그때
-    아래 documented_case 테스트를 계약 재현 테스트로 승격하면 된다.
+    2026-09-04 4인 합의로 안건 2번이 해결되면서 example.json의 input이 빈 값에서
+    실좌표로 교체됐다(TRACK2_CONTRACT_AGENDA.md 2번). 그 전까지 이 자리에 있던
+    test_contract_example_input_cannot_produce_its_own_output — 불일치 자체를 고정하던
+    테스트 — 는 역할이 끝나 이 재현 테스트로 승격했다.
     """
     result = run(contract["input"])
-    assert result["data"] != contract["output"]["data"]
-    assert result["fallback_tier"] == 3
-    assert result["data"] == {"exposed_buildings": [], "exposed_farmland_ha": 0.0}
+    assert result == contract["output"]
 
 
 def test_documented_output_is_reproducible_from_real_coordinates(documented_case, contract):
-    """1. 실좌표 입력으로 계약이 문서화한 output data를 정확히 재현한다."""
+    """1. 픽스처 입력으로도 계약이 문서화한 output data를 정확히 재현한다.
+
+    위 계약 재현 테스트와 좌표가 같다(계약 input이 이 픽스처에서 왔다). 픽스처 쪽이
+    깨지면 계약 파일이 아니라 헬퍼가 틀어진 것이므로 둘 다 남겨둔다.
+    """
     result = run(documented_case)
     assert result["status"] == "ok"
     assert result["fallback_tier"] == 1

@@ -5,64 +5,223 @@
   "properties": {
     "input": {
       "type": "object",
-      "required": ["x_5179", "y_5179", "timestamp", "static", "dynamic"],
+      "required": [
+        "x_5179",
+        "y_5179",
+        "timestamp",
+        "static",
+        "dynamic"
+      ],
       "properties": {
-        "x_5179": { "type": "number" },
-        "y_5179": { "type": "number" },
-        "timestamp": { "type": "string", "format": "date-time" },
+        "x_5179": {
+          "type": "number"
+        },
+        "y_5179": {
+          "type": "number"
+        },
+        "timestamp": {
+          "type": "string",
+          "format": "date-time"
+        },
         "static": {
           "type": "object",
-          "required": ["slope_deg", "curvature", "twi", "aspect_deg", "dnbr", "dnbr_class", "days_since_fire"],
+          "required": [
+            "slope_deg",
+            "curvature",
+            "twi",
+            "aspect_deg",
+            "dnbr",
+            "dnbr_class",
+            "days_since_fire"
+          ],
           "properties": {
-            "slope_deg": { "type": "number" },
-            "curvature": { "type": "number" },
-            "twi": { "type": "number" },
-            "aspect_deg": { "type": "number", "minimum": 0, "maximum": 360 },
-            "dnbr": { "type": "number" },
-            "dnbr_class": { "type": "string", "enum": ["none", "low", "moderate", "high"] },
-            "days_since_fire": { "type": ["integer", "null"] }
+            "slope_deg": {
+              "type": "number"
+            },
+            "curvature": {
+              "type": "number"
+            },
+            "twi": {
+              "type": "number"
+            },
+            "aspect_deg": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 360
+            },
+            "dnbr": {
+              "type": "number"
+            },
+            "dnbr_class": {
+              "type": "string",
+              "enum": [
+                "none",
+                "low",
+                "moderate",
+                "high"
+              ]
+            },
+            "days_since_fire": {
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
           }
         },
         "dynamic": {
           "type": "object",
-          "required": ["rainfall_1h_mm", "rainfall_cumulative_24h_mm", "rainfall_cumulative_72h_mm", "api_index", "source"],
+          "required": [
+            "rainfall_1h_mm",
+            "rainfall_cumulative_24h_mm",
+            "rainfall_cumulative_72h_mm",
+            "api_index",
+            "source"
+          ],
           "properties": {
-            "rainfall_1h_mm": { "type": "array", "items": { "type": "number" } },
-            "rainfall_cumulative_24h_mm": { "type": "number" },
-            "rainfall_cumulative_72h_mm": { "type": "number" },
-            "api_index": { "type": "number" },
-            "source": { "type": "string", "enum": ["observed", "forecast"] }
+            "rainfall_1h_mm": {
+              "type": "array",
+              "items": {
+                "type": "number"
+              }
+            },
+            "rainfall_cumulative_24h_mm": {
+              "type": "number"
+            },
+            "rainfall_cumulative_72h_mm": {
+              "type": "number"
+            },
+            "api_index": {
+              "type": "number"
+            },
+            "source": {
+              "type": "string",
+              "enum": [
+                "observed",
+                "forecast"
+              ]
+            }
           }
         },
-        "insar_displacement_mm_per_day": { "type": ["number", "null"] }
+        "insar_displacement_mm_per_day": {
+          "type": [
+            "number",
+            "null"
+          ]
+        }
       }
     },
     "output": {
       "type": "object",
-      "required": ["status", "fallback_tier", "data", "warnings"],
+      "required": [
+        "status",
+        "fallback_tier",
+        "data",
+        "warnings"
+      ],
       "properties": {
-        "status": { "type": "string", "enum": ["ok", "degraded", "error"] },
-        "fallback_tier": { "type": "integer", "enum": [1, 2, 3] },
+        "status": {
+          "type": "string",
+          "enum": [
+            "ok",
+            "degraded",
+            "error"
+          ]
+        },
+        "fallback_tier": {
+          "type": "integer",
+          "enum": [
+            1,
+            2,
+            3
+          ]
+        },
         "data": {
           "type": "object",
-          "required": ["landslide_prob", "confidence_interval", "source", "amplification_factor", "precursor_flag", "hours_to_critical", "location"],
+          "required": [
+            "landslide_prob",
+            "confidence_interval",
+            "source",
+            "amplification_factor",
+            "precursor_flag",
+            "hours_to_critical",
+            "location",
+            "risk_polygon_5179"
+          ],
           "properties": {
-            "landslide_prob": { "type": "number", "minimum": 0, "maximum": 1 },
-            "confidence_interval": {
-              "type": "array", "items": { "type": "number", "minimum": 0, "maximum": 1 }, "minItems": 2, "maxItems": 2
+            "landslide_prob": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
             },
-            "source": { "type": "string", "enum": ["observed", "forecast"] },
-            "amplification_factor": { "type": "number" },
-            "precursor_flag": { "type": "boolean" },
-            "hours_to_critical": { "type": ["number", "null"] },
+            "confidence_interval": {
+              "type": "array",
+              "items": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1
+              },
+              "minItems": 2,
+              "maxItems": 2
+            },
+            "source": {
+              "type": "string",
+              "enum": [
+                "observed",
+                "forecast"
+              ]
+            },
+            "amplification_factor": {
+              "type": "number"
+            },
+            "precursor_flag": {
+              "type": "boolean"
+            },
+            "hours_to_critical": {
+              "type": [
+                "number",
+                "null"
+              ]
+            },
             "location": {
               "type": "object",
-              "required": ["x_5179", "y_5179"],
-              "properties": { "x_5179": { "type": "number" }, "y_5179": { "type": "number" } }
+              "required": [
+                "x_5179",
+                "y_5179"
+              ],
+              "properties": {
+                "x_5179": {
+                  "type": "number"
+                },
+                "y_5179": {
+                  "type": "number"
+                }
+              }
+            },
+            "risk_polygon_5179": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "description": "산사태 위험영역 폴리곤(EPSG:5179). Module O가 Module D의 risk_polygons[].geometry_5179로 그대로 넘긴다. FoS 격자에서 임계치를 넘는 셀을 어떻게 폴리곤으로 묶을지는 트랙①이 정한다. 산출 불가한 경우에만 null을 허용하며, 그때 D는 location을 반경 버퍼로 흡수하고 status: degraded로 내린다(ASSUMPTION 표기). (안건 1, 2026-09-04 합의)",
+              "properties": {
+                "type": {
+                  "enum": [
+                    "Polygon",
+                    "MultiPolygon",
+                    "FeatureCollection"
+                  ]
+                }
+              }
             }
           }
         },
-        "warnings": { "type": "array", "items": { "type": "string" } }
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
       }
     }
   }
