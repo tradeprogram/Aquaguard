@@ -1,0 +1,44 @@
+{
+  "generated_by": "scripts/build_farmland_geojson.py",
+  "generated_at": "2026-09-05T01:59:00+09:00",
+  "region": "sancheong",
+  "source": {
+    "agency": "농림수산식품교육문화정보원(농정원)",
+    "product": "팜맵(FarmMap) 경상남도",
+    "published": "2025-12-31",
+    "imagery_captured": "2024-12-31",
+    "crs": "EPSG:5179",
+    "encoding": "euc-kr"
+  },
+  "source_file": "data\\precomputed\\farmmap\\2025_경상남도_산청군\\2025_경상남도_산청군.shp",
+  "crs": "EPSG:5179",
+  "reprojected": false,
+  "filters": {
+    "excluded_classes": [
+      "비경지"
+    ],
+    "excluded_count": 895
+  },
+  "counts": {
+    "source_polygons": 73935,
+    "output_polygons": 73040,
+    "class_counts_before": {
+      "밭": 39811,
+      "논": 22321,
+      "과수": 5784,
+      "시설": 5124,
+      "비경지": 895
+    },
+    "class_counts_after": {
+      "밭": 39811,
+      "논": 22321,
+      "과수": 5784,
+      "시설": 5124
+    }
+  },
+  "area_ha": {
+    "declared_AREA_field": 7284.29,
+    "geometry_computed": 7284.29
+  },
+  "consumer": "module_d_exposure_overlay - farmland_parcels_5179 입력"
+}

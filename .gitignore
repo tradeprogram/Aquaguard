@@ -25,3 +25,8 @@ data/precomputed/_tile_cache/
 # 이 .json들은 빠져 있었다. 재생성: python scripts/fetch_building_use_types.py
 data/precomputed/building_use_types.json
 data/precomputed/_bldrgst_cache.json
+
+# 팜맵(농정원) 원본 SHP — scripts/build_farmland_geojson.py 입력.
+# 배포 제약이 있는 원자료이고 용량도 커서 커밋하지 않는다.
+# 산출물(*_farmland_5179.geojson)도 아래 규칙으로 이미 걸린다.
+data/precomputed/farmmap/
