@@ -38,6 +38,7 @@
       "id": "building_id_keys",
       "value": [
         "building_id",
+        "bd_mgt_sn",
         "bld_id",
         "BLD_ID",
         "id",
@@ -53,7 +54,7 @@
         "url": null,
         "retrieved": null
       },
-      "note": "feature.properties에서 이 순서로 탐색하고, 없으면 feature의 최상위 id, 그것도 없으면 인덱스 기반 결정적 합성 id(D-AUTO-0001)를 만든다. 실제 건축물 데이터 확보 후 실제 키명으로 교체."
+      "note": "feature.properties에서 이 순서로 탐색하고, 없으면 feature의 최상위 id, 그것도 없으면 인덱스 기반 결정적 합성 id(D-AUTO-0001)를 만든다. 2026-09-04 실측으로 실제 키명 확보: VWorld LT_C_SPBD가 쓰는 이름은 bd_mgt_sn이며 이게 곧 25자리 건물관리번호다(기존 목록의 한글 '건물관리번호'와 같은 값, 영문 필드명). data/vector/aoi_buildings_5179.geojson 2,410건 전부에 채워져 있고 99.97% 유니크라 합성 id로 떨어지지 않는다. 건축물대장 주용도 조인키도 이 값이다(scripts/fetch_building_use_types.py)."
     },
     {
       "id": "use_type_keys",

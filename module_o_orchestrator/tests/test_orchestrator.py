@@ -138,3 +138,55 @@ def test_real_mode_falls_back_per_module(monkeypatch):
     envelope = run(_load_example("o")["input"])
     assert set(envelope) >= {"status", "fallback_tier", "data", "warnings"}
     assert envelope["meta"]["module_sources"] == sources
+
+
+def test_exposure_layers_are_real_and_in_5179():
+    """§10 데이터 접근 계층 — 커밋된 AOI 건축물 레이어가 실제로 읽히고 5179 미터다."""
+    from module_o_orchestrator.exposure_layers import building_footprints, farmland_parcels
+
+    buildings, warning = building_footprints()
+    assert warning is None, warning
+    assert buildings["type"] == "FeatureCollection"
+    assert len(buildings["features"]) > 1000
+
+    coords = buildings["features"][0]["geometry"]["coordinates"]
+    while isinstance(coords[0], list):
+        coords = coords[0]
+    assert coords[0] > 100_000, "EPSG:4326이 그대로 들어왔다 — 5179 미터여야 한다"
+
+    # 농경지는 아직 레이어가 없다. 빈 값을 조용히 넘기지 않고 이유를 함께 낸다.
+    farmland, farmland_warning = farmland_parcels()
+    assert farmland["features"] == []
+    assert farmland_warning is not None
+
+
+def test_real_mode_exposes_buildings_inside_risk_area(monkeypatch):
+    """위험 폴리곤이 AOI 안이면 실제 건물이 노출자산으로 잡힌다.
+
+    이전에는 Module O가 building_footprints_5179를 빈 dict로 넘겨서 어떤 위험영역을
+    줘도 노출 0건이었다(§10 TODO).
+    """
+    pytest.importorskip("module_d_exposure_overlay")
+    monkeypatch.setenv("AQUAGUARD_MOCK_MODE", "0")
+
+    import module_d_exposure_overlay as module_d
+    from module_o_orchestrator.exposure_layers import building_footprints, farmland_parcels
+
+    buildings, _ = building_footprints()
+    farmland, _ = farmland_parcels()
+    x, y, half = 1_050_511.5, 1_706_245.2, 300  # §9 데모 trigger_location(생비량면) 주변
+    risk = {
+        "type": "Polygon",
+        "coordinates": [[[x - half, y - half], [x + half, y - half],
+                         [x + half, y + half], [x - half, y + half], [x - half, y - half]]],
+    }
+    result = module_d.run({
+        "risk_polygons": [{"source_module": "A", "geometry_5179": risk, "risk_prob": 0.78}],
+        "building_footprints_5179": buildings,
+        "farmland_parcels_5179": farmland,
+    })
+    exposed = result["data"]["exposed_buildings"]
+    assert exposed, "AOI 안 위험영역인데 노출 건물이 0건이면 레이어 배선이 끊긴 것"
+    # building_id는 합성값(D-AUTO-*)이 아니라 실제 25자리 건물관리번호여야 한다 —
+    # 건축물대장 주용도 조인키가 이 값이기 때문이다.
+    assert all(len(b["building_id"]) == 25 and b["building_id"].isdigit() for b in exposed)

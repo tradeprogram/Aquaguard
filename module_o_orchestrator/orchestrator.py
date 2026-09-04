@@ -13,7 +13,8 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from typing import Any
 
-from .modules_client import call_module, module_sources
+from .exposure_layers import building_footprints, farmland_parcels
+from .modules_client import call_module, module_sources, resolve_source
 from .store import Alert, alert_store
 
 LANDSLIDE_THRESHOLD = 0.7
@@ -93,6 +94,7 @@ def run(input: dict[str, Any]) -> dict[str, Any]:  # noqa: A002 - §4.2 규약�
     # 2. 1차권고: 임계치 초과 시에만 D/E/G 진행 (§5 Module O 역할)
     shelter_route: dict[str, Any] = {}
     damage_cost: dict[str, Any] = {}
+    exposure: dict[str, Any] = {}
     if triggered:
         # A는 risk_polygon_5179, B는 inundation_extent_5179가 실제 위험영역이다
         # (TRACK2_CONTRACT_AGENDA.md 1번, 2026-09-04 합의로 A 계약에 폴리곤 필드 추가).
@@ -110,9 +112,27 @@ def run(input: dict[str, Any]) -> dict[str, Any]:  # noqa: A002 - §4.2 규약�
                 "risk_prob": flood["flood_prob"],
             },
         ]
+        # 건물·농경지는 어느 모듈의 출력도 아니라 O가 데이터에서 직접 읽어 넘긴다
+        # (§10 데이터 접근 계층). 레이어를 못 읽어도 파이프라인은 계속 돌고, 대신
+        # 그 사실이 경고로 올라온다 — 특히 농경지는 "0ha"와 "확인 불가"가 다르다.
+        buildings, buildings_warning = building_footprints()
+        farmland, farmland_warning = farmland_parcels()
+        # 단, 목업 D는 입력을 무시하고 example.json의 출력(농경지 4.2ha 등)을 그대로
+        # 돌려준다 — 그때 "레이어 미확보" 경고를 같이 내보내면 화면에 뜬 숫자와 어긋난다.
+        # 이 경고는 그 레이어로 실제 계산이 일어날 때만 의미가 있다.
+        if resolve_source("d") == "real":
+            warnings.extend(w for w in (buildings_warning, farmland_warning) if w)
+
         exposure = _merge_module_result(
             "d",
-            call_module("d", {"risk_polygons": risk_polygons, "building_footprints_5179": {}, "farmland_parcels_5179": {}}),
+            call_module(
+                "d",
+                {
+                    "risk_polygons": risk_polygons,
+                    "building_footprints_5179": buildings,
+                    "farmland_parcels_5179": farmland,
+                },
+            ),
             warnings,
             fallback_tier,
         )
@@ -194,6 +214,10 @@ def run(input: dict[str, Any]) -> dict[str, Any]:  # noqa: A002 - §4.2 규약�
             # module_o.schema.json의 alert_package는 additionalProperties를 막지 않아
             # 계약 위반이 아니다. 입력에 underpasses가 없으면 빈 배열이다.
             "road_flooding": road_flooding,
+            # 같은 이유로 UI의 exposure?: ExposureData에 대응한다. Module D 출력은
+            # 그동안 Module G 입력으로만 쓰이고 봉투에는 안 실렸는데, 화면이
+            # "어느 건물이 위험구역에 걸렸는지"를 그리려면 이 값이 필요하다.
+            "exposure": exposure,
         },
     }
 

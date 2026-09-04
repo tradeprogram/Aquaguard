@@ -28,6 +28,7 @@ python -m pytest module_o_orchestrator/tests/ -v
 
 `/map3d`의 지리 데이터 파이프라인:
 - **행정경계 3계층**(시도/시군구/읍면동, 전국) — 사용자 제공 `BND_ADM_DONG_PG`(원본 EPSG:5186, 읍면동 레벨)를 EPSG:5179로 저장하고, 시군구·시도는 그 지오메트리를 코드 접두어 기준으로 dissolve해서 생성(`data/vector/adm_{sido,sigungu,dong}_5179.geojson`). 이름(시/도, 시/군/구)은 [`vuski/admdongkor`](https://github.com/vuski/admdongkor)(MIT, 동일 SGIS adm_cd 스킴)와 코드로 조인해 붙임 — `data/vector/adm_index.json`이 3계층 통합 검색 인덱스(이름·전체경로명·중심점·bbox). `api_server.py`의 `GET /boundaries?bbox=...`가 뷰포트만큼만 3계층 모두 EPSG:4326으로 재투영해 내려주고(§4.1: 재투영은 UI 출력 직전에만), `GET /search?q=...`가 도/시군구/읍면동 이름으로 검색해 지도 이동에 씀.
+- **노출자산(건축물)**: `data/vector/aoi_buildings_5179.geojson` — Module D의 `building_footprints_5179` 입력. 지도 렌더링용이 아니라 **모듈 입력**이라 EPSG:5179로 저장한다. 원본(`data/precomputed/sancheong_buildings.geojson`, 57,681건)은 `.gitignore`라 배포 서버에 없으므로, 데모가 실제로 도는 생비량면 AOI만 2,410건으로 잘라 커밋했다(1.2MB, `scripts/build_aoi_exposure_layers.py`로 재생성). 속성 중 `bd_mgt_sn`(25자리 건물관리번호)이 `exposed_buildings[].building_id`이자 건축물대장 주용도 조인키다. **농경지 레이어는 아직 없다** — Module O가 빈 컬렉션과 함께 "확인 불가" 경고를 낸다(0ha와 구분).
 - **지형**: `GET /terrain-tiles/{z}/{x}/{y}.png`가 AWS 공개 지형 타일을 프록시(CORS 우회).
 - **위성영상**: Esri World Imagery(무료, 키 불필요).
 - **건물·도로·교량**: OpenFreeMap 무료 벡터타일(OSM, OpenMapTiles 스키마) — 건물은 `render_height`로 실높이 압출, 교량은 `@turf/buffer`로 폭만큼 버퍼링해 지면에서 띄운 `fill-extrusion`.
