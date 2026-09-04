@@ -1,0 +1,171 @@
+{
+  "ruleset_version": "v1_kma_mois",
+  "description": "기상청 극한호우 긴급재난문자 기준 + 특보 기준 환산 + 행안부 지하차도 통제기준 정책방향을 주입한 룰셋(2026-09-04, 나정우 조사). 배수능력·지정위험 가중은 여전히 공식 출처가 없어 PLACEHOLDER로 남아 있다.",
+  "rows": [
+    {
+      "id": "cutpoint_주의",
+      "value": 20.0,
+      "unit": "mm/h",
+      "status": "DERIVED",
+      "source": {
+        "agency": "기상청",
+        "document": "기상특보 발표기준 (기상청 날씨누리)",
+        "clause": "호우주의보: 3시간 누적강우량이 60mm 이상 예상되거나 12시간 누적강우량이 110mm 이상",
+        "url": "https://www.weather.go.kr/w/forecast/guide/standard.do",
+        "retrieved": "2026-09-04",
+        "effective": null
+      },
+      "note": "3시간 60mm를 시간 균등환산(60/3=20)한 값. 원출처인 기상청 '기상특보 발표기준' 공식 페이지를 접속 검증(2026-09-04)해 기준 수치를 확인했으므로 source.url을 채웠다. 다만 공식 기준은 3시간·12시간 누적이고 Module C 계약 입력에는 1시간 강우강도밖에 없어, 시간 균등환산이라는 가정(ASSUMPTION)은 그대로 남는다 — 그래서 status는 CONFIRMED가 아닌 DERIVED다. 보도 2건(세계일보·YTN)도 같은 수치로 교차 확인했다.",
+      "corroborating_sources": [
+        {
+          "outlet": "세계일보",
+          "title": "기상청, 경북 상주 울진 등 호우경보",
+          "published": "2024-07-08",
+          "url": "https://www.segye.com/newsView/20240707510333",
+          "retrieved": "2026-09-04",
+          "quote": "호우주의보는 3시간 강우량이 60㎜ 또는 12시간 강우량이 110㎜ 이상 예상될 때, 호우경보는 3시간 강우량이 90㎜ 또는 12시간 강우량이 180㎜를 넘을 것으로 예상될 때"
+        },
+        {
+          "outlet": "YTN",
+          "title": "[짤막상식] '장마철 물 폭탄' 호우 특보란?",
+          "published": "2024-07-05",
+          "url": "https://www.ytn.co.kr/_ln/0108_202407050615410892",
+          "retrieved": "2026-09-04",
+          "quote": "호우 주의보는 3시간 동안 강우량이 60mm 이상 또는 12시간 동안 110mm 이상, 호우 경보는 3시간 동안 강우량이 90mm 이상 또는 12시간 동안 180mm 이상의 비"
+        }
+      ]
+    },
+    {
+      "id": "cutpoint_경계",
+      "value": 30.0,
+      "unit": "mm/h",
+      "status": "DERIVED",
+      "source": {
+        "agency": "기상청",
+        "document": "기상특보 발표기준 (기상청 날씨누리)",
+        "clause": "호우경보: 3시간 누적강우량이 90mm 이상 예상되거나 12시간 누적강우량이 180mm 이상",
+        "url": "https://www.weather.go.kr/w/forecast/guide/standard.do",
+        "retrieved": "2026-09-04",
+        "effective": null
+      },
+      "note": "3시간 90mm를 시간 균등환산(90/3=30)한 값. 원출처인 기상청 '기상특보 발표기준' 공식 페이지를 접속 검증(2026-09-04)해 기준 수치를 확인했으므로 source.url을 채웠다. 다만 공식 기준은 3시간·12시간 누적이고 Module C 계약 입력에는 1시간 강우강도밖에 없어, 시간 균등환산이라는 가정(ASSUMPTION)은 그대로 남는다 — 그래서 status는 CONFIRMED가 아닌 DERIVED다. 보도 2건(세계일보·YTN)도 같은 수치로 교차 확인했다.",
+      "corroborating_sources": [
+        {
+          "outlet": "세계일보",
+          "title": "기상청, 경북 상주 울진 등 호우경보",
+          "published": "2024-07-08",
+          "url": "https://www.segye.com/newsView/20240707510333",
+          "retrieved": "2026-09-04",
+          "quote": "호우주의보는 3시간 강우량이 60㎜ 또는 12시간 강우량이 110㎜ 이상 예상될 때, 호우경보는 3시간 강우량이 90㎜ 또는 12시간 강우량이 180㎜를 넘을 것으로 예상될 때"
+        },
+        {
+          "outlet": "YTN",
+          "title": "[짤막상식] '장마철 물 폭탄' 호우 특보란?",
+          "published": "2024-07-05",
+          "url": "https://www.ytn.co.kr/_ln/0108_202407050615410892",
+          "retrieved": "2026-09-04",
+          "quote": "호우 주의보는 3시간 동안 강우량이 60mm 이상 또는 12시간 동안 110mm 이상, 호우 경보는 3시간 동안 강우량이 90mm 이상 또는 12시간 동안 180mm 이상의 비"
+        }
+      ]
+    },
+    {
+      "id": "cutpoint_위험",
+      "value": 50.0,
+      "unit": "mm/h",
+      "status": "CONFIRMED_COMPONENT",
+      "source": {
+        "agency": "기상청",
+        "document": "보도자료 「생명을 구하는 알림, 기상청 호우 긴급재난문자 전국 확대 운영」(2025-05-14 발표)",
+        "clause": "1시간 50mm 이상 & 3시간 90mm 이상 동시 관측, 또는 1시간 72mm 이상",
+        "url": "https://www.kma.go.kr/kma/news/press.jsp?mode=view&num=1194492",
+        "retrieved": "2026-09-04",
+        "effective": "2025-05-15"
+      },
+      "note": "공식 기준은 '1시간 50mm & 3시간 90mm 동시' 조건 — Module C 계약 입력에 3시간 누적이 없어 1시간 성분만 단독 적용한 보수적 변형(ASSUMPTION)이다. 따라서 CONFIRMED가 아니라 CONFIRMED_COMPONENT. contracts/module_c에 rainfall_cumulative_3h_mm를 추가하면 완전한 CONFIRMED로 올릴 수 있으며, 이는 4인 합의 안건 후보. URL 접속 검증 완료(2026-09-04) — 본문에서 제목·발송기준 수치·전국 확대 시행일(5월 15일) 확인."
+    },
+    {
+      "id": "extreme_override",
+      "value": 72.0,
+      "unit": "mm/h",
+      "status": "CONFIRMED",
+      "source": {
+        "agency": "기상청",
+        "document": "보도자료 「생명을 구하는 알림, 기상청 호우 긴급재난문자 전국 확대 운영」(2025-05-14 발표)",
+        "clause": "1시간 72mm 이상 단독 조건",
+        "url": "https://www.kma.go.kr/kma/news/press.jsp?mode=view&num=1194492",
+        "retrieved": "2026-09-04",
+        "effective": "2025-05-15"
+      },
+      "note": "3시간 누적 없이 1시간 값만으로 성립하는 단독 기준이라 계약 입력만으로 완전 재현 가능 — 유일한 CONFIRMED 행. 배수능력·지정위험 가중을 적용하기 전의 원시 강우강도로 비교하며, 넘으면 무조건 '위험'. URL 접속 검증 완료(2026-09-04) — 본문에서 제목·발송기준 수치·전국 확대 시행일(5월 15일) 확인."
+    },
+    {
+      "id": "drainage_factor",
+      "value": {
+        "low": 1.3,
+        "medium": 1.0,
+        "high": 0.85
+      },
+      "unit": null,
+      "status": "PLACEHOLDER",
+      "source": {
+        "agency": null,
+        "document": null,
+        "clause": null,
+        "url": null,
+        "retrieved": null
+      },
+      "note": "배수능력 등급별 가중. 공식 출처 없음 — 우리 가정치이며 v1에서도 미확정 상태로 남는다"
+    },
+    {
+      "id": "known_risk_factor",
+      "value": 1.15,
+      "unit": null,
+      "status": "PLACEHOLDER",
+      "source": {
+        "agency": null,
+        "document": null,
+        "clause": null,
+        "url": null,
+        "retrieved": null
+      },
+      "note": "지정 위험 지하차도 가중. 공식 출처 없음 — 우리 가정치이며 v1에서도 미확정 상태로 남는다"
+    },
+    {
+      "id": "known_risk_min_level",
+      "value": {
+        "enabled": true,
+        "level": "주의",
+        "requires_rainfall_gt_mm": 0.0
+      },
+      "unit": null,
+      "status": "POLICY_CONFIRMED_DIRECTION",
+      "source": {
+        "agency": "행정안전부",
+        "document": "여름철 자연재난(태풍·호우·폭염) 사전대비 점검 범정부 TF 4차 회의(2026-05-07) — 지하차도 진입 통제기준 강화",
+        "clause": "지하차도 진입 통제 최대침수심 기준 15cm → 5cm 강화",
+        "url": null,
+        "retrieved": null,
+        "effective": "2026-05"
+      },
+      "note": "침수심(cm) 기준이라 mm/h 절단점의 직접 출처가 될 수 없다. '지정 위험 지하차도는 침수 초기단계부터 통제한다'는 행정 방향의 근거로만 인용하며, 그래서 status는 CONFIRMED가 아닌 POLICY_CONFIRMED_DIRECTION. 강수>0일 때 최소 '주의' 하한을 거는 정책은 2026-09-04 나정우 결정. 보도 2건(뉴시스·아시아경제) URL 접속 검증 완료(2026-09-04) — 15cm→5cm 강화와 '침수 초기단계부터 통제' 문구를 원문에서 확인했다. 다만 행안부 1차 자료(보도자료·TF 회의자료) URL은 아직 미확보이므로 source.url은 null로 남긴다.",
+      "corroborating_sources": [
+        {
+          "outlet": "뉴시스",
+          "title": "\"호우 인명피해 막자\"…지하차도에 물 5㎝만 차도 통제",
+          "published": "2026-05-07",
+          "url": "https://www.newsis.com/view/NISX20260507_0003620516",
+          "retrieved": "2026-09-04",
+          "quote": "지하공간 침수 사고를 막기 위해 지하차도 통제 기준을 최대 침수심인 기존 15㎝에서 5㎝로 강화한다."
+        },
+        {
+          "outlet": "아시아경제",
+          "title": "\"오송 참사 3주기…지하차도 재난 막자\" 정부 제도개선 사항 점검",
+          "published": "2026-07-13",
+          "url": "https://view.asiae.co.kr/article/2026071317152096948",
+          "retrieved": "2026-09-04",
+          "quote": "지하차도 진입 통제기준이 되는 최대침수심을 15㎝에서 5㎝로 강화해 집중호우로 인한 침수 초기단계부터 통제"
+        }
+      ]
+    }
+  ]
+}
