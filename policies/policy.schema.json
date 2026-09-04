@@ -1,0 +1,47 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "track2 policy file",
+  "type": "object",
+  "required": ["policy_version", "description", "rows"],
+  "properties": {
+    "policy_version": { "type": "string" },
+    "description": { "type": "string" },
+    "rows": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["id", "value", "unit", "status", "source", "note"],
+        "properties": {
+          "id": { "type": "string" },
+          "value": {},
+          "unit": { "type": ["string", "null"] },
+          "status": {
+            "type": "string",
+            "enum": [
+              "PLACEHOLDER",
+              "DERIVED",
+              "CONFIRMED",
+              "CONFIRMED_COMPONENT",
+              "POLICY_CONFIRMED_DIRECTION",
+              "TEAM_DECISION"
+            ]
+          },
+          "source": {
+            "type": "object",
+            "required": ["agency", "document", "clause", "url", "retrieved"],
+            "properties": {
+              "agency": { "type": ["string", "null"] },
+              "document": { "type": ["string", "null"] },
+              "clause": { "type": ["string", "null"] },
+              "url": { "type": ["string", "null"] },
+              "retrieved": { "type": ["string", "null"] },
+              "effective": { "type": ["string", "null"] }
+            }
+          },
+          "note": { "type": ["string", "null"] }
+        }
+      }
+    }
+  }
+}

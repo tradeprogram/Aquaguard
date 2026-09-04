@@ -1,0 +1,60 @@
+{
+  "policy_version": "module_d_v1",
+  "description": "Module D 전용 정책 — 점 좌표 버퍼, 노출 판정 임계, 속성키 탐색 순서, 면적 반올림.",
+  "rows": [
+    {
+      "id": "point_buffer_radius_m",
+      "value": { "enabled": true, "radius_m": 100.0 },
+      "unit": "m",
+      "status": "PLACEHOLDER",
+      "source": { "agency": null, "document": null, "clause": null, "url": null, "retrieved": null },
+      "note": "산사태 도달거리 자릿수 가정 — 트랙①이 실제 위험 폴리곤을 출력하면 버퍼 경로는 폴백으로만 남음. Module A의 계약 출력에는 폴리곤 필드가 아예 없고 location(점)뿐이라(contracts/module_a.example.json), 현재 Module O는 그 점을 그대로 D에 risk_polygons[].geometry_5179로 넘긴다. 버퍼가 적용되면 status=degraded + warning을 반드시 남기고 explain()에 ASSUMPTION으로 표기한다."
+    },
+    {
+      "id": "min_risk_prob",
+      "value": 0.0,
+      "unit": null,
+      "status": "TEAM_DECISION",
+      "source": {
+        "agency": null,
+        "document": "트랙② 내부 결정(2026-09-04, 나정우)",
+        "clause": null,
+        "url": null,
+        "retrieved": null,
+        "effective": "2026-09-04"
+      },
+      "note": "필터 없음. D는 노출을 보고하는 모듈이고 임계 판단은 Module O(0.7)와 Module E(0.7)의 책임이다 — 여기서 또 거르면 이중 필터가 된다."
+    },
+    {
+      "id": "building_id_keys",
+      "value": ["building_id", "bld_id", "BLD_ID", "id", "고유번호", "건물관리번호"],
+      "unit": null,
+      "status": "PLACEHOLDER",
+      "source": { "agency": null, "document": null, "clause": null, "url": null, "retrieved": null },
+      "note": "feature.properties에서 이 순서로 탐색하고, 없으면 feature의 최상위 id, 그것도 없으면 인덱스 기반 결정적 합성 id(D-AUTO-0001)를 만든다. 실제 건축물 데이터 확보 후 실제 키명으로 교체."
+    },
+    {
+      "id": "use_type_keys",
+      "value": ["use_type", "주용도", "주용도코드명", "BLDG_USE", "USABILITY"],
+      "unit": null,
+      "status": "PLACEHOLDER",
+      "source": { "agency": null, "document": null, "clause": null, "url": null, "retrieved": null },
+      "note": "값 자체의 어휘 매핑은 policies/use_type_vocabulary.json이 담당한다. 실제 건축물대장 확보 후 실제 키명으로 교체."
+    },
+    {
+      "id": "farmland_area_round_digits",
+      "value": 1,
+      "unit": null,
+      "status": "TEAM_DECISION",
+      "source": {
+        "agency": null,
+        "document": "트랙② 내부 결정(2026-09-04, 나정우)",
+        "clause": null,
+        "url": null,
+        "retrieved": null,
+        "effective": "2026-09-04"
+      },
+      "note": "exposed_farmland_ha 반올림 자리수. contracts/module_d.example.json의 4.2와 자리수를 맞춘다. 계산은 EPSG:5179 미터에서 하므로 재투영 없음(§4.1)."
+    }
+  ]
+}
