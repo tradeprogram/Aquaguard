@@ -79,3 +79,11 @@ def test_explain_exposes_both_policy_files(documented_case):
     assert summary["use_type"]["policy_version"] == "use_type_v1"
     unsettled = {r["id"] for r in summary["module_d"]["rows"] if r["status"] == "PLACEHOLDER"}
     assert "point_buffer_radius_m" in unsettled
+
+
+def test_explain_marks_module_d_as_not_a_model(documented_case):
+    """추가. D는 공간 오버레이지 학습된 모델이 아니다 - C/G/H와 같은 표기를 낸다.
+
+    §6.1 Provenance 배지가 네 모듈을 같은 방식으로 읽을 수 있어야 한다.
+    """
+    assert explain(documented_case)["is_model"] is False

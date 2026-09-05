@@ -241,4 +241,7 @@ def explain(input: dict):
             "exposed_farmland_ha": result.exposed_farmland_ha,
         },
         "policy": pol.summary(),
+        # C/G/H와 같은 표기 - D는 공간 오버레이지 학습된 모델이 아니다.
+        # UI의 Provenance 배지(§6.1)가 네 모듈을 같은 방식으로 읽을 수 있게 맞춘다.
+        "is_model": False,
     }
