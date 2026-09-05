@@ -25,23 +25,48 @@ def test_policy_files_validate_and_load(name):
 
 
 def test_unit_cost_rows_are_confirmed_and_cite_the_committed_pdfs():
-    """29. 단가 행은 CONFIRMED이고 저장소에 커밋된 고시 PDF를 가리킨다."""
+    """29. 고시에 근거한 행은 CONFIRMED이고 저장소에 커밋된 PDF를 가리킨다.
+
+    단가 2행과 재검토기한 행 모두 검사한다 - 재검토기한은 두 고시 제3조에 각각
+    있으므로 local_file이 PDF 2개짜리 목록이다.
+    """
     pol = policy.load(policy.MODULE_G_POLICY)
-    for row_id in ("housing_flood_unit_krw", "farmland_replant_unit_krw_per_m2"):
+    for row_id in ("housing_flood_unit_krw",
+                   "farmland_replant_unit_krw_per_m2",
+                   "notice_review_years"):
         row = pol.row(row_id)
-        assert row.status == "CONFIRMED"
-        assert row.source["agency"] and row.source["effective"]
+        assert row.status == "CONFIRMED", row_id
+        assert row.source["agency"], row_id
+        assert row.source["clause"], row_id
+
         local = row.source.get("local_file")
-        assert local and local.startswith("docs/sources/")
-        assert (REPO_ROOT / local).is_file(), f"{row_id}: 고시 PDF가 저장소에 없다"
+        assert local, f"{row_id}: local_file이 없다"
+        paths = local if isinstance(local, list) else [local]
+        for path in paths:
+            assert path.startswith("docs/sources/"), f"{row_id}: {path}"
+            assert (REPO_ROOT / path).is_file(), f"{row_id}: 고시 PDF가 저장소에 없다 - {path}"
+
+
+def test_notice_review_row_cites_article_three_of_both_notices():
+    """29-b. 재검토기한은 두 고시 제3조를 함께 가리킨다."""
+    row = policy.load(policy.MODULE_G_POLICY).row("notice_review_years")
+    assert row.source["clause"] == "제3조(재검토기한)"
+    assert len(row.source["local_file"]) == 2
+    assert "국토교통부고시 제2026-90호" in row.source["document"]
+    assert "농림축산식품부고시 제2026-78호" in row.source["document"]
 
 
 def test_notice_review_deadline_is_recorded():
-    """30. 고시 재검토기한 3년이 기록돼 있다."""
+    """30. 재검토기한 3년과 서로 다른 기산일이 기록돼 있다.
+
+    기산일은 발령일이 아니다 - 국토부 2025-01-01, 농식품부 2027-01-01 기준이라
+    단가 재확인 시점이 2년 갈린다.
+    """
     row = policy.load(policy.MODULE_G_POLICY).row("notice_review_years")
     assert row.value == 3
     assert row.status == "CONFIRMED"
-    assert "2029" in row.note
+    assert "2025-01-01" in row.note and "2027-01-01" in row.note
+    assert "기산일은 발령일이 아니다" in row.note
 
 
 def test_unknown_ratio_is_derived_with_its_measurement():
