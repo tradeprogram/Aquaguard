@@ -630,6 +630,21 @@ C와 H의 정책이 패키지 안에 있는 이유는 공유 대상이 없어서
    그렇게 넣어 노출 0건을 만들었다). 팜맵 산출물은 처음부터
    `sancheong_farmland_5179.geojson`으로 좌표계를 이름에 넣었다.
 
+5. **`modules_client._import_module`에 `hasattr(module, "run")` 검사를 추가해달라.**
+   지금은 "import에 성공하면 real"로 판정하는데, 파이썬은 `__init__.py`가 없는
+   디렉토리도 **네임스페이스 패키지**로 import해준다. 그래서 브랜치를 오가며
+   `__pycache__`만 남은 빈 디렉토리가 있으면 그 모듈이 조용히 `example` -> `real`로
+   뒤집히고, 이어지는 `module.run(...)`에서 `AttributeError`가 나며 파이프라인
+   전체가 죽는다.
+
+   2026-09-05에 실제로 겪었다 — `track2/module-g`에서 `main`으로 돌아온 뒤
+   `module_g_damage_cost/`에 추적 파일은 없고 `__pycache__`만 남아 있었는데,
+   `test_real_mode_falls_back_per_module`이 그 상태에서
+   `AttributeError: module 'module_g_damage_cost' has no attribute 'run'`으로
+   실패했다. 이 테스트가 막으려던 상황이 바로 이거라 검사만 한 줄 늘리면 된다
+   (`getattr(module, "run", None)`이 callable인지까지 보면 더 확실하다).
+   배포 서버에서도 모듈 디렉토리가 부분적으로만 올라간 경우 같은 일이 난다.
+
 **민석(트랙①)** — 아젠다 1번이 풀리면(Module A가 위험 폴리곤을 출력) D의 점 버퍼
 가정(위 ASSUMPTION 3)이 폴백 전용으로 내려간다. 현재는 A가 점만 주므로 D가 항상
 `degraded`를 낸다.
