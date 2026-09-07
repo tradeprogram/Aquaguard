@@ -58,9 +58,14 @@ LAYERS = {
     "rivers": "LT_C_WKMSTRM",
 }
 
+# 2026-09-05: seoul을 시 전역(sido, 605km²)에서 강남구·서초구(84km²)로 좁혔다.
+# 전역은 데모가 실제로 다루는 범위보다 훨씬 넓어(bbox에 경기 18개 시군구·인천 계양구까지
+# 걸려 건물 652,026건 중 9.3%가 서울 밖이었다) 노출자산·경로 파이프라인을 붙이기 무거웠다.
+# match_val은 정규식으로 쓰인다(str.contains) — 전국 시군구에서 '강남|서초'에 걸리는 건
+# 서울 강남구(11230)·서초구(11220) 둘뿐인 것을 확인했다.
 REGIONS = {
     "sancheong": {"source": "sigungu", "match_col": "name", "match_val": "산청"},
-    "seoul": {"source": "sido", "match_col": "sidonm", "match_val": "서울"},
+    "seoul": {"source": "sigungu", "match_col": "name", "match_val": "강남|서초"},
 }
 
 

@@ -72,11 +72,15 @@ const SOUTH_KOREA_BOUNDS: [[number, number], [number, number]] = [
 // 미리 받아 정적 파일로 박아두고 실시간 API 의존성 자체를 없앤다. 경계는 손으로
 // 어림한 게 아니라 실제 행정경계(data/vector/adm_sigungu_5179.geojson·
 // adm_sido_5179.geojson)를 4326으로 재투영한 total_bounds.
+// 2026-09-05: 서울 AOI를 시 전역(605km², 43개 시군구가 bbox에 걸림)에서 강남구·서초구
+// (84km², 건물 42,381건)로 좁혔다. 전역 bbox는 데모가 실제로 다루는 범위보다 훨씬 넓어
+// 노출자산·경로 같은 파이프라인을 붙이기에 무거웠다. 기존 서울 정적 타일은 이 범위의
+// 상위집합이라 그대로 동작한다(범위 밖 타일은 이제 서빙되지 않는다).
 const AOI_KEYS = ["sancheong", "seoul"] as const;
 type AOIKey = (typeof AOI_KEYS)[number];
 const AOI_BOUNDS: Record<AOIKey, [number, number, number, number]> = {
   sancheong: [127.688782, 35.219031, 128.114735, 35.576211],
-  seoul: [126.764484, 37.428985, 127.183795, 37.701455],
+  seoul: [126.979849, 37.428340, 127.124207, 37.535823],
 };
 
 function getActiveAOI(lng: number, lat: number): AOIKey | null {

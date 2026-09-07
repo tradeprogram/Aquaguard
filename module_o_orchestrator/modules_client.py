@@ -50,16 +50,23 @@ def _mock_mode() -> bool:
 
 @lru_cache(maxsize=None)
 def _import_module(package_name: str):
-    """설치돼 있으면 import한 모듈을, 없으면 None을 돌려준다.
+    """§4.2 진입점 run()을 실제로 가진 모듈이면 그것을, 아니면 None을 돌려준다.
+
+    import 성공만으로 "설치됨"으로 보면 안 된다. __init__.py 없이 __pycache__만 남은
+    디렉토리도 파이썬이 네임스페이스 패키지로 import에 성공시키기 때문에, 그런
+    껍데기가 example에서 real로 조용히 뒤집힌 뒤 호출 시점에 AttributeError로
+    파이프라인을 죽인다(2026-09-05 트랙② 실측 보고, 재현 확인함). run()이 있는지까지
+    봐야 그 디렉토리를 "아직 없는 모듈"로 정확히 취급한다.
 
     lru_cache를 건 이유는 Module O가 한 번 실행될 때 같은 모듈을 여러 번 물어보고
     (call_module + resolve_source), 없는 모듈은 매번 import 실패 비용을 치르기
     때문이다. 실행 중에 패키지가 새로 생기는 상황은 없다고 본다.
     """
     try:
-        return importlib.import_module(package_name)
+        module = importlib.import_module(package_name)
     except ImportError:
         return None
+    return module if callable(getattr(module, "run", None)) else None
 
 
 def resolve_source(module_letter: str) -> str:

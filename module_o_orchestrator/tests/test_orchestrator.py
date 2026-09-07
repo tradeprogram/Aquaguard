@@ -154,10 +154,15 @@ def test_exposure_layers_are_real_and_in_5179():
         coords = coords[0]
     assert coords[0] > 100_000, "EPSG:4326이 그대로 들어왔다 — 5179 미터여야 한다"
 
-    # 농경지는 아직 레이어가 없다. 빈 값을 조용히 넘기지 않고 이유를 함께 낸다.
-    farmland, farmland_warning = farmland_parcels()
-    assert farmland["features"] == []
-    assert farmland_warning is not None
+    # 산청은 농경지 클립본이 커밋돼 있고, 강남·서초는 팜맵 대상이 아니라 없다.
+    # 없는 쪽은 빈 값을 조용히 넘기지 않고 반드시 이유를 함께 낸다.
+    farmland, farmland_warning = farmland_parcels("sancheong")
+    assert farmland["features"], "산청 농경지 클립본이 비었다"
+    assert farmland_warning is None, farmland_warning
+
+    seoul_farmland, seoul_warning = farmland_parcels("seoul")
+    assert seoul_farmland["features"] == []
+    assert seoul_warning is not None
 
 
 def test_real_mode_exposes_buildings_inside_risk_area(monkeypatch):
@@ -190,3 +195,60 @@ def test_real_mode_exposes_buildings_inside_risk_area(monkeypatch):
     # building_id는 합성값(D-AUTO-*)이 아니라 실제 25자리 건물관리번호여야 한다 —
     # 건축물대장 주용도 조인키가 이 값이기 때문이다.
     assert all(len(b["building_id"]) == 25 and b["building_id"].isdigit() for b in exposed)
+
+
+def test_resolve_aoi_routes_by_coordinate():
+    """경보 좌표로 AOI를 고른다 — 산청 경보에 서울 건물 4만 건을 올리지 않기 위해서다."""
+    from module_o_orchestrator.exposure_layers import DEFAULT_AOI, resolve_aoi
+
+    assert resolve_aoi(1_050_511.5, 1_706_245.2) == "sancheong"  # §9 데모 trigger_location
+    assert resolve_aoi(956_234.0, 1_942_543.0) == "seoul"        # 강남·서초
+    assert resolve_aoi(None, None) == DEFAULT_AOI                # 좌표 없으면 메인 데모
+    assert resolve_aoi(0.0, 0.0) == DEFAULT_AOI                  # 두 AOI 밖도 마찬가지
+
+
+def test_namespace_package_without_run_is_not_real(monkeypatch, tmp_path):
+    """run()이 없는 껍데기 디렉토리를 real로 오인하지 않는다.
+
+    __init__.py 없이 __pycache__만 남은 디렉토리도 파이썬은 네임스페이스 패키지로
+    import에 성공시킨다. import 성공만 보고 real로 판정하면 example에서 real로 조용히
+    뒤집힌 뒤 호출 시점에 AttributeError로 파이프라인이 죽는다(2026-09-05 트랙② 보고).
+    """
+    import sys
+
+    from module_o_orchestrator import modules_client
+
+    shell = tmp_path / "module_shell_without_run"
+    (shell / "__pycache__").mkdir(parents=True)
+    monkeypatch.syspath_prepend(str(tmp_path))
+    sys.modules.pop("module_shell_without_run", None)
+    modules_client._import_module.cache_clear()
+
+    assert modules_client._import_module("module_shell_without_run") is None
+
+
+def test_farmland_layer_is_committed_for_the_demo_aoi():
+    """§9 데모 AOI의 농경지 클립본이 저장소에 있어야 배포 서버에서도 노출 면적이 나온다."""
+    from module_o_orchestrator.exposure_layers import farmland_parcels
+
+    farmland, warning = farmland_parcels("sancheong")
+    assert warning is None, warning
+    assert len(farmland["features"]) > 1000
+    coords = farmland["features"][0]["geometry"]["coordinates"]
+    while isinstance(coords[0], list):
+        coords = coords[0]
+    assert coords[0] > 100_000, "EPSG:5179 미터여야 한다"
+
+
+def test_coverage_warning_uses_polygon_not_bbox():
+    """위험영역이 클립 경계를 벗어나면 경고한다 — bbox 비교로는 놓친다.
+
+    생비량면은 44km²인데 그 bbox는 100km²라, 실제로 경계를 크게 벗어나는 6km 위험영역도
+    bbox 안에는 들어와 경고가 나오지 않았다(실측으로 확인하고 폴리곤 교차로 교체).
+    """
+    from module_o_orchestrator.exposure_layers import coverage_warning
+
+    x, y = 1_050_511.5, 1_706_245.2
+    assert coverage_warning("sancheong", (x - 300, y - 300, x + 300, y + 300)) is None
+    warning = coverage_warning("sancheong", (x - 3000, y - 3000, x + 3000, y + 3000))
+    assert warning is not None and "하한" in warning

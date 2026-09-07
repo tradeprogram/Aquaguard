@@ -13,12 +13,21 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from typing import Any
 
-from .exposure_layers import building_footprints, farmland_parcels
+from .exposure_layers import (
+    building_footprints,
+    coverage_warning,
+    farmland_parcels,
+    resolve_aoi,
+)
 from .modules_client import call_module, module_sources, resolve_source
 from .store import Alert, alert_store
 
 LANDSLIDE_THRESHOLD = 0.7
 FLOOD_THRESHOLD = 0.7
+
+# Module G가 실제로 참조하는 단가표 ID(policies/module_g.json의 policy_version).
+# G는 이 값이 자기 표와 다르면 warning을 남기므로 임의 문자열을 넣으면 안 된다.
+MODULE_G_UNIT_COST_TABLE = "module_g_v1"
 
 # 산청 2025 실제 타임라인(§0, §9 데모 시나리오) — timeline_actual_override가 없을 때 기본값
 DEFAULT_TIMELINE_ACTUAL = {
@@ -34,6 +43,47 @@ DEFAULT_TIMELINE_ACTUAL = {
 DEFAULT_SHELTER_CANDIDATES = [
     {"shelter_id": "S001", "x_5179": 1051711.5, "y_5179": 1707045.2, "capacity": 200}
 ]
+
+
+def _risk_bounds_5179(risk_polygons: list[dict[str, Any]]) -> tuple[float, float, float, float] | None:
+    """위험 폴리곤들을 감싸는 bbox(EPSG:5179). 좌표를 못 읽으면 None.
+
+    노출자산 클립본 범위와 비교하기 위한 것이라 정밀한 합집합까지는 필요 없다.
+    """
+    xs: list[float] = []
+    ys: list[float] = []
+
+    def walk(node: Any) -> None:
+        if isinstance(node, (int, float)):
+            return
+        if isinstance(node, (list, tuple)):
+            if len(node) >= 2 and all(isinstance(v, (int, float)) for v in node[:2]):
+                xs.append(float(node[0]))
+                ys.append(float(node[1]))
+                return
+            for item in node:
+                walk(item)
+
+    for entry in risk_polygons:
+        geometry = entry.get("geometry_5179")
+        if not isinstance(geometry, dict):
+            continue
+        if "x_5179" in geometry and "y_5179" in geometry:
+            try:
+                xs.append(float(geometry["x_5179"]))
+                ys.append(float(geometry["y_5179"]))
+            except (TypeError, ValueError):
+                pass
+            continue
+        if geometry.get("type") == "FeatureCollection":
+            for feature in geometry.get("features") or []:
+                walk((feature.get("geometry") or {}).get("coordinates"))
+        else:
+            walk(geometry.get("coordinates"))
+
+    if not xs or not ys:
+        return None
+    return min(xs), min(ys), max(xs), max(ys)
 
 
 def _envelope(status: str, fallback_tier: int, data: dict[str, Any], warnings: list[str]) -> dict[str, Any]:
@@ -115,13 +165,18 @@ def run(input: dict[str, Any]) -> dict[str, Any]:  # noqa: A002 - §4.2 규약�
         # 건물·농경지는 어느 모듈의 출력도 아니라 O가 데이터에서 직접 읽어 넘긴다
         # (§10 데이터 접근 계층). 레이어를 못 읽어도 파이프라인은 계속 돌고, 대신
         # 그 사실이 경고로 올라온다 — 특히 농경지는 "0ha"와 "확인 불가"가 다르다.
-        buildings, buildings_warning = building_footprints()
-        farmland, farmland_warning = farmland_parcels()
+        aoi = resolve_aoi(trigger_location.get("x_5179"), trigger_location.get("y_5179"))
+        buildings, buildings_warning = building_footprints(aoi)
+        farmland, farmland_warning = farmland_parcels(aoi)
         # 단, 목업 D는 입력을 무시하고 example.json의 출력(농경지 4.2ha 등)을 그대로
         # 돌려준다 — 그때 "레이어 미확보" 경고를 같이 내보내면 화면에 뜬 숫자와 어긋난다.
         # 이 경고는 그 레이어로 실제 계산이 일어날 때만 의미가 있다.
         if resolve_source("d") == "real":
             warnings.extend(w for w in (buildings_warning, farmland_warning) if w)
+            # 위험영역이 클립본 밖으로 나가면 그만큼 노출자산이 빠진다 — 하한임을 알린다.
+            coverage = coverage_warning(aoi, _risk_bounds_5179(risk_polygons))
+            if coverage:
+                warnings.append(coverage)
 
         exposure = _merge_module_result(
             "d",
@@ -153,7 +208,11 @@ def run(input: dict[str, Any]) -> dict[str, Any]:  # noqa: A002 - §4.2 규약�
         )
         damage_cost = _merge_module_result(
             "g",
-            call_module("g", {**exposure, "unit_cost_table_ref": "재해연보_2024_원단위"}),
+            # "재해연보_2024_원단위"를 하드코딩하고 있었는데 G가 실제로 쓰는 표가 아니다
+            # (G는 국토교통부고시 제2026-90호 주택침수 단가와 농림축산식품부고시 제2026-78호
+            # 대파대를 policies/module_g.json = module_g_v1로 들고 있다). 그동안 G가 이
+            # 불일치를 warning으로 흘려보내고 있었다 — 실제 표 ID를 넘겨 그 경고를 없앤다.
+            call_module("g", {**exposure, "unit_cost_table_ref": MODULE_G_UNIT_COST_TABLE}),
             warnings,
             fallback_tier,
         )
