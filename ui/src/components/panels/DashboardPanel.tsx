@@ -8,10 +8,11 @@ import GoldenTimeCounter from "@/components/GoldenTimeCounter";
 import RiskCard from "@/components/RiskCard";
 import ProvenanceBadge from "@/components/ProvenanceBadge";
 
-// Module C(도로·지하차도 침수, 규칙기반 — 모델 아님)는 아직 Module O 파이프라인에
-// 연결 전이라 contracts/module_c.example.json(SC-UP-003, "위험")을 기준으로 손으로
-// 채워 넣은 예시 목록. alert_level ∈ 정상/주의/경계/위험(§5 Module C).
-const UNDERPASSES: { id: string; name: string; level: "정상" | "주의" | "경계" | "위험" }[] = [
+// Module O가 alert_package.road_flooding으로 Module C 결과를 실어주기 전까지 쓰던
+// 예시 목록(contracts/module_c.example.json 기준). 지금은 파이프라인이 값을 주면
+// 그걸 쓰고, 아직 underpasses 입력이 없어 빈 배열로 오면 이 목록으로 화면을 채운다.
+// alert_level ∈ 정상/주의/경계/위험(§5 Module C).
+const DEMO_UNDERPASSES: { id: string; name: string; level: "정상" | "주의" | "경계" | "위험" }[] = [
   { id: "SC-UP-003", name: "산청천 지하차도", level: "위험" },
   { id: "SC-UP-011", name: "생비량로 지하차도", level: "주의" },
   { id: "SC-RD-004", name: "경호강변 저지대 도로", level: "정상" },
@@ -55,6 +56,16 @@ export default function DashboardPanel({ mode }: { mode: "citizen" | "gov" }) {
 
   const data = envelope?.data;
   const alertPackage = data?.alert_package;
+  // Module O가 실제 Module C 결과를 주면 그걸 쓰고, 아직 underpasses 입력이 없어
+  // 빈 배열로 오면 데모 목록으로 채운다. 이름은 계약에 없는 값이라(C는 underpass_id만
+  // 낸다) 데모 목록에서 찾고, 없으면 id를 그대로 보여준다.
+  const underpasses = alertPackage?.road_flooding?.length
+    ? alertPackage.road_flooding.map((u) => ({
+        id: u.underpass_id,
+        name: DEMO_UNDERPASSES.find((d) => d.id === u.underpass_id)?.name ?? u.underpass_id,
+        level: u.alert_level,
+      }))
+    : DEMO_UNDERPASSES;
 
   return (
     <div className="space-y-5 text-sm">
@@ -130,10 +141,13 @@ export default function DashboardPanel({ mode }: { mode: "citizen" | "gov" }) {
           <div className="grid grid-cols-1 gap-3">
             <div className="rounded-xl border border-white/10 bg-white/5 p-3">
               <p className="flex items-center gap-1.5 text-xs text-slate-400">
-                도로·지하차도 침수 (Module C, 규칙기반) <ProvenanceBadge kind="MODEL" />
+                도로·지하차도 침수 (Module C) <ProvenanceBadge kind="RULE" />
+              </p>
+              <p className="mt-0.5 text-[11px] text-slate-500">
+                예측 모델이 아니라 관측 강우에 고시 임계값을 적용한 규칙 판정입니다
               </p>
               <div className="mt-2 space-y-1.5">
-                {UNDERPASSES.map((u) => (
+                {underpasses.map((u) => (
                   <div key={u.id} className="flex items-center justify-between text-xs">
                     <span className="text-slate-300">{u.name}</span>
                     <span className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${LEVEL_STYLE[u.level]}`}>
@@ -178,13 +192,21 @@ export default function DashboardPanel({ mode }: { mode: "citizen" | "gov" }) {
             </div>
             {govOnly && (
               <div className="rounded-xl border border-white/10 bg-white/5 p-3">
+                {/* "예상 피해액"이 아니다 — Module G는 노출된 자산에 복구비 지원단가를
+                    곱한 값이라 실제 피해 총액이 아니라 그 하한이다. 비주거·용도 미상
+                    건물은 공식 침수 단가가 없어 아예 빠져 있고 위험확률 가중도 없다.
+                    라벨이 "예상 피해액"이면 심사에서 과대 주장으로 읽힌다(트랙② 요청 3). */}
                 <p className="flex items-center gap-1.5 text-xs text-slate-400">
-                  예상 피해비용 (Module G) <ProvenanceBadge kind="MODEL" />
+                  노출 자산 기준 피해액 하한 (Module G) <ProvenanceBadge kind="MODEL" />
                 </p>
                 {"estimated_cost_krw" in alertPackage.damage_cost ? (
                   <>
                     <p className="mt-1 text-base font-semibold">
                       {(alertPackage.damage_cost.estimated_cost_krw / 1e8).toFixed(1)}억원
+                      <span className="ml-1 text-xs font-normal text-slate-400">이상</span>
+                    </p>
+                    <p className="text-[11px] text-slate-400">
+                      복구비 지원단가 기준 · 위험확률 미가중 · 비주거/용도 미상 제외
                     </p>
                     <p className="text-[11px] text-slate-500">{alertPackage.damage_cost.basis_citation}</p>
                   </>

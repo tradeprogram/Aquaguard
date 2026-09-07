@@ -104,7 +104,13 @@ def iter_source_features(region: str):
                 yield feature
         return
 
-    merged = PRECOMPUTED_DIR / f"{region}_buildings.geojson"
+    # fetch_aoi_data.py가 2026-09-05부터 _4326을 파일명에 넣는다. 기존 머신의 옛
+    # 이름도 그대로 받아준다.
+    merged = next(
+        (PRECOMPUTED_DIR / n for n in (f"{region}_buildings_4326.geojson", f"{region}_buildings.geojson")
+         if (PRECOMPUTED_DIR / n).exists()),
+        PRECOMPUTED_DIR / f"{region}_buildings_4326.geojson",
+    )
     if not merged.exists():
         print(f"  [건너뜀] {tile_dir} 와 {merged} 둘 다 없음 — "
               f"scripts/fetch_aoi_data.py로 먼저 생성", file=sys.stderr)

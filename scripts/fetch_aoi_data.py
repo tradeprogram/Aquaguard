@@ -183,27 +183,49 @@ METERS_PER_FLOOR = 3.0
 DEFAULT_BUILDING_HEIGHT_M = 4.0
 
 
-def merge_region_layer(region_key: str, layer_name: str, region_geom) -> dict:
+def _annotate_building(feat: dict) -> dict:
+    """건물 feature에 height_m을 채운다. 실시간 /vworld/buildings와 같은 규칙이어야
+    프리캐시 타일과 라이브 응답의 높이가 어긋나지 않는다(층수 × 3.0m, 없으면 4.0m)."""
+    props = feat.setdefault("properties", {})
+    try:
+        floors = int(props.get("gro_flo_co") or 0)
+    except ValueError:
+        floors = 0
+    props["height_m"] = floors * METERS_PER_FLOOR if floors > 0 else DEFAULT_BUILDING_HEIGHT_M
+    return feat
+
+
+def merge_region_layer_to_file(region_key: str, layer_name: str, out_path: Path) -> int:
+    """타일 캐시를 합쳐 GeoJSON 파일로 바로 쓴다. 병합본을 메모리에 올리지 않는다.
+
+    예전에는 전 피처를 dict에 모은 뒤 json.dumps로 통째 직렬화했는데, 서울 건물
+    652,026건(504MB)에서 MemoryError가 났다(2026-09-05 트랙② 보고). 중복 제거는
+    키만 있으면 되므로 피처 자체는 붙들지 않고, 읽는 즉시 한 건씩 써 내려간다.
+
+    반환값은 기록한 피처 수다.
+    """
     cache_dir = TILE_CACHE_DIR / region_key / layer_name
-    seen: dict[str, dict] = {}
-    for f in sorted(cache_dir.glob("tile_*.json")):
-        feats = json.loads(f.read_text(encoding="utf-8"))
-        for feat in feats:
-            key = feat.get("id") or json.dumps(feat.get("properties", {}), sort_keys=True)
-            seen[key] = feat
-    features = list(seen.values())
+    seen: set[str] = set()
+    count = 0
 
-    if layer_name == "buildings":
-        for feat in features:
-            props = feat.setdefault("properties", {})
-            try:
-                floors = int(props.get("gro_flo_co") or 0)
-            except ValueError:
-                floors = 0
-            props["height_m"] = floors * METERS_PER_FLOOR if floors > 0 else DEFAULT_BUILDING_HEIGHT_M
+    with open(out_path, "w", encoding="utf-8") as out:
+        out.write('{"type":"FeatureCollection","features":[')
+        for tile in sorted(cache_dir.glob("tile_*.json")):
+            for feat in json.loads(tile.read_text(encoding="utf-8")):
+                key = feat.get("id") or json.dumps(feat.get("properties", {}), sort_keys=True)
+                if key in seen:
+                    continue
+                seen.add(key)
+                if layer_name == "buildings":
+                    feat = _annotate_building(feat)
+                if count:
+                    out.write(",")
+                out.write(json.dumps(feat, ensure_ascii=False))
+                count += 1
+        out.write("]}")
 
-    print(f"  [{region_key}/{layer_name}] merged {len(features)} unique features")
-    return {"type": "FeatureCollection", "features": features}
+    print(f"  [{region_key}/{layer_name}] merged {count} unique features")
+    return count
 
 
 def process_landcover(region_key: str, region_geom):
@@ -246,9 +268,11 @@ def main():
         for layer_name, layer_code in LAYERS.items():
             print(f"  fetching {layer_name} ({layer_code})...")
             fetch_region_layer(region_key, layer_name, layer_code, tiles)
-            fc = merge_region_layer(region_key, layer_name, geom)
-            out_path = PRECOMPUTED_DIR / f"{region_key}_{layer_name}.geojson"
-            out_path.write_text(json.dumps(fc, ensure_ascii=False), encoding="utf-8")
+            # 파일명에 좌표계를 박아둔다 — VWorld 응답은 EPSG:4326인데 Module D 입력용
+            # 클립본(data/vector/aoi_*_5179.geojson)은 5179라, 이름만 보고 구분이 안 되면
+            # 재투영을 빼먹거나 두 번 하기 쉽다(트랙② 요청 5).
+            out_path = PRECOMPUTED_DIR / f"{region_key}_{layer_name}_4326.geojson"
+            merge_region_layer_to_file(region_key, layer_name, out_path)
             print(f"  wrote {out_path} ({out_path.stat().st_size / 1024:.0f} KB)")
 
         landcover_fc = process_landcover(region_key, geom)

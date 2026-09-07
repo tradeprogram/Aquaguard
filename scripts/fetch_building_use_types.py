@@ -120,10 +120,21 @@ PLAT_GB_TO_DAEJI_GUBUN = {"0": "1", "1": "2"}
 #   ① 주건축물(mainAtchGbCd == "0") 우선, ② 동률이면 연면적(totArea) 최대
 MAIN_BUILDING_CODE = "0"
 
-AOI_FILES = {
-    "sancheong": PRECOMPUTED_DIR / "sancheong_buildings.geojson",
-    "seoul": PRECOMPUTED_DIR / "seoul_buildings.geojson",
+# fetch_aoi_data.py가 2026-09-05부터 좌표계를 파일명에 넣는다(_4326). 기존 머신에는
+# 옛 이름으로 받아둔 파일이 있으므로 둘 다 찾는다 — 어차피 1순위는 타일 캐시다.
+AOI_FILE_CANDIDATES = {
+    "sancheong": ("sancheong_buildings_4326.geojson", "sancheong_buildings.geojson"),
+    "seoul": ("seoul_buildings_4326.geojson", "seoul_buildings.geojson"),
 }
+
+
+def aoi_merged_path(aoi_name: str) -> Path:
+    """병합본 경로. 신 파일명을 우선하고, 없으면 옛 이름을 돌려준다."""
+    candidates = [PRECOMPUTED_DIR / n for n in AOI_FILE_CANDIDATES[aoi_name]]
+    for path in candidates:
+        if path.exists():
+            return path
+    return candidates[0]
 
 
 def split_bd_mgt_sn(sn: str) -> tuple[str, str, str, str, str] | None:
@@ -158,7 +169,7 @@ def iter_building_sn(aoi_name: str):
             del features
         return
 
-    path = AOI_FILES[aoi_name]
+    path = aoi_merged_path(aoi_name)
     if not path.exists():
         print(f"  [건너뜀] {tile_dir} 와 {path} 둘 다 없음 - "
               f"scripts/fetch_aoi_data.py로 먼저 생성", file=sys.stderr)
@@ -437,7 +448,7 @@ def write_meta(aoi_names: list[str], mapping: dict[str, str], multi_record_parce
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="AOI 건물 주용도 수집 (건축물대장 표제부)")
-    parser.add_argument("--aoi", nargs="*", default=list(AOI_FILES), choices=list(AOI_FILES),
+    parser.add_argument("--aoi", nargs="*", default=list(AOI_FILE_CANDIDATES), choices=list(AOI_FILE_CANDIDATES),
                         help="대상 AOI (기본: 전부)")
     parser.add_argument("--probe", action="store_true",
                         help="법정동 1개를 전부 조회해 응답 필드명·필지키 조인 가능성 확인")
