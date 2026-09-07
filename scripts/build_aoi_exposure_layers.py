@@ -44,10 +44,19 @@ TILE_CACHE_DIR = PRECOMPUTED_DIR / "_tile_cache"
 _TO_5179 = Transformer.from_crs("EPSG:4326", "EPSG:5179", always_xy=True)
 
 # AOI별 경계 정의. level은 어느 행정경계 파일에서 코드를 찾을지, codes는 그 코드다.
+# 클립 범위는 행정경계가 아니라 경보 지점 기준 반경으로 잡는다.
+#
+# 처음에는 생비량면(44km²)으로 잘랐는데 6km×6km 위험영역의 18%가 경계 밖이라
+# 노출자산이 그만큼 조용히 빠졌다. 산청군 전체(790km², 92MB)로 넓혀봤지만 12%가
+# 여전히 밖이었다 — 데모 좌표가 군 동쪽 경계에서 5.4km 지점이라 위험영역이 함양·진주
+# 쪽으로 넘어가기 때문이다. 행정경계로 자르는 한 경계 근처 경보에서는 누락이 남는다.
+#
+# 우리가 답해야 할 질문은 "어디까지가 산청군인가"가 아니라 "위험영역을 담을 만큼
+# 넓은가"이므로, 경보 지점 반경으로 자른다. 반경 12km면 6km 위험영역을 100% 담고
+# 인접 시군 건물도 자연히 들어오며, 군 전체의 37%(18,033건) 크기다.
 AOI_DEFS = {
-    # 생비량면 하나 — 데모 trigger_location(1050511.5, 1706245.2)이 이 안에 있다.
-    "sancheong": {"level": "dong", "codes": ("38570390",)},
-    # 서초구(11220) + 강남구(11230)
+    "sancheong": {"center_5179": (1_050_511.5, 1_706_245.2), "radius_m": 12_000},
+    # 강남·서초는 두 구를 함께 보여주는 게 목적이라 행정경계 그대로 쓴다.
     "seoul": {"level": "sigungu", "codes": ("11220", "11230")},
 }
 
@@ -67,10 +76,61 @@ FARMLAND_KEPT_PROPERTIES = ("CLSF_NM", "AREA", "PNU")
 # (scripts/fetch_building_use_types.py, module_d_exposure_overlay/use_types.py).
 KEPT_PROPERTIES = ("bd_mgt_sn", "buld_nm", "gro_flo_co", "height_m", "sigungu", "gu")
 
+# 좌표 소수점 자릿수. EPSG:5179는 미터라 소수점은 그대로 밀리미터 이하 정밀도이고,
+# 원본이 들고 있는 소수점 10자리는 파일 크기만 키운다. 다만 무작정 줄이면 작은
+# 폴리곤이 자기교차로 무효가 되므로(실측: 건물을 10cm로 반올림하면 3,000건 중 2건이
+# 무효가 됐다 — 원본은 0건) 레이어별로 안전한 선까지만 줄인다.
+#
+#   건물   3자리(1mm)  중앙값 56m². 2자리면 무효는 안 생기지만 단일 최대오차가 9.3%
+#                      까지 벌어진다. 3자리에서 0.80%.
+#   농경지 2자리(1cm)  중앙값 598m²로 훨씬 커서 여유가 있다. 무효 0건, 최대오차 0.24%.
+#
+# 아래 build 함수가 반올림 뒤 유효성을 실제로 검사하고, 무효가 하나라도 생기면
+# 멈춘다 — 이 값들이 다른 지역·다른 원본에서도 안전하다고 가정하지 않기 위해서다.
+COORD_DECIMALS = {"buildings": 3, "farmland": 2}
+
+
+def _round_coords(node, nd: int):
+    """좌표만 재귀적으로 반올림한다(속성은 건드리지 않는다)."""
+    if isinstance(node, float):
+        return round(node, nd)
+    if isinstance(node, list):
+        return [_round_coords(v, nd) for v in node]
+    return node
+
+
+def _rounded_geometry(geom, layer: str, label: str) -> dict:
+    """mapping(geom)을 레이어별 정밀도로 반올림하되, 그 때문에 무효가 되면 멈춘다.
+
+    파일 크기를 줄이자고 지오메트리를 망가뜨리면 Module D가 make_valid로 복구하며
+    fallback_tier를 올리고, 그러면 화면의 "정상" Provenance 배지가 사라진다.
+    """
+    from shapely.geometry import shape as _shape
+
+    raw = mapping(geom)
+    nd = COORD_DECIMALS[layer]
+    raw = {**raw, "coordinates": _round_coords(raw["coordinates"], nd)}
+    if not _shape(raw).is_valid:
+        raise SystemExit(
+            f"{label}: 좌표를 소수점 {nd}자리로 반올림하니 지오메트리가 무효가 됐다. "
+            f"COORD_DECIMALS['{layer}']를 늘릴 것"
+        )
+    return raw
+
 
 def load_aoi(region: str):
-    """AOI 폴리곤(EPSG:5179)과 표시용 이름을 돌려준다."""
+    """AOI 폴리곤(EPSG:5179)과 표시용 이름을 돌려준다.
+
+    center_5179+radius_m가 있으면 그 원, 없으면 행정경계 코드로 찾는다.
+    """
     cfg = AOI_DEFS[region]
+    if "center_5179" in cfg:
+        from shapely.geometry import Point
+
+        cx, cy = cfg["center_5179"]
+        radius = cfg["radius_m"]
+        return Point(cx, cy).buffer(radius), f"경보지점 반경 {radius / 1000:.0f}km"
+
     path = VECTOR_DIR / f"adm_{cfg['level']}_5179.geojson"
     with open(path, encoding="utf-8") as f:
         collection = json.load(f)
@@ -141,7 +201,7 @@ def build(region: str) -> None:
         props = feature.get("properties") or {}
         kept.append({
             "type": "Feature",
-            "geometry": mapping(geom_5179),
+            "geometry": _rounded_geometry(geom_5179, "buildings", f"건물 {props.get('bd_mgt_sn')}"),
             "properties": {k: props.get(k) for k in KEPT_PROPERTIES if k in props},
         })
 
@@ -151,7 +211,7 @@ def build(region: str) -> None:
     out_path = VECTOR_DIR / f"aoi_buildings_{region}_5179.geojson"
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with open(out_path, "w", encoding="utf-8") as f:
-        json.dump({"type": "FeatureCollection", "features": kept}, f, ensure_ascii=False)
+        json.dump({"type": "FeatureCollection", "features": kept}, f, ensure_ascii=False, separators=(",", ":"))
 
     size_mb = out_path.stat().st_size / 1e6
     print(f"[{region}] 원본 {scanned:,}건 → AOI 내부 {len(kept):,}건"
@@ -194,14 +254,15 @@ def build_farmland(region: str) -> None:
         props = feature.get("properties") or {}
         kept.append({
             "type": "Feature",
-            "geometry": feature["geometry"],  # 이미 5179 — 손대지 않는다
+            # 이미 5179라 재투영은 없고 좌표 정밀도만 줄인다.
+            "geometry": _rounded_geometry(geom, "farmland", f"농경지 {props.get('PNU')}"),
             "properties": {k: props.get(k) for k in FARMLAND_KEPT_PROPERTIES if k in props},
         })
         area_m2 += geom.area
 
     out_path = VECTOR_DIR / f"aoi_farmland_{region}_5179.geojson"
     with open(out_path, "w", encoding="utf-8") as f:
-        json.dump({"type": "FeatureCollection", "features": kept}, f, ensure_ascii=False)
+        json.dump({"type": "FeatureCollection", "features": kept}, f, ensure_ascii=False, separators=(",", ":"))
     size_mb = out_path.stat().st_size / 1e6
     print(f"[{region}] 농경지 원본 {len(features):,}필지 → AOI 내부 {len(kept):,}필지 "
           f"({area_m2 / 10_000:.1f}ha)")

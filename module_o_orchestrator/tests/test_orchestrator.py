@@ -240,15 +240,28 @@ def test_farmland_layer_is_committed_for_the_demo_aoi():
     assert coords[0] > 100_000, "EPSG:5179 미터여야 한다"
 
 
-def test_coverage_warning_uses_polygon_not_bbox():
-    """위험영역이 클립 경계를 벗어나면 경고한다 — bbox 비교로는 놓친다.
+def test_demo_risk_area_is_fully_inside_the_clip():
+    """§9 데모가 다룰 만한 위험영역은 클립본 안에 전부 들어와야 한다.
 
-    생비량면은 44km²인데 그 bbox는 100km²라, 실제로 경계를 크게 벗어나는 6km 위험영역도
-    bbox 안에는 들어와 경고가 나오지 않았다(실측으로 확인하고 폴리곤 교차로 교체).
+    행정경계로 자르던 동안은 그러지 못했다 — 생비량면(44km²)에서 6km 위험영역의 18%,
+    산청군 전체(790km²)로 넓혀도 12%가 밖이었다(데모 좌표가 군 동쪽 경계에서 5.4km라
+    위험영역이 인접 시군으로 넘어간다). 경보지점 반경 12km로 바꿔 해소했다.
     """
     from module_o_orchestrator.exposure_layers import coverage_warning
 
     x, y = 1_050_511.5, 1_706_245.2
-    assert coverage_warning("sancheong", (x - 300, y - 300, x + 300, y + 300)) is None
-    warning = coverage_warning("sancheong", (x - 3000, y - 3000, x + 3000, y + 3000))
+    for half in (300, 3000, 6000):
+        assert coverage_warning("sancheong", (x - half, y - half, x + half, y + half)) is None, half
+
+
+def test_coverage_warning_fires_outside_the_clip():
+    """클립 범위를 실제로 벗어나면 값이 하한임을 알린다.
+
+    bbox 비교로는 이 판정을 못 한다 — 클립 도형이 사각형이 아니면(반경 원, 행정경계)
+    bbox 안이면서 도형 밖인 영역이 생긴다. 그래서 도형과 직접 교차시킨다.
+    """
+    from module_o_orchestrator.exposure_layers import coverage_warning
+
+    x, y = 1_050_511.5, 1_706_245.2
+    warning = coverage_warning("sancheong", (x - 20_000, y - 20_000, x + 20_000, y + 20_000))
     assert warning is not None and "하한" in warning

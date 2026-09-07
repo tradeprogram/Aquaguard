@@ -10,9 +10,13 @@ farmland_parcels_5179는 어느 모듈의 출력도 아니다 — Module O가 �
 원본만 504MB다. 그래서 데모가 실제로 도는 AOI만 잘라 data/vector/에 커밋하고
 여기서는 그 클립본만 읽는다. 재생성은 scripts/build_aoi_exposure_layers.py.
 
-  aoi_buildings_sancheong_5179.geojson   생비량면    2,410건   1.1MB
-  aoi_buildings_seoul_5179.geojson       강남·서초  41,814건  27.6MB
-  aoi_farmland_sancheong_5179.geojson    생비량면    3,898필지 3.7MB (378.9ha)
+  aoi_buildings_sancheong_5179.geojson   경보지점 반경 12km  18,032건    7.9MB
+  aoi_buildings_seoul_5179.geojson       강남·서초           41,814건   27.6MB
+  aoi_farmland_sancheong_5179.geojson    경보지점 반경 12km  23,288필지 21.9MB (2,587.5ha)
+
+산청은 행정경계가 아니라 경보지점 반경으로 자른다 — 행정경계로 자르면 경계 근처
+경보에서 위험영역이 밖으로 새고, 그만큼 노출자산이 조용히 빠지기 때문이다.
+자세한 근거는 scripts/build_aoi_exposure_layers.py의 AOI_DEFS 주석.
 
 농경지 원본은 트랙②의 팜맵(농정원) 산출물이다(scripts/build_farmland_geojson.py,
 산청군 73,040필지). 강남·서초는 팜맵 대상이 아니라 농경지 레이어가 없다.
@@ -37,12 +41,13 @@ PRECOMPUTED_DIR = REPO_ROOT / "data" / "precomputed"  # 원본(gitignore) — �
 # 행정경계(생비량면 / 서초구+강남구)에서 뽑았다.
 AOI_LAYERS = {
     "sancheong": {
-        "bbox_5179": (1_046_194.0, 1_701_059.0, 1_055_869.0, 1_711_329.0),
+        "bbox_5179": (1_038_511.5, 1_694_245.2, 1_062_511.5, 1_718_245.2),
         "buildings": DATA_VECTOR_DIR / "aoi_buildings_sancheong_5179.geojson",
         "farmland": DATA_VECTOR_DIR / "aoi_farmland_sancheong_5179.geojson",
-        # 클립에 쓴 행정경계 — coverage_warning이 위험영역과 교차시킨다.
-        "boundary_level": "dong",
-        "boundary_codes": ("38570390",),
+        # 클립에 쓴 범위 — coverage_warning이 위험영역과 교차시킨다. 산청은 행정경계가
+        # 아니라 경보지점 반경으로 잘랐다(이유는 scripts/build_aoi_exposure_layers.py).
+        "clip_center_5179": (1_050_511.5, 1_706_245.2),
+        "clip_radius_m": 12_000,
     },
     "seoul": {
         "bbox_5179": (950_684.0, 1_939_337.0, 963_484.0, 1_951_281.0),
@@ -76,6 +81,11 @@ def _aoi_polygon(aoi: str):
     from shapely.ops import unary_union
 
     cfg = AOI_LAYERS[aoi]
+    if "clip_center_5179" in cfg:
+        from shapely.geometry import Point
+
+        cx, cy = cfg["clip_center_5179"]
+        return Point(cx, cy).buffer(cfg["clip_radius_m"])
     path = DATA_VECTOR_DIR / f"adm_{cfg['boundary_level']}_5179.geojson"
     if not path.exists():
         return None
