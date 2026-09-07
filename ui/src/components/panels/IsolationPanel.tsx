@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { checkIsolation, type IsolationCheckResult } from "@/lib/api";
+import { diagnoseFailure } from "@/lib/backendDiagnosis";
 import { DEMO_SHELTERS as SHELTERS, DEMO_ISOLATION_BBOX as DEMO_BBOX } from "@/lib/demoShelters";
 
 // §7(독창성 축 4) — 도로망 그래프에서 위험 구간을 제거한 뒤 대피소까지 도달 가능한
@@ -47,7 +48,9 @@ export default function IsolationPanel({
       setScenarioApplied(applyHazard);
       onResult?.(r);
     } catch {
-      setError("고립 분석 실패 — 백엔드(VWorld 연동)가 켜져 있는지 확인해주세요.");
+      // 고정 문구 대신 /health를 찔러 원인을 구분한다 — 서버 미기동인지, 배포가
+      // 뒤처져 엔드포인트가 없는 건지, 요청 자체의 문제인지(lib/backendDiagnosis.ts).
+      setError(await diagnoseFailure("고립 분석", "/isolation-check"));
       onResult?.(null);
     } finally {
       setLoading(false);

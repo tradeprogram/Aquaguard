@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import type { EvacuationRoute } from "@/components/MapExplorer";
 import { getEvacuationRoutes, type EvacuationRouteResult } from "@/lib/api";
+import { diagnoseFailure } from "@/lib/backendDiagnosis";
 import { DEMO_SHELTERS as SHELTERS } from "@/lib/demoShelters";
 
 // Module E(대피소·경로 라우팅) — HANDOFF.md §6. 대피소 목록(SHELTERS)은
@@ -98,7 +99,15 @@ export default function EvacuationPanel({
         setBackendResults(byId);
       })
       .catch(() => {
-        if (!cancelled) setBackendError("실제 경로 조회 실패 — 직선거리 근사로 대체");
+        if (cancelled) return;
+        // 여기는 직선거리로 폴백하므로 화면이 멈추지는 않는다. 다만 "왜 실제 경로가
+        // 아닌지"는 알려줘야 해서 원인을 확인해 덧붙인다(lib/backendDiagnosis.ts).
+        setBackendError("실제 경로 조회 실패 — 직선거리 근사로 대체");
+        diagnoseFailure("실제 경로 조회", "/evacuation-route")
+          .then((detail) => {
+            if (!cancelled) setBackendError(`${detail} 아래 값은 직선거리 근사입니다.`);
+          })
+          .catch(() => undefined);
       })
       .finally(() => {
         if (!cancelled) setBackendLoading(false);

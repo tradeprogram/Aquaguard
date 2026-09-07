@@ -25,6 +25,7 @@ from pydantic import BaseModel
 import module_e_routing
 from module_e_routing import isolation as module_e_isolation
 from module_o_orchestrator import geo
+from module_o_orchestrator.modules_client import module_sources
 from module_o_orchestrator.orchestrator import DEFAULT_SHELTER_CANDIDATES, run as run_orchestrator
 from module_o_orchestrator.store import alert_store
 
@@ -742,6 +743,43 @@ def isolation_check(req: IsolationCheckRequest) -> dict:
         raise HTTPException(status_code=503, detail=str(e))
 
 
+def _deployed_commit() -> str | None:
+    """배포된 코드의 커밋 해시. git 명령 없이 .git을 직접 읽는다.
+
+    서버가 낡은 코드로 돌고 있는 걸 아무도 모르는 상황을 막으려는 것이다 — 실제로
+    2026-09-06에 EC2가 8월 29일 코드에 멈춰 있어서 PR #1이 추가한 엔드포인트 3개가
+    404를 내고 있었고, 화면에는 "VWorld 연동 확인"이라고 떠서 진단이 두 번 헛돌았다.
+    """
+    git_dir = Path(__file__).resolve().parent / ".git"
+    try:
+        head = (git_dir / "HEAD").read_text(encoding="utf-8").strip()
+        if head.startswith("ref:"):
+            ref = head.split(" ", 1)[1].strip()
+            ref_path = git_dir / ref
+            if ref_path.exists():
+                return ref_path.read_text(encoding="utf-8").strip()[:8]
+            # packed-refs만 있는 경우(얕은 클론 등)
+            packed = (git_dir / "packed-refs").read_text(encoding="utf-8")
+            for line in packed.splitlines():
+                if line.endswith(f" {ref}"):
+                    return line.split(" ", 1)[0][:8]
+            return None
+        return head[:8]  # detached HEAD
+    except OSError:
+        return None
+
+
 @app.get("/health")
 def health() -> dict:
-    return {"status": "ok"}
+    """상태 + 배포 버전 + 어느 모듈이 실물로 도는지.
+
+    프론트가 "백엔드가 낡았다"와 "백엔드가 죽었다"를 구분해 안내할 수 있어야 해서
+    commit과 routes를 함께 준다.
+    """
+    return {
+        "status": "ok",
+        "commit": _deployed_commit(),
+        "routes": sorted({r.path for r in app.routes if hasattr(r, "path")}),
+        "module_sources": module_sources(),
+        "mock_mode": os.environ.get("AQUAGUARD_MOCK_MODE", "1") != "0",
+    }
