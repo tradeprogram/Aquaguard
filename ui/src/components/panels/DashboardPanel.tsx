@@ -7,6 +7,8 @@ import { useSlowLoading } from "@/lib/useSlowLoading";
 import GoldenTimeCounter from "@/components/GoldenTimeCounter";
 import RiskCard from "@/components/RiskCard";
 import ProvenanceBadge from "@/components/ProvenanceBadge";
+import AssumptionNote from "@/components/AssumptionNote";
+import { damageCostProvenance, exposureProvenance } from "@/lib/provenance";
 
 // Module O가 alert_package.road_flooding으로 Module C 결과를 실어주기 전까지 쓰던
 // 예시 목록(contracts/module_c.example.json 기준). 지금은 파이프라인이 값을 주면
@@ -59,6 +61,9 @@ export default function DashboardPanel({ mode }: { mode: "citizen" | "gov" }) {
   // Module O가 실제 Module C 결과를 주면 그걸 쓰고, 아직 underpasses 입력이 없어
   // 빈 배열로 오면 데모 목록으로 채운다. 이름은 계약에 없는 값이라(C는 underpass_id만
   // 낸다) 데모 목록에서 찾고, 없으면 id를 그대로 보여준다.
+  // 배지와 가정 표시는 explain()에서 나온다 — 화면이 문구를 지어내지 않는다(lib/provenance.ts).
+  const exposureInfo = exposureProvenance(envelope?.meta?.explains);
+  const damageInfo = damageCostProvenance(envelope?.meta?.explains);
   const underpasses = alertPackage?.road_flooding?.length
     ? alertPackage.road_flooding.map((u) => ({
         id: u.underpass_id,
@@ -133,10 +138,17 @@ export default function DashboardPanel({ mode }: { mode: "citizen" | "gov" }) {
             />
           </div>
 
-          <div className="rounded-lg border border-dashed border-amber-800/40 bg-amber-950/10 p-3 text-[11px] text-amber-300/80">
-            Module C·D는 아직 Module O 파이프라인에 연결 전 — 아래는
-            contracts/module_c·d.example.json 기준 예시 데이터.
-          </div>
+          {/* Module C·D는 2026-09-05에 파이프라인에 연결됐다. 다만 목업 모드에서는
+              여전히 example.json 값이 오므로, 어느 쪽인지는 meta.module_sources로
+              판단해 실제로 예시일 때만 알린다 — 늘 띄워두면 실데이터일 때 거짓말이 된다. */}
+          {envelope.meta?.module_sources &&
+            (envelope.meta.module_sources.d === "example" ||
+              envelope.meta.module_sources.c === "example") && (
+              <div className="rounded-lg border border-dashed border-amber-800/40 bg-amber-950/10 p-3 text-[11px] text-amber-300/80">
+                아래 도로·노출자산 수치는 실제 모듈이 아니라 contracts/module_c·d.example.json
+                예시값입니다 (AQUAGUARD_MOCK_MODE=0으로 실모듈 전환).
+              </div>
+            )}
 
           <div className="grid grid-cols-1 gap-3">
             <div className="rounded-xl border border-white/10 bg-white/5 p-3">
@@ -159,10 +171,30 @@ export default function DashboardPanel({ mode }: { mode: "citizen" | "gov" }) {
             </div>
             <div className="rounded-xl border border-white/10 bg-white/5 p-3">
               <p className="flex items-center gap-1.5 text-xs text-slate-400">
-                노출자산 (Module D) <ProvenanceBadge kind="MODEL" />
+                노출자산 (Module D) <ProvenanceBadge kind={exposureInfo.kind} />
               </p>
-              <p className="mt-1 text-base font-semibold">건물 3채 노출 · 농경지 4.2ha</p>
-              <p className="text-[11px] text-slate-500">주거 2 · 상가 1 — risk_prob 45~78%</p>
+              {alertPackage.exposure ? (
+                <>
+                  <p className="mt-1 text-base font-semibold">
+                    건물 {alertPackage.exposure.exposed_buildings.length.toLocaleString()}동 노출 ·
+                    농경지 {alertPackage.exposure.exposed_farmland_ha.toLocaleString()}ha
+                  </p>
+                  <p className="text-[11px] text-slate-500">
+                    {Object.entries(
+                      alertPackage.exposure.exposed_buildings.reduce<Record<string, number>>((acc, b) => {
+                        acc[b.use_type] = (acc[b.use_type] ?? 0) + 1;
+                        return acc;
+                      }, {})
+                    )
+                      .sort((a, b) => b[1] - a[1])
+                      .map(([useType, n]) => `${useType} ${n.toLocaleString()}`)
+                      .join(" · ")}
+                  </p>
+                </>
+              ) : (
+                <p className="mt-1 text-xs text-slate-500">임계치 미초과 — 오버레이 미실행</p>
+              )}
+              <AssumptionNote items={exposureInfo.assumptions} />
             </div>
           </div>
 
@@ -197,7 +229,7 @@ export default function DashboardPanel({ mode }: { mode: "citizen" | "gov" }) {
                     건물은 공식 침수 단가가 없어 아예 빠져 있고 위험확률 가중도 없다.
                     라벨이 "예상 피해액"이면 심사에서 과대 주장으로 읽힌다(트랙② 요청 3). */}
                 <p className="flex items-center gap-1.5 text-xs text-slate-400">
-                  노출 자산 기준 피해액 하한 (Module G) <ProvenanceBadge kind="MODEL" />
+                  노출 자산 기준 피해액 하한 (Module G) <ProvenanceBadge kind={damageInfo.kind} />
                 </p>
                 {"estimated_cost_krw" in alertPackage.damage_cost ? (
                   <>
@@ -209,6 +241,7 @@ export default function DashboardPanel({ mode }: { mode: "citizen" | "gov" }) {
                       복구비 지원단가 기준 · 위험확률 미가중 · 비주거/용도 미상 제외
                     </p>
                     <p className="text-[11px] text-slate-500">{alertPackage.damage_cost.basis_citation}</p>
+                    <AssumptionNote items={damageInfo.assumptions} />
                   </>
                 ) : (
                   <p className="mt-1 text-xs text-slate-500">임계치 미초과 — 산정 미실행</p>

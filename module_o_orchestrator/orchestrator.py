@@ -19,7 +19,7 @@ from .exposure_layers import (
     farmland_parcels,
     resolve_aoi,
 )
-from .modules_client import call_module, module_sources, resolve_source
+from .modules_client import call_explain, call_module, module_sources, resolve_source
 from .store import Alert, alert_store
 
 LANDSLIDE_THRESHOLD = 0.7
@@ -145,6 +145,8 @@ def run(input: dict[str, Any]) -> dict[str, Any]:  # noqa: A002 - §4.2 규약�
     shelter_route: dict[str, Any] = {}
     damage_cost: dict[str, Any] = {}
     exposure: dict[str, Any] = {}
+    # 계약 밖 판정 근거 — UI Provenance 배지(§6.1)가 이 값으로 가정 여부를 판단한다.
+    explains: dict[str, Any] = {}
     if triggered:
         # A는 risk_polygon_5179, B는 inundation_extent_5179가 실제 위험영역이다
         # (TRACK2_CONTRACT_AGENDA.md 1번, 2026-09-04 합의로 A 계약에 폴리곤 필드 추가).
@@ -178,19 +180,15 @@ def run(input: dict[str, Any]) -> dict[str, Any]:  # noqa: A002 - §4.2 규약�
             if coverage:
                 warnings.append(coverage)
 
+        module_d_input = {
+            "risk_polygons": risk_polygons,
+            "building_footprints_5179": buildings,
+            "farmland_parcels_5179": farmland,
+        }
         exposure = _merge_module_result(
-            "d",
-            call_module(
-                "d",
-                {
-                    "risk_polygons": risk_polygons,
-                    "building_footprints_5179": buildings,
-                    "farmland_parcels_5179": farmland,
-                },
-            ),
-            warnings,
-            fallback_tier,
+            "d", call_module("d", module_d_input), warnings, fallback_tier
         )
+        explains["d"] = call_explain("d", module_d_input)
         shelter_route = _merge_module_result(
             "e",
             call_module(
@@ -206,16 +204,18 @@ def run(input: dict[str, Any]) -> dict[str, Any]:  # noqa: A002 - §4.2 규약�
             warnings,
             fallback_tier,
         )
+        module_g_input = {**exposure, "unit_cost_table_ref": MODULE_G_UNIT_COST_TABLE}
         damage_cost = _merge_module_result(
             "g",
             # "재해연보_2024_원단위"를 하드코딩하고 있었는데 G가 실제로 쓰는 표가 아니다
             # (G는 국토교통부고시 제2026-90호 주택침수 단가와 농림축산식품부고시 제2026-78호
             # 대파대를 policies/module_g.json = module_g_v1로 들고 있다). 그동안 G가 이
             # 불일치를 warning으로 흘려보내고 있었다 — 실제 표 ID를 넘겨 그 경고를 없앤다.
-            call_module("g", {**exposure, "unit_cost_table_ref": MODULE_G_UNIT_COST_TABLE}),
+            call_module("g", module_g_input),
             warnings,
             fallback_tier,
         )
+        explains["g"] = call_explain("g", module_g_input)
 
     # 3. 시민 역검증(Module H, precursor_flag가 뜬 경우에만 병렬 트리거 — §5 Module H)
     if landslide.get("precursor_flag"):
@@ -283,7 +283,11 @@ def run(input: dict[str, Any]) -> dict[str, Any]:  # noqa: A002 - §4.2 규약�
     envelope = _envelope("ok" if fallback_tier[0] == 1 else "degraded", fallback_tier[0], data, warnings)
     # 계약(§4.2)의 4개 필드 밖에 붙는 부가 메타 — 어느 모듈이 실물로 돌았고 어느 것이
     # 아직 example.json 대체인지 UI가 알아야 Provenance 배지(§6.1)를 정직하게 찍는다.
-    envelope["meta"] = {"module_sources": module_sources()}
+    envelope["meta"] = {
+        "module_sources": module_sources(),
+        # 계약(§4.2)의 4개 필드 밖 부가 정보. 목업 모듈은 explain()이 없어 None이 온다.
+        "explains": {k: v for k, v in explains.items() if v is not None},
+    }
 
     if triggered:
         # 승인 대기 타임아웃은 재연 데모의 과거 이벤트 시각(timestamp)이 아니라

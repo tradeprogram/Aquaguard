@@ -1,3 +1,5 @@
+import type { ModuleExplains } from "./provenance";
+
 // contracts/module_o.schema.json 과 1:1 대응 (§5 Module O)
 
 export interface Timeline {
@@ -113,6 +115,12 @@ export interface Envelope<T> {
 export interface AlertMeta {
   created_at: string;
   escalation_timeout_min: number;
+  // 계약(§4.2) 4개 필드 밖 부가 정보 — Module O가 실어 보낸다.
+  // module_sources: 모듈별로 실물이 돌았는지 example.json 대체인지.
+  // explains: C/D/G/H의 계약 밖 판정 근거. Provenance 배지가 여기서 가정을 읽는다
+  // (lib/provenance.ts). 목업 모듈은 explain()이 없어 빠진다.
+  module_sources?: Record<string, "real" | "example">;
+  explains?: ModuleExplains;
 }
 
 export type ModuleOEnvelope = Envelope<ModuleOData> & { meta?: AlertMeta };

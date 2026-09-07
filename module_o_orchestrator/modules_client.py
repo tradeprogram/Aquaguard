@@ -99,3 +99,22 @@ def call_module(module_letter: str, input_data: dict[str, Any]) -> dict[str, Any
 def module_sources() -> dict[str, str]:
     """모듈 문자 -> "real"/"example" 전체 맵. Module O가 봉투 meta에 실어 보낸다."""
     return {letter: resolve_source(letter) for letter in MODULE_PACKAGES}
+
+
+def call_explain(module_letter: str, input_data: dict[str, Any]) -> dict[str, Any] | None:
+    """계약 밖 explain(). 없거나 실패하면 None — 경보 생성이 이것 때문에 죽으면 안 된다.
+
+    C/D/G/H가 판정 근거·적용 계수·정책 status·조인 커버리지를 여기에 담고 있고,
+    UI의 Provenance 배지(§6.1)가 그 값을 근거로 삼는다. run()과 달리 계약에 없는
+    부가 정보이므로 실패는 조용히 흡수한다.
+    """
+    if resolve_source(module_letter) == SOURCE_EXAMPLE:
+        return None
+    module = _import_module(MODULE_PACKAGES[module_letter])
+    explain = getattr(module, "explain", None)
+    if not callable(explain):
+        return None
+    try:
+        return explain(input_data)
+    except Exception:  # noqa: BLE001 - 부가 정보 실패로 경보를 잃지 않는다
+        return None
