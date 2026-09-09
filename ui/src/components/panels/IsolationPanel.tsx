@@ -3,37 +3,48 @@
 import { useState } from "react";
 import { checkIsolation, type IsolationCheckResult } from "@/lib/api";
 import { diagnoseFailure } from "@/lib/backendDiagnosis";
-import { DEMO_SHELTERS as SHELTERS, DEMO_ISOLATION_BBOX as DEMO_BBOX } from "@/lib/demoShelters";
+import { DEMO_REGIONS, DEFAULT_REGION, type RegionKey } from "@/lib/demoShelters";
 
 // §7(독창성 축 4) — 도로망 그래프에서 위험 구간을 제거한 뒤 대피소까지 도달 가능한
 // 경로가 하나도 안 남는 건물을 찾는다. module_e_routing/isolation.py가 VWorld
 // 도로망(LT_L_MOCTLINK)·건물(LT_C_SPBD) 실데이터로 networkx 그래프를 만들어 계산한다.
-// 대피소 목록·bbox는 lib/demoShelters.ts 공통 정의(EvacuationPanel·MapExplorer와 동일).
-const DEMO_SHELTERS = SHELTERS.map(({ lon, lat }) => ({ lon, lat }));
-// 마을 중앙 진입로를 세로로 끊는 위험폴리곤 — "위험 시나리오 적용" 버튼용 데모 지오메트리.
-// 실제 침수·토사 슬라이더 값은 MapExplorer.tsx가 자동으로 /isolation-check에 넘긴다
-// (아래 버튼은 슬라이더 없이도 이 화면 단독으로 테스트해볼 수 있게 남겨둔 수동 트리거).
-const DEMO_HAZARD: GeoJSON.Polygon = {
-  type: "Polygon",
-  coordinates: [
-    [
-      [128.054, 35.343],
-      [128.056, 35.343],
-      [128.056, 35.358],
-      [128.054, 35.358],
-      [128.054, 35.343],
+// 대피소 목록·bbox는 lib/demoShelters.ts 지역별 공통 정의(EvacuationPanel·MapExplorer와 동일).
+
+// "위험 시나리오 적용" 버튼용 데모 지오메트리 — bbox 한가운데를 세로로 가르는 좁고 긴
+// 폴리곤(진입로가 끊긴 상황을 흉내). 지역마다 bbox 위치가 다르므로 고정 좌표 대신
+// 현재 지역의 bbox에서 매번 계산한다 — 실제 침수·토사 슬라이더 값은 MapExplorer.tsx가
+// 자동으로 /isolation-check에 넘긴다(이 버튼은 슬라이더 없이도 화면 단독으로 테스트해볼
+// 수 있게 남겨둔 수동 트리거).
+function buildDemoHazard(bbox: [number, number, number, number]): GeoJSON.Polygon {
+  const [minLon, minLat, maxLon, maxLat] = bbox;
+  const midLon = (minLon + maxLon) / 2;
+  const halfWidth = (maxLon - minLon) * 0.02;
+  return {
+    type: "Polygon",
+    coordinates: [
+      [
+        [midLon - halfWidth, minLat],
+        [midLon + halfWidth, minLat],
+        [midLon + halfWidth, maxLat],
+        [midLon - halfWidth, maxLat],
+        [midLon - halfWidth, minLat],
+      ],
     ],
-  ],
-};
+  };
+}
 
 export default function IsolationPanel({
+  region = DEFAULT_REGION,
   onResult,
   onFocusCluster,
 }: {
+  region?: RegionKey;
   onResult?: (result: IsolationCheckResult | null) => void;
   // 목록에서 구역을 클릭하면 그 구역의 bbox로 지도를 이동시켜달라는 요청.
   onFocusCluster?: (bbox: [number, number, number, number]) => void;
 }) {
+  const { shelters, isolationBbox } = DEMO_REGIONS[region];
+  const shelterLonLat = shelters.map(({ lon, lat }) => ({ lon, lat }));
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<IsolationCheckResult | null>(null);
@@ -43,7 +54,7 @@ export default function IsolationPanel({
     setLoading(true);
     setError(null);
     try {
-      const r = await checkIsolation(DEMO_BBOX, DEMO_SHELTERS, applyHazard ? DEMO_HAZARD : undefined);
+      const r = await checkIsolation(isolationBbox, shelterLonLat, applyHazard ? buildDemoHazard(isolationBbox) : undefined);
       setResult(r);
       setScenarioApplied(applyHazard);
       onResult?.(r);
@@ -88,7 +99,7 @@ export default function IsolationPanel({
 
       {!result && !loading && !error && (
         <div className="rounded-lg border border-dashed border-fuchsia-800/40 bg-fuchsia-950/10 p-3 text-[11px] text-fuchsia-300/80">
-          버튼을 눌러 산청 상능마을 대피소 2곳 기준으로 실제 도로망 연결성을 계산한다.
+          버튼을 눌러 {DEMO_REGIONS[region].label} 대피소 {shelters.length}곳 기준으로 실제 도로망 연결성을 계산한다.
           &ldquo;현재 상태&rdquo;는 위험지역 없이 도로가 원래 얼마나 끊겨있는지(데이터
           자체의 한계), &ldquo;위험 시나리오&rdquo;는 마을 진입로가 끊겼다고 가정했을 때다.
         </div>
@@ -147,10 +158,10 @@ export default function IsolationPanel({
       )}
 
       <div className="rounded-xl border border-white/10 bg-white/5 p-3 text-xs text-slate-400">
-        지도 위 마젠타 영역이 고립 구역이다. 지금은 산청 데모 지역·고정 대피소 2곳
-        기준이고, 침수·토사 슬라이더 값을 실제 위험폴리곤으로 자동 연동하는 건 다음
-        단계(TODO) — 지금은 &ldquo;위험 시나리오 적용&rdquo; 버튼이 데모용 고정
-        시나리오를 대신 보여준다.
+        지도 위 마젠타 영역이 고립 구역이다. 지금은 {DEMO_REGIONS[region].label} 데모
+        지역·고정 대피소 {shelters.length}곳 기준. 지도 오른쪽 위 침수·토사 슬라이더를
+        움직이면 그 값 기준으로 자동으로도 재계산된다 — 이 버튼은 슬라이더 없이 이
+        화면만으로 빠르게 테스트해볼 수 있는 별도 데모 시나리오다.
       </div>
     </div>
   );

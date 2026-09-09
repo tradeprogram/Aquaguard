@@ -27,7 +27,7 @@ import {
   type AdminLevel,
   type AdminSearchResult,
 } from "@/lib/api";
-import { DEMO_ISOLATION_BBOX, DEMO_SHELTERS } from "@/lib/demoShelters";
+import { DEFAULT_REGION, DEMO_REGIONS, type RegionKey } from "@/lib/demoShelters";
 import { useSlowLoading } from "@/lib/useSlowLoading";
 
 // 산청군 생비량면 — data/vector/adm_dong_5179.geojson 실측 centroid. 초기 카메라 위치일
@@ -355,9 +355,10 @@ function buildFlowBands(
 // 데모 AOI(산청·서울) 빠른 이동 버튼 — 이 두 지역만 정적 벡터타일로 완전히
 // 캐싱돼 있다(§AOI_BOUNDS). 부산 등 다른 지역도 라이브 V-World 폴백으로 여전히
 // 뜨긴 하지만, 데모 스코프 밖이라 2026-08-29 사용자 요청으로 버튼에서 제외.
-const TEST_LOCATIONS: { label: string; center: [number, number]; zoom: number }[] = [
-  { label: "산청 상능마을", center: INITIAL_CENTER, zoom: 12.5 },
-  { label: "서울 강남", center: [127.0276, 37.4979], zoom: 16 },
+const TEST_LOCATIONS: { label: string; center: [number, number]; zoom: number; regionKey: RegionKey }[] = [
+  { label: "산청 상능마을", center: INITIAL_CENTER, zoom: 12.5, regionKey: "sancheong" },
+  { label: "서울 강남", center: [127.0276, 37.4979], zoom: 16, regionKey: "gangnam" },
+  { label: "서울 서초", center: [127.0044, 37.4907], zoom: 14, regionKey: "seocho" },
 ];
 
 // EvacuationPanel(§6)에서 선택한 대피 경로 — 카카오/네이버 실경로 API 붙기 전까지는
@@ -383,6 +384,9 @@ interface MapExplorerProps {
   // 넣는 이유는 같은 구역을 연달아 두 번 눌러도(같은 bbox) 매번 다시 이동해야 하는데
   // React effect는 값이 안 바뀌면 재실행을 안 하기 때문 — 클릭마다 nonce를 올려 강제한다.
   focusBbox?: { bbox: [number, number, number, number]; nonce: number } | null;
+  // "산청 상능마을"/"서울 강남" 버튼으로 지도가 이동할 때 부모에 어느 지역인지 알려준다
+  // — EvacuationPanel/IsolationPanel이 그 지역의 대피소 목록을 쓰도록 상태를 끌어올림.
+  onRegionSelect?: (region: RegionKey) => void;
 }
 
 export default function MapExplorer({
@@ -391,6 +395,7 @@ export default function MapExplorer({
   onOriginPicked,
   isolatedAreas = null,
   focusBbox = null,
+  onRegionSelect,
 }: MapExplorerProps = {}) {
   const mapContainer = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
@@ -399,6 +404,10 @@ export default function MapExplorer({
   // 현재 카메라 중심이 산청·서울 AOI 안인지 — 안이면 정적 타일을 보여주고 실시간
   // V-World fetch는 건너뛴다(아래 syncAOILayers/updateVWorld* 참조).
   const aoiRef = useRef<AOIKey | null>(null);
+  // §7 슬라이더 연동이 "지금 어느 지역이 선택돼있는지"를 알아야 그 지역 대피소/bbox로
+  // /isolation-check를 부를 수 있다 — mount 시 한 번만 만들어지는 클로저 안에서 최신
+  // 값을 읽어야 하므로 state가 아니라 ref로 들고 있는다(TEST_LOCATIONS 버튼이 갱신).
+  const isolationRegionRef = useRef<RegionKey>(DEFAULT_REGION);
   // §7 슬라이더 연동 — 침수/토사 볼륨이 바뀔 때마다 /isolation-check를 다시 부르는데,
   // 드래그 중 매 프레임 호출하면 과하므로 디바운스 타이머를 여기 들고 있는다.
   const isolationDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -1000,9 +1009,10 @@ export default function MapExplorer({
             : { type: "MultiPolygon", coordinates: hazardPolys.map((p) => p.geometry.coordinates) };
 
         isolationDebounceRef.current = setTimeout(() => {
+          const activeRegion = DEMO_REGIONS[isolationRegionRef.current];
           checkIsolation(
-            DEMO_ISOLATION_BBOX,
-            DEMO_SHELTERS.map(({ lon, lat }) => ({ lon, lat })),
+            activeRegion.isolationBbox,
+            activeRegion.shelters.map(({ lon, lat }) => ({ lon, lat })),
             hazardGeometry
           )
             .then((result) => {
@@ -1366,7 +1376,11 @@ export default function MapExplorer({
                 {TEST_LOCATIONS.map((loc) => (
                   <button
                     key={loc.label}
-                    onClick={() => flyTo(loc.center, loc.zoom)}
+                    onClick={() => {
+                      flyTo(loc.center, loc.zoom);
+                      isolationRegionRef.current = loc.regionKey;
+                      onRegionSelect?.(loc.regionKey);
+                    }}
                     className="flex-1 rounded-md border border-slate-700 px-2 py-1 text-xs text-slate-300 hover:border-sky-600 hover:text-sky-300"
                   >
                     {loc.label}

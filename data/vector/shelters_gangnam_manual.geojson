@@ -1,0 +1,35 @@
+{
+  "type": "FeatureCollection",
+  "properties": {
+    "note": "safetydata.go.kr DSSP-IF-00103는 강남구를 커버 안 함(2026-09-03 확인) — 서울시 지진안전포털(news.seoul.go.kr/safe/SeoulEqk/community/shelterList.do)에서 강남구 필터로 손으로 확인 후, VWorld 지오코딩 API로 좌표 변환해 저장. 강남구 전체 목록 중 5곳만 우선 추림(2026-09-07).",
+    "source": "서울시 지진안전포털",
+    "fetched_at": "2026-09-07"
+  },
+  "features": [
+    {
+      "type": "Feature",
+      "geometry": { "type": "Point", "coordinates": [127.05169, 37.49184] },
+      "properties": { "name": "중대부속고등학교 운동장", "address": "서울특별시 강남구 선릉로 207(도곡동)", "area_m2": 9107, "category": "옥외대피소" }
+    },
+    {
+      "type": "Feature",
+      "geometry": { "type": "Point", "coordinates": [127.03711, 37.48665] },
+      "properties": { "name": "언주초등학교 운동장", "address": "서울특별시 강남구 도곡동 922", "area_m2": 9078, "category": "옥외대피소" }
+    },
+    {
+      "type": "Feature",
+      "geometry": { "type": "Point", "coordinates": [127.10166, 37.49082] },
+      "properties": { "name": "수서초등학교 운동장", "address": "서울특별시 강남구 수서동 709", "area_m2": 7774, "category": "옥외대피소" }
+    },
+    {
+      "type": "Feature",
+      "geometry": { "type": "Point", "coordinates": [127.08078, 37.49305] },
+      "properties": { "name": "중동고등학교 운동장", "address": "서울특별시 강남구 일원동 618", "area_m2": 10419, "category": "옥외대피소" }
+    },
+    {
+      "type": "Feature",
+      "geometry": { "type": "Point", "coordinates": [127.08064, 37.49229] },
+      "properties": { "name": "영희초등학교 운동장", "address": "서울특별시 강남구 일원로 21(일원동)", "area_m2": 10545, "category": "옥외대피소" }
+    }
+  ]
+}

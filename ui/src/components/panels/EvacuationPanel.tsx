@@ -4,20 +4,15 @@ import { useEffect, useState } from "react";
 import type { EvacuationRoute } from "@/components/MapExplorer";
 import { getEvacuationRoutes, type EvacuationRouteResult } from "@/lib/api";
 import { diagnoseFailure } from "@/lib/backendDiagnosis";
-import { DEMO_SHELTERS as SHELTERS } from "@/lib/demoShelters";
+import { DEMO_REGIONS, DEFAULT_REGION, type RegionKey } from "@/lib/demoShelters";
 
-// Module E(대피소·경로 라우팅) — HANDOFF.md §6. 대피소 목록(SHELTERS)은
-// lib/demoShelters.ts 공통 정의를 쓴다 — IsolationPanel·MapExplorer도 같은 대피소
-// 기준으로 계산해야 화면 간 앞뒤가 맞는다. S003은 실제 산청군청(산청읍) 좌표라
-// 일부러 멀어서 "도달 불가" 사례를 보여준다.
+// Module E(대피소·경로 라우팅) — HANDOFF.md §6. 대피소 목록은 lib/demoShelters.ts의
+// 지역별 공통 정의를 쓴다(region prop) — IsolationPanel·MapExplorer도 같은 목록
+// 기준으로 계산해야 화면 간 앞뒤가 맞는다.
 
-// 위치를 아직 못 받았을 때 보여줄 고정 데모 값 — contracts/module_e.example.json
-// (S001, eta_min 14.5)과 HANDOFF §6.6 제안 스키마 예시값(walk 52.0) 그대로.
-const DEMO_ETA: Record<string, { carMin: number; walkMin: number; feasible: boolean }> = {
-  S001: { carMin: 14.5, walkMin: 52.0, feasible: true },
-  S002: { carMin: 9.8, walkMin: 31.0, feasible: true },
-  S003: { carMin: 26.4, walkMin: 88.0, feasible: false },
-};
+// 위치를 아직 못 받았을 때 보여줄 자리표시 값(contracts/module_e.example.json 형식
+// 그대로) — 특정 대피소 ID에 종속되지 않으므로 어느 지역이든 그대로 쓴다.
+const PLACEHOLDER_ETA = { carMin: 14.5, walkMin: 52.0, feasible: true } as const;
 
 const CAR_KMH = 30; // 산간도로 실도로거리 보정을 반쯤 흡수한 가정 속도 — 실API 전 근사치
 const WALK_KMH = 4; // §6.3
@@ -36,16 +31,19 @@ function haversineKm(a: [number, number], b: [number, number]): number {
 }
 
 export default function EvacuationPanel({
+  region = DEFAULT_REGION,
   onSelectRoute,
   onRequestMapPick,
   mapPickedOrigin,
 }: {
+  region?: RegionKey;
   onSelectRoute?: (route: EvacuationRoute | null) => void;
   // §6.8 폴백 ① — "지도에서 선택" 누르면 부모가 MapExplorer의 pickOrigin을 켜고,
   // 사용자가 지도를 클릭하면 부모가 mapPickedOrigin으로 좌표를 내려준다.
   onRequestMapPick?: () => void;
   mapPickedOrigin?: [number, number] | null;
 }) {
+  const SHELTERS = DEMO_REGIONS[region].shelters;
   const [origin, setOrigin] = useState<[number, number] | null>(null);
   const [locating, setLocating] = useState(false);
   const [locError, setLocError] = useState<string | null>(null);
@@ -139,7 +137,7 @@ export default function EvacuationPanel({
 
   const rows = SHELTERS.map((s) => {
     if (!origin) {
-      return { ...s, ...DEMO_ETA[s.id], distanceKm: null as number | null, real: false as const };
+      return { ...s, ...PLACEHOLDER_ETA, distanceKm: null as number | null, real: false as const };
     }
     const backend = backendResults?.[s.id];
     if (backend) {
