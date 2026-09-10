@@ -135,7 +135,7 @@ export default function EvacuationPanel({
     );
   };
 
-  const rows = SHELTERS.map((s) => {
+  const allRows = SHELTERS.map((s) => {
     if (!origin) {
       return { ...s, ...PLACEHOLDER_ETA, distanceKm: null as number | null, real: false as const };
     }
@@ -157,12 +157,32 @@ export default function EvacuationPanel({
     return { ...s, carMin, walkMin, feasible: carMin <= TIME_BUDGET_MIN, distanceKm, real: false as const };
   }).sort((a, b) => a.carMin - b.carMin);
 
+  // 대피소가 지역마다 최대 20곳까지 있어 전부 보여주면 리스트가 너무 길다(2026-09-10
+  // 사용자 피드백) — 계산은 전체를 대상으로 하되(가장 가까운 곳을 정확히 알아야 하니까),
+  // 화면엔 가까운 순 상위 5곳만 보여준다.
+  const MAX_VISIBLE_SHELTERS = 5;
+  const rows = allRows.slice(0, MAX_VISIBLE_SHELTERS);
+
   const select = (s: (typeof rows)[number]) => {
     setSelectedId(s.id);
     if (!origin) return;
     const path = "routeLonlat" in s ? s.routeLonlat : undefined;
     onSelectRoute?.({ origin, destination: [s.lon, s.lat], label: s.name, path });
   };
+
+  // 대피소가 많을수록(예: 20곳) 네이버 응답이 다 오는 데 몇 초 걸리는데, 그 사이에
+  // 사용자가 먼저 클릭하면 위 select()가 그 순간의 직선거리 근사를 지도에 영구히
+  // 그려버린다(2026-09-10 사용자 피드백 — 도로를 안 따라가는 직선으로 보임). 이미
+  // 골라둔 대피소의 실제 경로가 나중에 도착하면 자동으로 다시 그려서 업그레이드한다.
+  useEffect(() => {
+    if (!selectedId || !origin) return;
+    const backend = backendResults?.[selectedId];
+    if (!backend) return;
+    const shelter = SHELTERS.find((s) => s.id === selectedId);
+    if (!shelter) return;
+    onSelectRoute?.({ origin, destination: [shelter.lon, shelter.lat], label: shelter.name, path: backend.route_lonlat });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [backendResults, selectedId]);
 
   return (
     <div className="space-y-4 text-sm">
@@ -232,13 +252,23 @@ export default function EvacuationPanel({
           >
             <div className="flex items-center justify-between">
               <p className="text-sm font-semibold">{s.name}</p>
-              <span
-                className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium ${
-                  s.feasible ? "bg-emerald-900/60 text-emerald-300" : "bg-red-900/60 text-red-300"
-                }`}
-              >
-                {s.feasible ? "도달 가능" : "도달 불가"}
-              </span>
+              <div className="flex shrink-0 gap-1">
+                {origin && !s.real && (
+                  <span
+                    className="rounded-full bg-amber-900/60 px-2 py-0.5 text-[10px] font-medium text-amber-300"
+                    title="이 대피소는 네이버 실도로 경로 조회에 실패해 직선거리 근사로 대체됐다"
+                  >
+                    근사
+                  </span>
+                )}
+                <span
+                  className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${
+                    s.feasible ? "bg-emerald-900/60 text-emerald-300" : "bg-red-900/60 text-red-300"
+                  }`}
+                >
+                  {s.feasible ? "도달 가능" : "도달 불가"}
+                </span>
+              </div>
             </div>
             <div className="mt-2 flex gap-4 text-xs">
               <span>
@@ -258,6 +288,11 @@ export default function EvacuationPanel({
             )}
           </button>
         ))}
+        {allRows.length > MAX_VISIBLE_SHELTERS && (
+          <p className="text-center text-[11px] text-slate-500">
+            가까운 {MAX_VISIBLE_SHELTERS}곳만 표시 — 이 지역에 대피소 {allRows.length}곳 있음
+          </p>
+        )}
       </div>
     </div>
   );

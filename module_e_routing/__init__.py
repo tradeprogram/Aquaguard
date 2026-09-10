@@ -12,12 +12,16 @@ module_e.schema.json은 output.data에 additionalProperties 제한이 없어 안
 """
 from __future__ import annotations
 
+import logging
 import math
 import os
+import time
 from typing import Any
 
 import requests
 from pyproj import Transformer
+
+logger = logging.getLogger(__name__)
 
 _TO_WGS84 = Transformer.from_crs("EPSG:5179", "EPSG:4326", always_xy=True)
 _TO_5179 = Transformer.from_crs("EPSG:4326", "EPSG:5179", always_xy=True)
@@ -25,6 +29,8 @@ _TO_5179 = Transformer.from_crs("EPSG:4326", "EPSG:5179", always_xy=True)
 NAVER_DIRECTIONS_URL = "https://maps.apigw.ntruss.com/map-direction/v1/driving"
 WALK_KMH = 4.0  # §6.3 — 공개 API에 도보 경로가 없어 직선거리 근사에 쓰는 가정 속도
 CAR_KMH_FALLBACK = 30.0  # 네이버 API 호출 실패 시 직선거리 근사에 쓰는 가정 속도(산간도로 보정 반영)
+NAVER_MAX_RETRIES = 2  # 첫 시도 실패 시 재시도 횟수 — 대피 안내라 일시적 타임아웃 한 번에 바로 포기하지 않는다
+NAVER_RETRY_BACKOFF_S = 0.5
 
 
 def point_5179_to_lonlat(x_5179: float, y_5179: float) -> tuple[float, float]:
@@ -73,36 +79,69 @@ def _shelter_blocked_by_risk(shelter: dict[str, Any], risk_polygons: list[dict[s
     return False
 
 
-def _naver_driving_route(origin_lonlat: tuple[float, float], dest_lonlat: tuple[float, float]) -> dict[str, Any] | None:
-    """네이버 Directions 5 API로 실제 도로 경로/시간을 조회한다. 키 미설정·호출 실패 시 None."""
+def _naver_driving_route(
+    origin_lonlat: tuple[float, float], dest_lonlat: tuple[float, float]
+) -> tuple[dict[str, Any] | None, str | None]:
+    """네이버 Directions 5 API로 실제 도로 경로/시간을 조회한다.
+
+    반환: (성공 시 경로 dict / 실패 시 None, 실패 사유 문자열 / 성공 시 None).
+    2026-09-10: 예전엔 실패하면 그냥 None만 돌려주고 이유를 버렸다 — 그래서 "몇 분째
+    근사로 뜬다"는 사용자 신고가 와도 타임아웃인지 키 문제인지 구분할 방법이 없었다.
+    대피 안내 기능이라 일시적 오류 한 번에 바로 포기하지도 않는다 — 최대
+    NAVER_MAX_RETRIES번 짧은 간격으로 재시도한 뒤에만 근사로 넘어간다.
+    """
     client_id = os.environ.get("NAVER_CLIENT_ID")
     client_secret = os.environ.get("NAVER_CLIENT_SECRET")
     if not client_id or not client_secret:
-        return None
-    try:
-        resp = requests.get(
-            NAVER_DIRECTIONS_URL,
-            params={
-                "start": f"{origin_lonlat[0]},{origin_lonlat[1]}",
-                "goal": f"{dest_lonlat[0]},{dest_lonlat[1]}",
-                "option": "trafast",  # 실시간 빠른길 — 재난 대피 상황에 맞는 옵션
-            },
-            headers={
-                "x-ncp-apigw-api-key-id": client_id,
-                "x-ncp-apigw-api-key": client_secret,
-            },
-            timeout=5,
-        )
-        resp.raise_for_status()
-        body = resp.json()
-        if body.get("code") != 0:
-            return None
-        route = body["route"]["trafast"][0]
-        duration_min = route["summary"]["duration"] / 1000 / 60  # ms -> min
-        path_lonlat = route["path"]  # [[lon, lat], ...]
-        return {"duration_min": duration_min, "path_lonlat": path_lonlat}
-    except (requests.RequestException, KeyError, IndexError):
-        return None
+        return None, "NAVER_CLIENT_ID/SECRET 미설정"
+
+    last_reason = "알 수 없는 오류"
+    for attempt in range(NAVER_MAX_RETRIES + 1):
+        try:
+            resp = requests.get(
+                NAVER_DIRECTIONS_URL,
+                params={
+                    "start": f"{origin_lonlat[0]},{origin_lonlat[1]}",
+                    "goal": f"{dest_lonlat[0]},{dest_lonlat[1]}",
+                    "option": "trafast",  # 실시간 빠른길 — 재난 대피 상황에 맞는 옵션
+                },
+                headers={
+                    "x-ncp-apigw-api-key-id": client_id,
+                    "x-ncp-apigw-api-key": client_secret,
+                },
+                timeout=5,
+            )
+            body = resp.json()
+            # 네이버 API는 실패 응답을 두 형태로 준다 — HTTP 200 + {"code": N != 0, "message": ...}
+            # (예: 인증 실패)이거나, HTTP 4xx + {"error": {"code": N, "message": ...}}(예: 좌표가
+            # 도로 근처가 아님). raise_for_status()만 쓰면 후자의 실제 사유가 버려지고 그냥
+            # "400 Client Error"로만 남아 진단이 안 됐다(2026-09-10, 직접 호출로 재현·확인).
+            if resp.status_code >= 400:
+                error = body.get("error", {})
+                last_reason = f"네이버 응답 오류(HTTP {resp.status_code}, code={error.get('code')}): {error.get('message')}"
+                logger.warning("naver directions failed: %s", last_reason)
+                return None, last_reason
+            if body.get("code") != 0:
+                last_reason = f"네이버 응답 오류(code={body.get('code')}): {body.get('message')}"
+                logger.warning("naver directions failed: %s", last_reason)
+                return None, last_reason
+            route = body["route"]["trafast"][0]
+            duration_min = route["summary"]["duration"] / 1000 / 60  # ms -> min
+            path_lonlat = route["path"]  # [[lon, lat], ...]
+            return {"duration_min": duration_min, "path_lonlat": path_lonlat}, None
+        except requests.Timeout:
+            last_reason = "타임아웃(5초)"
+        except requests.RequestException as e:
+            last_reason = f"네트워크 오류: {e}"
+        except (KeyError, IndexError) as e:
+            last_reason = f"응답 형식 이상: {e}"
+            break  # 형식 자체가 틀렸으면 재시도해도 안 바뀜 — 즉시 포기
+        if attempt < NAVER_MAX_RETRIES:
+            logger.warning("naver directions attempt %d failed (%s), retrying", attempt + 1, last_reason)
+            time.sleep(NAVER_RETRY_BACKOFF_S)
+
+    logger.warning("naver directions gave up after %d attempts: %s", NAVER_MAX_RETRIES + 1, last_reason)
+    return None, last_reason
 
 
 def evaluate_candidates(input: dict[str, Any]) -> tuple[list[dict[str, Any]], list[str]]:  # noqa: A002
@@ -130,7 +169,7 @@ def evaluate_candidates(input: dict[str, Any]) -> tuple[list[dict[str, Any]], li
         distance_km = _haversine_km(*origin_lonlat, *dest_lonlat)
         walk_min = (distance_km / WALK_KMH) * 60
 
-        naver = _naver_driving_route(origin_lonlat, dest_lonlat)
+        naver, fail_reason = _naver_driving_route(origin_lonlat, dest_lonlat)
         if naver is not None:
             any_naver_used = True
             car_min = naver["duration_min"]
@@ -145,6 +184,7 @@ def evaluate_candidates(input: dict[str, Any]) -> tuple[list[dict[str, Any]], li
                 [origin["x_5179"], origin["y_5179"]],
                 [shelter["x_5179"], shelter["y_5179"]],
             ]
+            warnings.append(f"{shelter['shelter_id']} 실도로 경로 조회 실패({fail_reason}) — 직선거리 근사로 대체")
 
         time_feasible = car_min <= time_budget_min if time_budget_min is not None else True
         time_margin_min = (time_budget_min - car_min) if time_budget_min is not None else None

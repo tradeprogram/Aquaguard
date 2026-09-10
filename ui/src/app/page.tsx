@@ -76,6 +76,8 @@ export default function HomePage() {
         onOriginPicked={(coord) => {
           setPickedOrigin(coord);
           setPickingOrigin(false);
+          // 지도 클릭 모드로 넘어가며 닫았던 패널을 다시 연다(아래 onRequestMapPick 참조).
+          setActive("evacuation");
         }}
         isolatedAreas={isolatedAreas}
         focusBbox={focusBbox}
@@ -146,7 +148,14 @@ export default function HomePage() {
                 <EvacuationPanel
                   region={region}
                   onSelectRoute={setEvacuationRoute}
-                  onRequestMapPick={() => setPickingOrigin(true)}
+                  onRequestMapPick={() => {
+                    // 패널(화면의 70%)이 지도를 가리고 있으면 가운데를 못 찍는다는
+                    // 문제(2026-09-10 사용자 피드백) — 클릭 모드로 들어가는 동안은
+                    // 패널을 아예 닫아 지도 전체를 클릭 가능하게 하고, 좌표를 찍으면
+                    // 위 onOriginPicked가 다시 열어준다.
+                    setPickingOrigin(true);
+                    setActive(null);
+                  }}
                   mapPickedOrigin={pickedOrigin}
                 />
               )}
