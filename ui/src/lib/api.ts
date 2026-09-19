@@ -2,6 +2,15 @@ import type { ModuleOEnvelope } from "./types";
 
 export const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:8000";
 
+// 정적 AOI 타일(위성·벡터)의 호스트. Vercel 배포 용량 때문에 `ui/public/tiles`와
+// `ui/public/satellite`(합계 744MB)는 `.vercelignore`로 배포에서 빼고 백엔드(EC2 Caddy)가
+// 대신 서빙한다 — Vercel은 배포할 때마다 정적 파일을 통째로 새로 저장하기 때문에,
+// 같은 744MB가 배포 횟수만큼 쌓여 10GB 한도를 넘겼다(2026-09-19).
+// 미설정이면 같은 오리진(= `ui/public` 그대로)을 쓰므로 로컬 `npm run dev`는 그대로 돈다.
+export function tileBase(): string {
+  return process.env.NEXT_PUBLIC_TILE_BASE ?? window.location.origin;
+}
+
 export interface TriggerInput {
   alert_id: string;
   trigger_location: { x_5179: number; y_5179: number };

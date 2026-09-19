@@ -24,6 +24,7 @@ import {
   getVWorldRivers,
   getVWorldRoads,
   searchAdmin,
+  tileBase,
   type AdminLevel,
   type AdminSearchResult,
 } from "@/lib/api";
@@ -569,7 +570,11 @@ export default function MapExplorer({
       // MapLibre의 타일/geojson-url 요청 내부 경로는 상대경로("/tiles/...")를 바로
       // Request()에 넘겨서 파싱 실패한다(브라우저 fetch와 달리 base URL을 안 붙여줌) —
       // 반드시 origin을 붙인 절대 URL이어야 한다(2026-08-28 실측 확인).
+      // 타일(위성·벡터)만 tileBase()로 분리한다 — 744MB라 Vercel 배포 용량을 먹어서
+      // 백엔드(EC2 Caddy)가 서빙한다(2026-09-19, api.ts의 tileBase() 주석 참조).
+      // 하천 geojson(/aoi/, 5.6MB)은 작아서 그대로 Vercel에 둔다.
       const origin = window.location.origin;
+      const tiles = tileBase();
       for (const region of AOI_KEYS) {
         // 위성사진(2026-08-29, scripts/fetch_aoi_satellite.py) — pitch·zoom이 겹치면
         // 라이브 Esri 요청이 한 번에 수백 개까지 튀는 게 원인이었던 확대 랙(§DEFAULT_PITCH
@@ -578,7 +583,7 @@ export default function MapExplorer({
         // 기본 동작대로 현재 스택 맨 위에 쌓여도 무방(§순서 코멘트 위 참고).
         map.addSource(`${region}-satellite-src`, {
           type: "raster",
-          tiles: [`${origin}/satellite/${region}/{z}/{x}/{y}.jpg`],
+          tiles: [`${tiles}/satellite/${region}/{z}/{x}/{y}.jpg`],
           tileSize: 256,
           bounds: AOI_BOUNDS[region],
           ...AOI_SATELLITE_ZOOM,
@@ -595,7 +600,7 @@ export default function MapExplorer({
 
         map.addSource(`${region}-landcover-src`, {
           type: "vector",
-          tiles: [`${origin}/tiles/${region}-landcover/{z}/{x}/{y}.pbf`],
+          tiles: [`${tiles}/tiles/${region}-landcover/{z}/{x}/{y}.pbf`],
           bounds: AOI_BOUNDS[region],
           ...AOI_TILE_ZOOM.landcover,
         });
@@ -626,7 +631,7 @@ export default function MapExplorer({
 
         map.addSource(`${region}-roads-src`, {
           type: "vector",
-          tiles: [`${origin}/tiles/${region}-roads/{z}/{x}/{y}.pbf`],
+          tiles: [`${tiles}/tiles/${region}-roads/{z}/{x}/{y}.pbf`],
           bounds: AOI_BOUNDS[region],
           ...AOI_TILE_ZOOM.roads,
         });
@@ -665,7 +670,7 @@ export default function MapExplorer({
 
         map.addSource(`${region}-buildings-src`, {
           type: "vector",
-          tiles: [`${origin}/tiles/${region}-buildings/{z}/{x}/{y}.pbf`],
+          tiles: [`${tiles}/tiles/${region}-buildings/{z}/{x}/{y}.pbf`],
           bounds: AOI_BOUNDS[region],
           ...AOI_TILE_ZOOM.buildings,
         });
