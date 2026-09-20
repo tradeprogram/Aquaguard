@@ -21,9 +21,16 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 SOURCE = REPO_ROOT / "data" / "precomputed" / "building_use_types.json"
 OUTPUT = REPO_ROOT / "data" / "vector" / "aoi_building_use_types.json"
 
-# 커밋된 AOI 건물 레이어 — 이 안의 건물이 쓰는 키만 남긴다
+# 커밋된 AOI 건물 레이어 — 이 안의 건물이 쓰는 키만 남긴다.
+#
+# .ndjson과 .geojson 둘 다 본다. 산청이 군 전체로 넓어지면서 .ndjson으로 바뀌었는데
+# (한 줄에 feature 하나, 스트리밍으로 읽으려고) 여기가 .geojson만 보고 있어서 산청이
+# 통째로 빠졌고, 그 결과 노출 건물의 87%가 '미상'이 됐다(2026-09-21). 조용히 비어도
+# 파일은 정상으로 보이므로 아래에서 레이어별 건수를 찍고, 하나도 못 읽으면 실패시킨다.
 AOI_BUILDING_LAYERS = [
+    REPO_ROOT / "data" / "vector" / "aoi_buildings_sancheong_5179.ndjson",
     REPO_ROOT / "data" / "vector" / "aoi_buildings_sancheong_5179.geojson",
+    REPO_ROOT / "data" / "vector" / "aoi_buildings_seoul_5179.ndjson",
     REPO_ROOT / "data" / "vector" / "aoi_buildings_seoul_5179.geojson",
 ]
 
@@ -31,19 +38,41 @@ KEY_PROPERTY = "bd_mgt_sn"
 KEY_PREFIX_LEN = 19  # policies/module_d.json의 use_type_key_prefix_len과 같아야 한다
 
 
+def _iter_features(path: Path):
+    """.ndjson이면 한 줄씩, .geojson이면 통째로. 건물 파일이 70MB까지 커져서 필요하다."""
+    if path.suffix == ".ndjson":
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    try:
+                        yield json.loads(line)
+                    except ValueError:
+                        continue
+    else:
+        yield from json.loads(path.read_text(encoding="utf-8")).get("features", [])
+
+
 def parcel_keys() -> set[str]:
     keys: set[str] = set()
+    seen_regions: set[str] = set()
     for path in AOI_BUILDING_LAYERS:
         if not path.exists():
-            print(f"  건너뜀(없음): {path.name}", file=sys.stderr)
             continue
-        data = json.loads(path.read_text(encoding="utf-8"))
-        before = len(keys)
-        for feature in data.get("features", []):
+        region = path.stem.replace("aoi_buildings_", "").replace("_5179", "")
+        if region in seen_regions:
+            continue  # 같은 지역을 .ndjson과 .geojson 양쪽에서 세지 않는다
+        seen_regions.add(region)
+        before, count = len(keys), 0
+        for feature in _iter_features(path):
+            count += 1
             raw = (feature.get("properties") or {}).get(KEY_PROPERTY)
             if isinstance(raw, str) and len(raw) >= KEY_PREFIX_LEN:
                 keys.add(raw[:KEY_PREFIX_LEN])
-        print(f"  {path.name}: 건물 {len(data.get('features', [])):,}동 → 필지키 +{len(keys) - before:,}")
+        print(f"  {path.name}: 건물 {count:,}동 → 필지키 +{len(keys) - before:,}")
+    if not seen_regions:
+        raise SystemExit("AOI 건물 레이어를 하나도 못 읽었다 — "
+                         "python scripts/build_aoi_exposure_layers.py 로 먼저 생성")
     return keys
 
 
