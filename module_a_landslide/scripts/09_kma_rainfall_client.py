@@ -5,9 +5,12 @@
 산청 2025-07-19 산사태 사건 실데이터 재현. 가상값 없음(전부 실측).
 
 검증(2026-09-10): 산청(289) 2025-07-18~19 누적 416.9mm, 09시 피크 66.8mm/h.
-LDAPS/UM 예보(nwp_vars_down.php nwp=l015 vars=apcp)는 2025-07 을 **보존하지 않는다**
-— API 응답: "2026-03-31 12 자료까지만 검색 가능합니다", 사건일은 file not exist.
-종전 주석의 '2025-07 보존 확인'은 오류였다(2026-09-20 정정, docs/handoff/TRACK1_REPLY.md §3).
+LDAPS/UM 예보(nwp_vars_down.php)는 이 계정으로 **받을 수 없다** — 권한 문제다.
+nwp_file_list.php 가 403 "허용되지 않은 API", nwp_vars_down.php 는 모든 날짜에서
+file not exist(vars 파라미터도 무시됨). 같은 키로 ASOS 는 정상이므로 키가 아니라
+데이터셋 이용 신청 문제로 보인다. API허브에서 수치예보모델 이용 신청 필요.
+주석 이력: '2025-07 보존 확인'(근거 없음) → '보존 안 해 확보 불가'(오독) → 현재.
+상세 docs/handoff/TRACK1_REPLY.md §3 (2026-09-20).
 """
 from __future__ import annotations
 import os, re, io
