@@ -16,12 +16,18 @@ Module O 계약(§4.1)을 따르는 반면 이 파일은 그 계약 밖의 신�
 """
 from __future__ import annotations
 
+import hashlib
+import json
 import math
 import os
+from pathlib import Path
 from typing import Any
 
 import networkx as nx
+import numpy as np
 import requests
+import shapely
+from scipy.spatial import cKDTree
 import shapely.geometry
 from pyproj import Transformer
 from shapely.ops import unary_union
@@ -33,6 +39,8 @@ VWORLD_PAGE_SIZE = 1000
 VWORLD_MAX_QUERY_AREA_KM2 = 9.0  # api_server.py와 동일한 VWorld 쿼리 면적 한도
 
 NODE_SNAP_DECIMALS = 5  # 위도 35~38°N에서 소수 5자리 ≈ 1.1m — 부동소수점 오차로 끊긴 도로 병합용
+ISOLATION_MAX_SNAP_M = 300.0  # 건물이 이보다 멀리 떨어진 노드에만 매핑되면 도로 데이터 밖 건물로 보고 판정에서 뺀다(산간 외딴 건물 오탐 방지)
+FEATURE_CACHE_DIR = Path(__file__).resolve().parent.parent / "data" / "cache" / "isolation"  # §7.3 — VWorld 원본 응답 캐시(gitignore)
 ISOLATION_CLUSTER_RADIUS_M = 200.0  # 이 거리 안의 고립 건물끼리 같은 구역으로 묶음
 
 _TO_5179 = Transformer.from_crs("EPSG:4326", "EPSG:5179", always_xy=True)
@@ -111,18 +119,46 @@ def _vworld_get_feature(data_layer: str, bbox: tuple[float, float, float, float]
     return features
 
 
-def fetch_roads(bbox: tuple[float, float, float, float]) -> list[dict[str, Any]]:
+def _dedupe(features: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """타일 경계 여유(겹침) 때문에 같은 지물이 두 번 오는 걸 제거한다."""
+    seen: set[str] = set()
+    out = []
+    for f in features:
+        k = json.dumps(f.get("geometry"), sort_keys=True)
+        if k not in seen:
+            seen.add(k)
+            out.append(f)
+    return out
+
+
+def _fetch_tiled_cached(layer: str, bbox: tuple[float, float, float, float]) -> list[dict[str, Any]]:
+    """bbox를 타일로 쪼개 VWorld에서 받고 결과를 디스크에 캐시한다(§7.3 — 같은 bbox 재요청은
+    API를 다시 안 부른다). 캐시를 비우려면 data/cache/isolation/ 폴더를 지우면 된다."""
+    key = hashlib.md5(f"{layer}|{tuple(round(v, 5) for v in bbox)}".encode()).hexdigest()[:16]
+    cache_file = FEATURE_CACHE_DIR / f"{layer}_{key}.json"
+    if cache_file.exists():
+        try:
+            return json.loads(cache_file.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            pass
     features: list[dict[str, Any]] = []
     for tile in _split_bbox(bbox):
-        features.extend(_vworld_get_feature(VWORLD_ROAD_LAYER, tile))
+        features.extend(_vworld_get_feature(layer, tile))
+    features = _dedupe(features)
+    try:
+        FEATURE_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        cache_file.write_text(json.dumps(features), encoding="utf-8")
+    except OSError:
+        pass
     return features
+
+
+def fetch_roads(bbox: tuple[float, float, float, float]) -> list[dict[str, Any]]:
+    return _fetch_tiled_cached(VWORLD_ROAD_LAYER, bbox)
 
 
 def fetch_buildings(bbox: tuple[float, float, float, float]) -> list[dict[str, Any]]:
-    features: list[dict[str, Any]] = []
-    for tile in _split_bbox(bbox):
-        features.extend(_vworld_get_feature(VWORLD_BUILDING_LAYER, tile))
-    return features
+    return _fetch_tiled_cached(VWORLD_BUILDING_LAYER, bbox)
 
 
 def _snap(lon: float, lat: float) -> tuple[float, float]:
@@ -168,55 +204,92 @@ def remove_hazard_edges(graph: nx.Graph, hazard_polygon: dict[str, Any] | None) 
         hazard_shape = shapely.geometry.shape(hazard_polygon)
     except Exception:
         return 0
-    to_remove = []
-    for u, v in graph.edges():
-        segment = shapely.geometry.LineString([u, v])
-        if segment.intersects(hazard_shape):
-            to_remove.append((u, v))
+    edges = list(graph.edges())
+    if not edges:
+        return 0
+    segments = shapely.linestrings([[u, v] for u, v in edges])
+    hit = shapely.STRtree(segments).query(hazard_shape, predicate="intersects")
+    to_remove = [edges[k] for k in hit]
     graph.remove_edges_from(to_remove)
     return len(to_remove)
 
 
-def _nearest_node(graph: nx.Graph, lon: float, lat: float) -> tuple[float, float] | None:
-    """그래프 안에서 (lon, lat)에 가장 가까운 노드를 찾는다 — 마을 규모 그래프(수백~수천
-    노드) 기준으로는 브루트포스로 충분히 빠르다."""
-    best_node, best_dist = None, float("inf")
-    for node in graph.nodes():
-        d = _haversine_m(lon, lat, node[0], node[1])
-        if d < best_dist:
-            best_node, best_dist = node, d
-    return best_node
+class _NodeIndex:
+    """그래프 노드에 대한 KD-tree — 노드 수만 개·건물 수십만 개 규모에서도 최근접 조회가 O(log n).
+    경위도를 그대로 유클리드로 쓰는 근사지만 수 km 범위에선 순위가 거의 안 바뀐다.
+    실제 거리(m)는 위도 보정해서 따로 환산한다."""
+
+    def __init__(self, graph: nx.Graph):
+        self.nodes = list(graph.nodes())
+        self.tree = cKDTree(np.array(self.nodes)) if self.nodes else None
+
+    def nearest(self, points: np.ndarray) -> tuple[list[tuple[float, float]], np.ndarray]:
+        """points: (N,2) lon/lat -> (최근접 노드 리스트, 거리[m] 배열)."""
+        if self.tree is None or len(points) == 0:
+            return [], np.array([])
+        _, idx = self.tree.query(points)
+        nearest = [self.nodes[i] for i in idx]
+        arr = np.array(nearest)
+        dx = (points[:, 0] - arr[:, 0]) * 111320.0 * np.cos(np.radians(points[:, 1]))
+        dy = (points[:, 1] - arr[:, 1]) * 110540.0
+        return nearest, np.hypot(dx, dy)
 
 
 def reachable_from_shelters(graph: nx.Graph, shelter_lonlat: list[tuple[float, float]]) -> set[tuple[float, float]]:
-    """대피소 각각에서 역방향(무방향 그래프라 정방향과 동일) BFS로 도달 가능한 노드를
-    모두 합친다 — "최소 1곳 대피소라도 갈 수 있는 노드 집합"."""
+    """대피소 각각에서 BFS로 도달 가능한 노드를 모두 합친다 — "최소 1곳 대피소라도 갈 수 있는 노드 집합"."""
     reachable: set[tuple[float, float]] = set()
-    for lon, lat in shelter_lonlat:
-        node = _nearest_node(graph, lon, lat)
-        if node is None:
-            continue
-        reachable |= nx.node_connected_component(graph, node)
+    if not shelter_lonlat or graph.number_of_nodes() == 0:
+        return reachable
+    nodes, _ = _NodeIndex(graph).nearest(np.array(shelter_lonlat, dtype=float))
+    for node in set(nodes):
+        if node not in reachable:
+            reachable |= nx.node_connected_component(graph, node)
     return reachable
 
 
-def find_isolated_buildings(
-    building_features: list[dict[str, Any]], graph: nx.Graph, reachable: set[tuple[float, float]]
-) -> list[tuple[float, float]]:
-    """건물 무게중심 → 최근접 도로 노드 매핑, 그 노드가 도달가능집합 밖이면 고립."""
-    isolated: list[tuple[float, float]] = []
+def _building_centroids(building_features: list[dict[str, Any]]) -> np.ndarray:
+    pts = []
     for feature in building_features:
         geometry = feature.get("geometry")
         if not geometry:
             continue
         try:
-            centroid = shapely.geometry.shape(geometry).centroid
+            c = shapely.geometry.shape(geometry).centroid
         except Exception:
             continue
-        node = _nearest_node(graph, centroid.x, centroid.y)
-        if node is None or node not in reachable:
-            isolated.append((centroid.x, centroid.y))
-    return isolated
+        pts.append((c.x, c.y))
+    return np.array(pts, dtype=float).reshape(-1, 2)
+
+
+def find_isolated_buildings(
+    centroids: np.ndarray,
+    graph: nx.Graph,
+    reachable: set[tuple[float, float]],
+    baseline_reachable: set[tuple[float, float]] | None = None,
+) -> tuple[list[tuple[float, float]], dict[str, int]]:
+    """건물 무게중심 -> 최근접 도로 노드 매핑, 그 노드가 도달가능집합 밖이면 고립.
+
+    - 최근접 노드가 ISOLATION_MAX_SNAP_M보다 멀면 도로 데이터 밖 건물이라 판정에서 뺀다.
+    - baseline_reachable(위험 적용 전 도달가능집합)이 주어지면, 위험이 없어도 원래
+      대피소와 안 이어져 있던 건물(데이터 끊김/외딴 도로망)은 위험 때문에 고립된 게
+      아니므로 뺀다. 반환: (고립 건물 좌표, 통계 {unmapped, preexisting}).
+    """
+    stats = {"unmapped": 0, "preexisting": 0}
+    if len(centroids) == 0:
+        return [], stats
+    nodes, dist_m = _NodeIndex(graph).nearest(centroids)
+    isolated: list[tuple[float, float]] = []
+    for k, node in enumerate(nodes):
+        if dist_m[k] > ISOLATION_MAX_SNAP_M:
+            stats["unmapped"] += 1
+            continue
+        if node in reachable:
+            continue
+        if baseline_reachable is not None and node not in baseline_reachable:
+            stats["preexisting"] += 1
+            continue
+        isolated.append((float(centroids[k][0]), float(centroids[k][1])))
+    return isolated, stats
 
 
 def cluster_isolated_buildings(points: list[tuple[float, float]]) -> list[dict[str, Any]]:
@@ -229,12 +302,7 @@ def cluster_isolated_buildings(points: list[tuple[float, float]]) -> list[dict[s
 
     cluster_graph = nx.Graph()
     cluster_graph.add_nodes_from(range(len(points)))
-    for i in range(len(points)):
-        for j in range(i + 1, len(points)):
-            dx = points_5179[i][0] - points_5179[j][0]
-            dy = points_5179[i][1] - points_5179[j][1]
-            if (dx * dx + dy * dy) ** 0.5 <= ISOLATION_CLUSTER_RADIUS_M:
-                cluster_graph.add_edge(i, j)
+    cluster_graph.add_edges_from(cKDTree(np.array(points_5179)).query_pairs(ISOLATION_CLUSTER_RADIUS_M))
 
     clusters = []
     for component in nx.connected_components(cluster_graph):
@@ -274,6 +342,7 @@ def check_isolation(
         return {"isolated_areas": {"type": "FeatureCollection", "features": []}, "isolated_building_count": 0, "warnings": ["해당 영역에 도로 데이터 없음"]}
 
     graph = build_road_graph(road_features)
+    baseline_reachable = reachable_from_shelters(graph, shelter_candidates_lonlat)
     removed = remove_hazard_edges(graph, hazard_polygon)
     if removed:
         warnings.append(f"위험지역과 겹치는 도로 {removed}개 구간 제거")
@@ -282,8 +351,12 @@ def check_isolation(
     if not reachable:
         warnings.append("대피소 근처에서 도로 그래프를 찾지 못함 — 도달가능성 계산 불가")
 
-    building_features = fetch_buildings(bbox)
-    isolated_points = find_isolated_buildings(building_features, graph, reachable)
+    centroids = _building_centroids(fetch_buildings(bbox))
+    isolated_points, stats = find_isolated_buildings(centroids, graph, reachable, baseline_reachable)
+    if stats["unmapped"]:
+        warnings.append(f"도로에서 {int(ISOLATION_MAX_SNAP_M)}m 넘게 떨어진 건물 {stats['unmapped']}개는 도로 데이터 밖이라 판정 제외")
+    if stats["preexisting"]:
+        warnings.append(f"위험과 무관하게 원래 대피소와 도로가 이어지지 않던 건물 {stats['preexisting']}개는 제외(도로 데이터 끊김 가능성)")
     clusters = cluster_isolated_buildings(isolated_points)
 
     features = []

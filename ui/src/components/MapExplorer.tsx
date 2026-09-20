@@ -357,6 +357,7 @@ function buildFlowBands(
 // 뜨긴 하지만, 데모 스코프 밖이라 2026-08-29 사용자 요청으로 버튼에서 제외.
 const TEST_LOCATIONS: { label: string; center: [number, number]; zoom: number; regionKey: RegionKey }[] = [
   { label: "산청 상능마을", center: INITIAL_CENTER, zoom: 12.5, regionKey: "sancheong" },
+  { label: "산청군 전체", center: [127.91, 35.37], zoom: 9.6, regionKey: "sancheong_all" },
   { label: "서울 강남", center: [127.0276, 37.4979], zoom: 16, regionKey: "gangnam" },
   { label: "서울 서초", center: [127.0044, 37.4907], zoom: 14, regionKey: "seocho" },
 ];
@@ -1372,7 +1373,7 @@ export default function MapExplorer({
                 건물·도로 모두 브이월드 실데이터(§2.3, §2.6) — 건물은 건물통합정보(층수×3m 근사
                 높이), 도로는 국가교통정보센터 표준노드링크(교량·고가차도는 지면에서 띄운 데크).
               </p>
-              <div className="mt-2 flex gap-1.5">
+              <div className="mt-2 flex flex-wrap gap-1.5">
                 {TEST_LOCATIONS.map((loc) => (
                   <button
                     key={loc.label}
