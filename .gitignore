@@ -30,3 +30,7 @@ data/precomputed/_bldrgst_cache.json
 # 배포 제약이 있는 원자료이고 용량도 커서 커밋하지 않는다.
 # 산출물(*_farmland_5179.geojson)도 아래 규칙으로 이미 걸린다.
 data/precomputed/farmmap/
+
+# 제안서 렌더 산출물 — 스크립트로 재생성된다
+docs/_preview/
+docs/아쿠아가드_제안서.pdf
