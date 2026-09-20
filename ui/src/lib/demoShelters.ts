@@ -32,7 +32,10 @@ export interface DemoRegion {
   isolationBbox: [number, number, number, number];
 }
 
-export const DEFAULT_REGION: RegionKey = "sancheong";
+// 2026-09-21 예선 범위가 산청군 전체로 바뀌면서 기본값도 그쪽으로 옮겼다.
+// 화면에 "산청군 전체" 버튼 하나만 두는데 기본 지역이 상능마을(8곳)이면, 아무것도
+// 안 눌렀을 때 패널이 읍면 단위 수치를 군 전체인 것처럼 보여주게 된다.
+export const DEFAULT_REGION: RegionKey = "sancheong_all";
 
 export const DEMO_REGIONS: Record<RegionKey, DemoRegion> = {
   // searchAddress=산청군 생비량면 → 8곳 전부.

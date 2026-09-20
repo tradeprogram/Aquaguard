@@ -389,9 +389,11 @@ function frameLabel(iso: string | null | undefined): string {
 // 캐싱돼 있다(§AOI_BOUNDS). 부산 등 다른 지역도 라이브 V-World 폴백으로 여전히
 // 뜨긴 하지만, 데모 스코프 밖이라 2026-08-29 사용자 요청으로 버튼에서 제외.
 const TEST_LOCATIONS: { label: string; center: [number, number]; zoom: number; regionKey: RegionKey }[] = [
-  { label: "산청 상능마을", center: INITIAL_CENTER, zoom: 12.5, regionKey: "sancheong" },
+  // 2026-09-21 예선 범위: 산청군 전체 하나만 둔다. 상능마을(읍면 단위)과 강남은
+  // 화면에서 뺐다 — 강남은 예선 대상이 아니고, 상능마을은 군 전체에 포함되므로
+  // 버튼이 둘이면 "어느 쪽 수치를 보고 있는지"만 헷갈린다.
+  // 지역 정의 자체(DEMO_REGIONS)는 남겨 둔다. 지우면 되돌릴 방법이 코드에서 사라진다.
   { label: "산청군 전체", center: [127.91, 35.37], zoom: 9.6, regionKey: "sancheong_all" },
-  { label: "서울 강남", center: [127.0276, 37.4979], zoom: 16, regionKey: "gangnam" },
 ];
 
 // EvacuationPanel(§6)에서 선택한 대피 경로 — 카카오/네이버 실경로 API 붙기 전까지는
