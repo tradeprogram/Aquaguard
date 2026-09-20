@@ -413,7 +413,19 @@ def check_isolation(
         warnings.append("대피소 근처에서 도로 그래프를 찾지 못함 — 도달가능성 계산 불가")
 
     centroids = _building_centroids(fetch_buildings(bbox))
+    # 위험영역(침수) 안에 든 건물은 도로 연결 여부와 무관하게 "대피소 도달 불가"로 센다 — 건물
+    # 자체가 물에 잠기는데, 도로 데이터가 성겨서 가장 가까운 노드가 멀리 있는 마른 도로에
+    # 이어져 있다는 이유로 안전해 보이면 안 된다(2026-09-21 산청 실측: 침수 건물 805채 중 179채가
+    # 이 이유로 "도달 가능"으로 빠졌다). 도로 끊김으로 인한 고립과는 성격이 달라 개수를 따로 적는다.
+    direct_points: list[tuple[float, float]] = []
+    if hazard_shape is not None and len(centroids):
+        inside = shapely.contains_xy(hazard_shape, centroids[:, 0], centroids[:, 1])
+        direct_points = [(float(x), float(y)) for x, y in centroids[inside]]
+        centroids = centroids[~inside]
     isolated_points, stats = find_isolated_buildings(centroids, graph, reachable, baseline_reachable)
+    if direct_points:
+        warnings.append(f"위험영역 안에 든 건물 {len(direct_points)}채는 도로 연결과 무관하게 직접 피해로 포함(길이 끊겨서가 아니라 건물이 잠기는 경우)")
+        isolated_points = isolated_points + direct_points
     if stats["unmapped"]:
         warnings.append(f"도로에서 {int(ISOLATION_MAX_SNAP_M)}m 넘게 떨어진 건물 {stats['unmapped']}개는 도로 데이터 밖이라 판정 제외")
     if stats["preexisting"]:
