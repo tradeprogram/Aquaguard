@@ -26,7 +26,11 @@ import module_e_routing
 from module_e_routing import isolation as module_e_isolation
 from module_o_orchestrator import geo
 from module_o_orchestrator.modules_client import module_sources
-from module_o_orchestrator.orchestrator import DEFAULT_SHELTER_CANDIDATES, run as run_orchestrator
+from module_o_orchestrator.orchestrator import (
+    DEFAULT_SHELTER_CANDIDATES,
+    LANDSLIDE_THRESHOLD,
+    run as run_orchestrator,
+)
 from module_o_orchestrator.store import alert_store
 
 load_dotenv()  # .env(git-ignore됨)의 VWORLD_API_KEY 등을 os.environ으로 로드
@@ -166,21 +170,49 @@ def get_alert_timeline(alert_id: str) -> dict:
     with open(index_path, encoding="utf-8") as f:
         index = json.load(f)
 
-    scenario, level = risk_layers.DEFAULT_SCENARIO, risk_layers.DEFAULT_LEVEL
-    collection = risk_layers.load(scenario, level)
+    scenario = risk_layers.DEFAULT_SCENARIO
+    layers = index.get("layers") or {}
+
+    # 두 임계를 다 보낸다.
+    #
+    # 여기서 critical(P>=0.7)만 보내고 있었는데, 그건 Module O가 실제로 판단하는
+    # 기준이 아니다 — LANDSLIDE_THRESHOLD는 0.5(FoS=1, 시그모이드 k에 불변인 점)로
+    # 내려가 있다. 그래서 화면에는 "대응을 시작한 근거"보다 22배 작은 영역만 떠 있었고
+    # (0.0103km² vs 0.2377km²), 그마저 마지막 두 시각에만 나타나 시간축을 움직여도
+    # 변하는 게 없었다.
+    #
+    # 시나리오는 섞지 않는다 — risk_landslide_index.json의 '한계'가 A_soilmap(토양도)과
+    # B_weathered(풍화화강토 가정)를 섞지 말라고 못 박고 있고, Module A의 soil_sampler가
+    # 쓰는 값과 정합하는 건 A_soilmap 쪽이다.
+    LEVELS = ("warning", "critical")
     features = []
-    for feature in geo.featurecollection_5179_to_lonlat(collection):
-        props = feature["properties"]
-        features.append({
-            "type": "Feature",
-            "geometry": feature["geometry"],
-            "properties": {
-                "kind": "landslide_risk",
-                "arrival_hour": props.get("arrival_hour"),
-                "arrival_time": props.get("arrival_time"),
-                "area_m2": props.get("area_m2"),
-            },
+    level_summary = []
+    for lvl in LEVELS:
+        collection = risk_layers.load(scenario, lvl)
+        meta = layers.get(f"{scenario}_{lvl}") or {}
+        count = 0
+        for feature in geo.featurecollection_5179_to_lonlat(collection):
+            props = feature["properties"]
+            count += 1
+            features.append({
+                "type": "Feature",
+                "geometry": feature["geometry"],
+                "properties": {
+                    "kind": "landslide_risk",
+                    "level": lvl,
+                    "prob_threshold": meta.get("prob_threshold"),
+                    "arrival_hour": props.get("arrival_hour"),
+                    "arrival_time": props.get("arrival_time"),
+                    "area_m2": props.get("area_m2"),
+                },
+            })
+        level_summary.append({
+            "level": lvl,
+            "prob_threshold": meta.get("prob_threshold"),
+            "count": count,
+            "area_km2": meta.get("area_km2"),
         })
+    level = "warning+critical"
 
     timeline = alert.envelope["data"]["timeline_actual"] if alert else {}
     agent = alert.envelope["data"]["timeline_agent"] if alert else {}
@@ -188,6 +220,9 @@ def get_alert_timeline(alert_id: str) -> dict:
         "available": True,
         "scenario": scenario,
         "level": level,
+        "levels": level_summary,
+        # Module O가 대응을 시작하는 확률. 화면이 "왜 이 영역인가"를 설명할 때 쓴다.
+        "trigger_threshold": LANDSLIDE_THRESHOLD,
         "frames": index.get("frames") or [],
         "risk": {"type": "FeatureCollection", "features": features},
         # 화면에 시각과 함께 표시할 기준점들 — "지금 보는 게 언제인가"의 맥락

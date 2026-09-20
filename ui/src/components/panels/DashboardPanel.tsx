@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { SANGCHEONG_DEMO_INPUT, triggerAlert } from "@/lib/api";
 import { diagnoseFailure } from "@/lib/backendDiagnosis";
 import type { ModuleOEnvelope } from "@/lib/types";
@@ -15,6 +15,22 @@ import { damageCostProvenance, exposureProvenance } from "@/lib/provenance";
 // 예시 목록(contracts/module_c.example.json 기준). 지금은 파이프라인이 값을 주면
 // 그걸 쓰고, 아직 underpasses 입력이 없어 빈 배열로 오면 이 목록으로 화면을 채운다.
 // alert_level ∈ 정상/주의/경계/위험(§5 Module C).
+// 실행 중 화면에 나열할 모듈. 서버가 단계별 진행을 알려주지 않으므로 "지금 여기"를
+// 표시하지 않는다 — 무엇이 도는지만 보여 준다(있지도 않은 진행률을 그리지 않기 위해서).
+const PIPELINE_STEPS = [
+  "A 산사태 확률",
+  "B 하천범람",
+  "C 도로·지하차도",
+  "D 노출자산",
+  "E 대피경로",
+  "G 피해액",
+  "H 시민신고 검증",
+  "O 통합·골든타임",
+];
+
+// 배포본(EC2) 실측값. 화면에 "보통 N초"라고 쓰려면 실제로 재 본 값이어야 한다.
+const TYPICAL_RUN_SEC = 20;
+
 const DEMO_UNDERPASSES: { id: string; name: string; level: "정상" | "주의" | "경계" | "위험" }[] = [
   { id: "SC-UP-003", name: "산청천 지하차도", level: "위험" },
   { id: "SC-UP-011", name: "생비량로 지하차도", level: "주의" },
@@ -39,10 +55,24 @@ export default function DashboardPanel({
   const govOnly = mode === "gov";
   const [envelope, setEnvelope] = useState<ModuleOEnvelope | null>(null);
   const [loading, setLoading] = useState(false);
+  // 실제로 흐른 시간. 가짜 진행률(%)을 그리는 대신 이걸 그대로 보여 준다 —
+  // 어디까지 왔는지는 서버가 안 알려주므로 모르는 걸 아는 척하지 않는다.
+  const [elapsed, setElapsed] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const { slow, start, stop } = useSlowLoading();
 
+  // 실행 중에는 0.1초마다 경과를 갱신한다. 멈춘 화면과 도는 화면을 사람이 구분하는
+  // 가장 확실한 신호가 "숫자가 계속 변하는 것"이다.
+  useEffect(() => {
+    if (!loading) return;
+    const t0 = Date.now();
+    const id = setInterval(() => setElapsed((Date.now() - t0) / 1000), 100);
+    return () => clearInterval(id);
+  }, [loading]);
+
   async function runDemo() {
+    // 경과 표시를 0에서 시작시킨다 — effect 본문에서 setState 하면 렌더가 한 번 더 돈다.
+    setElapsed(0);
     setLoading(true);
     setError(null);
     start();
@@ -92,13 +122,19 @@ export default function DashboardPanel({
           disabled={loading}
           className="shrink-0 rounded-lg bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-500 disabled:opacity-50"
         >
-          {loading
-            ? slow
-              ? "서버 깨우는 중… (최대 1분)"
-              : "실행 중…"
-            : govOnly
-              ? "산청 시나리오 실행"
-              : "우리 동네 위험 확인하기"}
+          <span className="flex items-center gap-1.5">
+            {loading && (
+              <span
+                aria-hidden
+                className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-white/30 border-t-white"
+              />
+            )}
+            {loading
+              ? `실행 중 ${elapsed.toFixed(1)}초`
+              : govOnly
+                ? "산청 시나리오 실행"
+                : "우리 동네 위험 확인하기"}
+          </span>
         </button>
       </div>
 
@@ -106,10 +142,47 @@ export default function DashboardPanel({
         <div className="rounded-lg border border-red-800/50 bg-red-950/30 p-3 text-xs text-red-300">{error}</div>
       )}
 
-      {!envelope && !error && (
+      {/* 실행 중 화면. 예전에는 버튼 글자만 "실행 중…"으로 바뀌고 이 자리는 계속
+          "위 버튼을 누르면…"이었다 — 20초 넘게 그대로라 멈춘 것처럼 보였다.
+          진행률(%)은 만들지 않는다. 서버가 어느 모듈까지 갔는지 알려주지 않으므로
+          그걸 그리면 지어낸 숫자가 된다. 대신 (1) 계속 움직이는 경과 시간,
+          (2) 실측한 평소 소요시간, (3) 지금 도는 모듈 목록을 보여 준다. */}
+      {loading && (
+        <div className="rounded-xl border border-sky-900/50 bg-sky-950/20 p-4 text-xs">
+          <div className="flex items-baseline justify-between">
+            <p className="font-medium text-sky-200">
+              7개 모듈을 순서대로 돌리고 결과를 통합하고 있습니다
+            </p>
+            <p className="font-mono text-base text-sky-300">{elapsed.toFixed(1)}초</p>
+          </div>
+
+          {/* 진행률이 아니라 "돌고 있다"는 표시 — 좌우로 흐르는 띠 */}
+          <div className="mt-2 h-1 w-full overflow-hidden rounded-full bg-slate-800">
+            <div className="h-full w-1/3 animate-[indeterminate_1.4s_ease-in-out_infinite] rounded-full bg-sky-400" />
+          </div>
+          <style>{`@keyframes indeterminate {
+            0% { transform: translateX(-100%); }
+            100% { transform: translateX(300%); }
+          }`}</style>
+
+          <ul className="mt-3 grid grid-cols-2 gap-x-3 gap-y-1 text-slate-400">
+            {PIPELINE_STEPS.map((step) => (
+              <li key={step}>· {step}</li>
+            ))}
+          </ul>
+
+          <p className="mt-3 text-slate-500">
+            보통 {TYPICAL_RUN_SEC}초쯤 걸립니다
+            {elapsed > TYPICAL_RUN_SEC * 2 && " — 평소보다 오래 걸리고 있습니다"}.
+            {slow && " 서버가 잠들어 있었다면 첫 요청은 더 걸립니다."}
+          </p>
+        </div>
+      )}
+
+      {!envelope && !error && !loading && (
         <div className="rounded-xl border border-dashed border-white/10 p-8 text-center text-xs text-slate-500">
           {govOnly
-            ? "위 버튼으로 시나리오를 실행하면 Module A~H(현재 목업) 결과와 골든타임 비교가 표시됩니다."
+            ? "위 버튼으로 시나리오를 실행하면 Module A~H 결과와 골든타임 비교가 표시됩니다."
             : "위 버튼을 누르면 우리 동네의 산사태·홍수 위험, 도로 침수, 대피 경로가 표시됩니다."}
         </div>
       )}

@@ -162,39 +162,132 @@ def _load_collection(path: Path, label: str, regenerate_hint: str) -> tuple[dict
 
 
 def _feature_bounds(geometry: Any) -> tuple[float, float, float, float] | None:
-    """지오메트리의 bbox. 좌표 중첩 깊이에 무관하게 [x, y] 쌍을 찾아 내려간다."""
+    """지오메트리의 bbox. 좌표 중첩 깊이에 무관하게 [x, y] 쌍을 찾아 내려간다.
+
+    요청마다 건물 18,032 + 농경지 23,288개를 전부 훑으므로 여기가 그대로 응답시간이
+    된다. 예전엔 좌표 하나하나에 재귀 + isinstance를 돌려 호출이 69만 번 났고
+    1.47초를 썼다(2026-09-20 프로파일). 실제 데이터는 거의 전부 Polygon/MultiPolygon
+    이므로 그 두 경우만 리스트 컴프리헨션으로 바로 처리하고, 나머지 타입만 종전
+    재귀로 떨어뜨린다 — 결과는 같고 이상한 형태가 와도 죽지 않는다.
+    """
     if not isinstance(geometry, dict):
         return None
-    xs: list[float] = []
-    ys: list[float] = []
+    coordinates = geometry.get("coordinates")
+    kind = geometry.get("type")
+
+    try:
+        if kind == "Polygon":
+            rings = coordinates
+        elif kind == "MultiPolygon":
+            rings = [ring for part in coordinates for ring in part]
+        else:
+            rings = None
+        if rings:
+            xs = [c[0] for ring in rings for c in ring]
+            ys = [c[1] for ring in rings for c in ring]
+            return min(xs), min(ys), max(xs), max(ys)
+    except (TypeError, IndexError, ValueError):
+        pass  # 형태가 예상과 다르면 아래 일반 경로로
+
+    xs_any: list[float] = []
+    ys_any: list[float] = []
 
     def walk(node: Any) -> None:
         if isinstance(node, (list, tuple)):
             if len(node) >= 2 and all(isinstance(v, (int, float)) for v in node[:2]):
-                xs.append(float(node[0]))
-                ys.append(float(node[1]))
+                xs_any.append(float(node[0]))
+                ys_any.append(float(node[1]))
                 return
             for item in node:
                 walk(item)
 
-    walk(geometry.get("coordinates"))
-    if not xs:
+    walk(coordinates)
+    if not xs_any:
         return None
-    return min(xs), min(ys), max(xs), max(ys)
+    return min(xs_any), min(ys_any), max(xs_any), max(ys_any)
+
+
+# 위험영역 격자 한 칸의 크기(m). 작을수록 더 촘촘히 걸러내지만 칸 수가 제곱으로
+# 늘어난다. 200m에서 산청 데모 기준 1,471칸(58.8km²)으로, 격자를 만드는 비용은
+# 무시할 만하면서 걸러내는 효과는 거의 최대치였다(2026-09-20 실측).
+RISK_CELL_M = 200.0
+
+
+def risk_cells(geometries: list[dict[str, Any]]) -> set[tuple[int, int]] | None:
+    """위험 지오메트리들이 실제로 덮는 격자 칸 집합.
+
+    **왜 bbox 하나로는 부족한가**: 침수범위(Module B)는 하천을 따라 길게 뻗은
+    547개 폴리곤이고 산사태(Module A)는 그 반대편 산비탈에 있다. 둘을 감싸는
+    bbox 하나를 쓰면 363km²가 되는데, 실제 위험영역을 다 합쳐도 58km²다 —
+    그 사이의 빈 들판까지 전부 "위험영역 근처"로 잡혀서 Module D가 건물 8,026동·
+    농경지 13,037필지를 받아 기하 연산을 돌리고 있었다. 격자로 바꾸면 500동·
+    724필지(6%)로 줄고, 걸러낸 건 애초에 위험영역과 겹칠 수 없는 것들뿐이다.
+
+    **누락되지 않는 이유**: 폴리곤과 feature가 실제로 겹치면 두 bbox가 겹치고,
+    겹치는 bbox는 반드시 같은 칸을 공유한다. 즉 이 판정은 실제 교차의 상위집합이라
+    Module D의 결과는 바뀌지 않는다(격자는 조금 넉넉하게 잡을 뿐이다).
+    """
+    cells: set[tuple[int, int]] = set()
+    for geometry in geometries:
+        for box in _subgeometry_bounds(geometry):
+            x0, y0, x1, y1 = box
+            for gx in range(int(x0 // RISK_CELL_M), int(x1 // RISK_CELL_M) + 1):
+                for gy in range(int(y0 // RISK_CELL_M), int(y1 // RISK_CELL_M) + 1):
+                    cells.add((gx, gy))
+    return cells or None
+
+
+def _subgeometry_bounds(geometry: Any) -> list[tuple[float, float, float, float]]:
+    """폴리곤 하나하나의 bbox. 전체를 감싸는 bbox 하나가 아니다.
+
+    Module B는 위험영역을 FeatureCollection으로 주고 Module A는 MultiPolygon으로
+    주므로 둘 다 받아서 개별 폴리곤까지 내려간다. 점 좌표({x_5179, y_5179})는
+    면적이 없어 격자에 넣지 않는다 — 그건 호출부가 버퍼링해서 폴리곤으로 만든다.
+    """
+    if not isinstance(geometry, dict):
+        return []
+    kind = geometry.get("type")
+    if kind == "FeatureCollection":
+        out: list[tuple[float, float, float, float]] = []
+        for feature in geometry.get("features") or []:
+            out += _subgeometry_bounds((feature or {}).get("geometry"))
+        return out
+    if kind == "Feature":
+        return _subgeometry_bounds(geometry.get("geometry"))
+
+    coordinates = geometry.get("coordinates")
+    parts: list[Any]
+    if kind == "MultiPolygon":
+        parts = list(coordinates or [])
+    elif kind == "Polygon":
+        parts = [coordinates or []]
+    else:
+        box = _feature_bounds(geometry)
+        return [box] if box else []
+
+    out = []
+    for part in parts:
+        box = _feature_bounds({"coordinates": part})
+        if box:
+            out.append(box)
+    return out
 
 
 def _clip_to_bounds(collection: dict[str, Any],
-                    bounds: tuple[float, float, float, float] | None) -> dict[str, Any]:
-    """위험영역 bbox 밖의 feature를 버린다.
+                    bounds: tuple[float, float, float, float] | None,
+                    cells: set[tuple[int, int]] | None = None) -> dict[str, Any]:
+    """위험영역에 닿지 않는 feature를 버린다.
 
     bbox가 안 겹치는 feature는 위험 폴리곤과도 절대 안 겹치므로 Module D의 결과는
-    그대로다. 목적은 메모리다 — 산청 농경지 23,288필지를 통째로 들고 있으면
-    105MB인데, 반경 2.5km 위험영역이면 17%만 남아 20MB 아래로 떨어진다.
-    배포 서버(RAM 908MB)가 OOM으로 uvicorn을 죽이던 주원인이었다.
+    그대로다. 목적은 메모리와 시간이다 — 산청 농경지 23,288필지를 통째로 들고 있으면
+    105MB고, 배포 서버(RAM 908MB)가 OOM으로 uvicorn을 죽이던 주원인이었다.
+
+    cells를 주면 전체 bbox 대신(정확히는 그와 함께) 격자로 거른다. 위험영역이 서로
+    멀리 떨어져 있을 때 bbox 하나는 사실상 안 거르기 때문이다 — risk_cells 참고.
     """
-    if bounds is None:
+    if bounds is None and cells is None:
         return collection
-    min_x, min_y, max_x, max_y = bounds
+    min_x, min_y, max_x, max_y = bounds if bounds else (-1e18, -1e18, 1e18, 1e18)
     kept = []
     for feature in collection.get("features") or []:
         box = _feature_bounds((feature or {}).get("geometry"))
@@ -203,12 +296,25 @@ def _clip_to_bounds(collection: dict[str, Any],
             continue
         if box[2] < min_x or box[0] > max_x or box[3] < min_y or box[1] > max_y:
             continue
+        if cells is not None and not _touches_cells(box, cells):
+            continue
         kept.append(feature)
     return {**collection, "features": kept}
 
 
+def _touches_cells(box: tuple[float, float, float, float],
+                   cells: set[tuple[int, int]]) -> bool:
+    x0, y0, x1, y1 = box
+    for gx in range(int(x0 // RISK_CELL_M), int(x1 // RISK_CELL_M) + 1):
+        for gy in range(int(y0 // RISK_CELL_M), int(y1 // RISK_CELL_M) + 1):
+            if (gx, gy) in cells:
+                return True
+    return False
+
+
 def _load_clipped(loader, aoi: str,
-                  bounds: tuple[float, float, float, float] | None) -> tuple[dict[str, Any], str | None]:
+                  bounds: tuple[float, float, float, float] | None,
+                  cells: set[tuple[int, int]] | None = None) -> tuple[dict[str, Any], str | None]:
     """전체를 읽어 bbox로 자른 뒤 원본을 즉시 버린다.
 
     전체 컬렉션을 lru_cache에 남기면 잘라낸 의미가 없어서(메모리가 그대로 남는다)
@@ -216,7 +322,7 @@ def _load_clipped(loader, aoi: str,
     거르므로 — 상주 메모리가 크게 줄고, 그게 OOM을 만들던 쪽이다.
     """
     collection, warning = loader(aoi)
-    clipped = _clip_to_bounds(collection, bounds)
+    clipped = _clip_to_bounds(collection, bounds, cells)
     del collection
     gc.collect()
     return clipped, warning
@@ -242,20 +348,23 @@ def _read_farmland(aoi: str) -> tuple[dict[str, Any], str | None]:
 
 
 def building_footprints(aoi: str = DEFAULT_AOI,
-                        bounds_5179: tuple[float, float, float, float] | None = None
+                        bounds_5179: tuple[float, float, float, float] | None = None,
+                        cells: set[tuple[int, int]] | None = None
                         ) -> tuple[dict[str, Any], str | None]:
     """AOI 건축물 footprint(EPSG:5179)와 문제가 있었다면 그 경고.
 
-    bounds_5179를 주면 그 bbox 밖 건물은 빼고 돌려준다(결과 동일, 메모리 절감).
+    bounds_5179/cells를 주면 위험영역에 닿지 않는 건물은 빼고 돌려준다
+    (결과 동일, 메모리·시간 절감 — risk_cells 참고).
     """
-    return _load_clipped(_read_buildings, aoi, bounds_5179)
+    return _load_clipped(_read_buildings, aoi, bounds_5179, cells)
 
 
 def farmland_parcels(aoi: str = DEFAULT_AOI,
-                     bounds_5179: tuple[float, float, float, float] | None = None
+                     bounds_5179: tuple[float, float, float, float] | None = None,
+                     cells: set[tuple[int, int]] | None = None
                      ) -> tuple[dict[str, Any], str | None]:
-    """농경지 필지(EPSG:5179)와 문제가 있었다면 그 경고. bounds_5179는 위와 같다."""
-    return _load_clipped(_read_farmland, aoi, bounds_5179)
+    """농경지 필지(EPSG:5179)와 문제가 있었다면 그 경고. 인자는 위와 같다."""
+    return _load_clipped(_read_farmland, aoi, bounds_5179, cells)
 
 
 def flood_depth_raster(aoi: str = DEFAULT_AOI) -> tuple[str | None, str | None]:

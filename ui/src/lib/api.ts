@@ -156,11 +156,23 @@ export interface TimelineFrame {
   cum24_mm: number; // 24시간 누적
 }
 
+export interface RiskLevelSummary {
+  level: "warning" | "critical";
+  prob_threshold: number | null;
+  count: number;
+  area_km2: number | null;
+}
+
 export interface AlertTimeline {
   available: boolean;
   reason?: string;
   scenario?: string;
   level?: string;
+  // 두 임계(0.5 경고 / 0.7 위험)를 같이 받는다 — 화면이 "대응을 시작한 근거"인
+  // 0.5 영역과 그 안의 0.7 영역을 함께 보여줄 수 있어야 한다.
+  levels?: RiskLevelSummary[];
+  // Module O가 대응을 시작하는 확률(LANDSLIDE_THRESHOLD).
+  trigger_threshold?: number;
   frames: TimelineFrame[];
   risk: GeoJSON.FeatureCollection;
   markers: {

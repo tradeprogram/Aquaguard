@@ -297,13 +297,41 @@ const DEFAULT_BRIDGE_HALF_WIDTH_M = 4;
 // 위험영역을 지형 위에서 보이게 하는 표시용 고정 높이이고, 화면에도 그렇게 쓴다.
 // 침수 쪽은 반대로 SFINCS 실측 수심이 있으므로 그 값을 그대로 높이로 쓴다
 // (flood-model-3d). 둘을 색·범례·높이 근거로 확실히 갈라 둔다.
+// 폴리곤 묶음의 lon/lat 경계. "위험영역으로 이동" 버튼이 카메라를 거기로 보낼 때 쓴다.
+// 좌표가 Polygon/MultiPolygon 어느 쪽이든 끝까지 내려가서 숫자 쌍만 줍는다.
+function featuresBounds(
+  features: Feature<Polygon | MultiPolygon>[]
+): [[number, number], [number, number]] | null {
+  let minLon = Infinity, minLat = Infinity, maxLon = -Infinity, maxLat = -Infinity;
+  const walk = (c: unknown): void => {
+    if (Array.isArray(c) && typeof c[0] === "number" && typeof c[1] === "number") {
+      const [lon, lat] = c as [number, number];
+      if (lon < minLon) minLon = lon;
+      if (lat < minLat) minLat = lat;
+      if (lon > maxLon) maxLon = lon;
+      if (lat > maxLat) maxLat = lat;
+      return;
+    }
+    if (Array.isArray(c)) for (const q of c) walk(q);
+  };
+  for (const f of features) walk(f.geometry.coordinates);
+  return Number.isFinite(minLon) ? [[minLon, minLat], [maxLon, maxLat]] : null;
+}
+
 const RISK_WALL_HEIGHT_M = 14;
+// 0.7 영역은 0.5 영역 안에 들어가 있다(P>=0.7 ⊂ P>=0.5). 같은 높이로 세우면 겹쳐서
+// 아예 안 보이므로 더 높게 세운다 — 깊이를 뜻하는 값이 아니라 순전히 가림 방지다.
+const RISK_WALL_HEIGHT_CRITICAL_M = 34;
 
 // 방금 도달한 영역은 밝게, 이전 시각에 이미 넘어간 영역은 어둡게 — "번져가는" 것이
 // 색으로도 읽히게 한다(age = 현재 프레임 − arrival_hour).
-const RISK_COLOR_NEW = "#f87171";
-const RISK_COLOR_RECENT = "#dc2626";
-const RISK_COLOR_OLD = "#7f1d1d";
+// 0.5(경고)는 주황, 0.7(위험)은 빨강 — 임계가 다르면 색도 달라야 한다.
+const RISK_COLOR_NEW = "#fb923c";
+const RISK_COLOR_RECENT = "#ea580c";
+const RISK_COLOR_OLD = "#7c2d12";
+const RISK_CRIT_NEW = "#f87171";
+const RISK_CRIT_RECENT = "#dc2626";
+const RISK_CRIT_OLD = "#7f1d1d";
 
 function hhmm(iso: string | null | undefined): string {
   if (!iso) return "—";
@@ -311,7 +339,8 @@ function hhmm(iso: string | null | undefined): string {
   return m ? `${m[1]}:${m[2]}` : "—";
 }
 
-// "7/19(토) 09:00" — 몇 월 며칠 몇 시인지가 한 줄에 다 보여야 한다
+// "2025. 7. 19(토) 09:00" — 연도까지 다 보여야 한다. 2025년 산청 재연이라는 걸
+// 화면만 보고 알 수 있어야 하고, 연도가 없으면 올해 일처럼 읽힌다.
 const WEEKDAY = ["일", "월", "화", "수", "목", "금", "토"];
 function frameLabel(iso: string | null | undefined): string {
   if (!iso) return "—";
@@ -319,7 +348,7 @@ function frameLabel(iso: string | null | undefined): string {
   if (!m) return iso;
   const [, y, mo, d, hh, mm] = m;
   const w = WEEKDAY[new Date(Number(y), Number(mo) - 1, Number(d)).getDay()];
-  return `${Number(mo)}/${Number(d)}(${w}) ${hh}:${mm}`;
+  return `${y}. ${Number(mo)}. ${Number(d)}(${w}) ${hh}:${mm}`;
 }
 
 
@@ -415,6 +444,10 @@ export default function MapExplorer({
   // 시간축을 못 받았을 때 화면에 띄울 진단 문구. 상태코드가 아니라 /health를 찔러
   // 만든 문장이라 "재시작하면 되는 건지"까지 바로 읽힌다.
   const [timelineError, setTimelineError] = useState<string | null>(null);
+  // 지금 화면에 세워진 위험영역의 경계. 폴리곤이 카메라에서 5~20km 떨어진 곳에
+  // 있어서(대표지점이 생비량면이 아니다) 시각을 넘겨도 "아무 변화 없음"으로 보였다 —
+  // 버튼 하나로 거기로 갈 수 있어야 한다.
+  const [riskBounds, setRiskBounds] = useState<[[number, number], [number, number]] | null>(null);
   const [frameIdx, setFrameIdx] = useState(0);
   const [playing, setPlaying] = useState(false);
 
@@ -973,13 +1006,17 @@ export default function MapExplorer({
         paint: {
           // age = 현재 프레임 − arrival_hour (스크러버가 속성으로 써 넣는다)
           "fill-extrusion-color": [
-            "step",
-            ["number", ["get", "age"], 99],
-            RISK_COLOR_NEW,
-            1, RISK_COLOR_RECENT,
-            6, RISK_COLOR_OLD,
+            "case",
+            ["==", ["get", "level"], "critical"],
+            ["step", ["number", ["get", "age"], 99], RISK_CRIT_NEW, 1, RISK_CRIT_RECENT, 6, RISK_CRIT_OLD],
+            ["step", ["number", ["get", "age"], 99], RISK_COLOR_NEW, 1, RISK_COLOR_RECENT, 6, RISK_COLOR_OLD],
           ],
-          "fill-extrusion-height": RISK_WALL_HEIGHT_M,
+          "fill-extrusion-height": [
+            "case",
+            ["==", ["get", "level"], "critical"],
+            RISK_WALL_HEIGHT_CRITICAL_M,
+            RISK_WALL_HEIGHT_M,
+          ],
           "fill-extrusion-base": 0,
           "fill-extrusion-opacity": 0.75,
         },
@@ -1393,6 +1430,20 @@ export default function MapExplorer({
   const riskReachedCount = (timeline?.risk.features ?? []).filter(
     (f) => currentFrame !== null && Number(f.properties?.arrival_hour) <= currentFrame.hour
   ).length;
+  // 위험영역이 새로 생기는 시각들 — 39프레임 중 6개뿐이라 표시가 없으면 어디를 봐야
+  // 할지 알 수 없다. 막대 아래에 점으로 찍는다.
+  // 범례에 쓸 한 줄 — 두 임계의 면적 차이가 크다는 걸 숫자로 보여 준다(0.0103 vs
+  // 0.2377km²). 서버가 준 값만 쓰고 화면에서 계산하지 않는다.
+  const riskLevelNote = (() => {
+    const w = timeline?.levels?.find((l) => l.level === "warning");
+    const c = timeline?.levels?.find((l) => l.level === "critical");
+    if (!w?.area_km2 || !c?.area_km2) return null;
+    return `(${w.area_km2}km² / ${c.area_km2}km²)`;
+  })();
+
+  const arrivalHours = new Set(
+    (timeline?.risk.features ?? []).map((f) => Number(f.properties?.arrival_hour))
+  );
 
   // 재생 — 1초에 한 프레임씩. 마지막에 닿으면 자동으로 멈춘다(되감기 없음:
   // 루프가 돌면 "지금이 언제인지"가 다시 흐려진다).
@@ -1428,6 +1479,7 @@ export default function MapExplorer({
       properties: { ...f.properties, age: (hour ?? 0) - Number(f.properties?.arrival_hour) },
     })) as Feature<Polygon | MultiPolygon>[];
     source.setData({ type: "FeatureCollection", features: withAge } as FeatureCollection);
+    setRiskBounds(featuresBounds(withAge));
 
     // 고립 판정은 산사태 위험영역 + 침수 범위를 함께 본다. 침수는 시간축이 없어
     // (SFINCS 최대침수심) 프레임과 무관하게 항상 최대 범위로 들어간다.
@@ -1725,12 +1777,20 @@ export default function MapExplorer({
           {shelterRegion === "sancheong" ? (
             <div className="mt-3 space-y-2">
               <div className="flex items-start gap-2">
-                <span className="mt-0.5 h-3 w-3 shrink-0 rounded-sm" style={{ background: RISK_COLOR_RECENT }} />
+                <span className="mt-0.5 flex shrink-0 flex-col gap-0.5">
+                  <span className="block h-3 w-3 rounded-sm" style={{ background: RISK_COLOR_RECENT }} />
+                  <span className="block h-3 w-3 rounded-sm" style={{ background: RISK_CRIT_RECENT }} />
+                </span>
                 <div>
                   <p className="text-slate-200">산사태 위험영역 · Module A</p>
                   <p className="text-slate-500">
-                    시각별 도달 영역. <span className="text-amber-300/80">높이는 표시용 고정값</span> —
-                    토사 퇴적깊이 모형은 아직 없습니다.
+                    시각별 도달 영역. <span style={{ color: RISK_COLOR_NEW }}>주황 P≥0.5</span>(대응 시작 기준)
+                    안에 <span style={{ color: RISK_CRIT_NEW }}>빨강 P≥0.7</span>이 들어 있습니다.
+                    {riskLevelNote && <> {riskLevelNote}</>}
+                  </p>
+                  <p className="mt-0.5 text-slate-500">
+                    <span className="text-amber-300/80">높이는 표시용</span> — 토사 퇴적깊이 모형이
+                    없어 높이에 뜻이 없습니다. 0.7을 더 높게 세운 건 0.5에 가려지지 않게 하려는 것뿐입니다.
                   </p>
                 </div>
               </div>
@@ -1843,6 +1903,11 @@ export default function MapExplorer({
                     }`}
                     style={{ height: `${Math.max((f.rn_mm / maxFrameRain) * 100, 4)}%` }}
                   />
+                  {/* 이 시각에 위험영역이 새로 생긴다 — 39개 중 6개뿐이라 이 표시가
+                      없으면 어느 시각을 봐야 하는지 알 수 없다 */}
+                  {arrivalHours.has(f.hour) && (
+                    <span className="absolute -bottom-1.5 left-1/2 block h-1.5 w-1.5 -translate-x-1/2 rounded-full bg-orange-400" />
+                  )}
                 </button>
               ))}
             </div>
@@ -1877,6 +1942,23 @@ export default function MapExplorer({
                   className="rounded-md border border-slate-700 px-2 py-1 text-slate-400 hover:text-slate-200"
                 >
                   ↺ 처음
+                </button>
+                <button
+                  onClick={() => {
+                    if (!riskBounds) return;
+                    mapRef.current?.fitBounds(riskBounds, {
+                      padding: 160,
+                      pitch: DEFAULT_PITCH,
+                      bearing: -20,
+                      duration: 1600,
+                      maxZoom: 15.5,
+                    });
+                  }}
+                  disabled={!riskBounds}
+                  className="rounded-md border border-orange-700/60 px-2 py-1 text-orange-300 hover:border-orange-500 hover:text-orange-200 disabled:cursor-not-allowed disabled:border-slate-800 disabled:text-slate-600"
+                  title={riskBounds ? "이 시각의 위험영역이 다 들어오게 카메라를 옮긴다" : "이 시각에는 위험영역이 없다"}
+                >
+                  ⤢ 위험영역으로
                 </button>
               </div>
               <div className="flex items-center gap-3 text-[11px] text-slate-400">

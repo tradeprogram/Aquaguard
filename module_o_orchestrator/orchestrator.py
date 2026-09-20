@@ -17,6 +17,7 @@ from .exposure_layers import (
     building_footprints,
     coverage_warning,
     farmland_parcels,
+    risk_cells,
     flood_depth_raster,
     resolve_aoi,
 )
@@ -208,8 +209,14 @@ def run(input: dict[str, Any]) -> dict[str, Any]:  # noqa: A002 - §4.2 규약�
         # 산청 농경지 전체를 들고 있으면 105MB라 908MB짜리 배포 서버에서 uvicorn이
         # OOM으로 죽었다(2026-09-20 dmesg 확인).
         risk_bounds = _risk_bounds_5179(risk_polygons)
-        buildings, buildings_warning = building_footprints(aoi, risk_bounds)
-        farmland, farmland_warning = farmland_parcels(aoi, risk_bounds)
+        # bbox 하나로는 거의 안 걸러진다 — 침수범위는 하천을 따라 길게, 산사태는
+        # 그 반대편 비탈에 있어서 둘을 감싸면 363km²(AOI 전체)가 된다. 실제 위험영역은
+        # 58km²뿐이라 격자로 걸러 Module D에 넘길 양을 6%로 줄인다(결과는 동일).
+        cells = risk_cells([
+            g for g in (p.get("geometry_5179") for p in risk_polygons) if isinstance(g, dict)
+        ])
+        buildings, buildings_warning = building_footprints(aoi, risk_bounds, cells)
+        farmland, farmland_warning = farmland_parcels(aoi, risk_bounds, cells)
         # 단, 목업 D는 입력을 무시하고 example.json의 출력(농경지 4.2ha 등)을 그대로
         # 돌려준다 — 그때 "레이어 미확보" 경고를 같이 내보내면 화면에 뜬 숫자와 어긋난다.
         # 이 경고는 그 레이어로 실제 계산이 일어날 때만 의미가 있다.
