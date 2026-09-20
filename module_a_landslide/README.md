@@ -65,7 +65,7 @@ FoS = ────────────────────────�
 
 ## 3. 구현·검증 상태
 
-**구현 완료** (`pytest module_a_landslide/tests/ -q` → **26 passed**):
+**구현 완료** (`pytest module_a_landslide/tests/ -q` → **37 passed**):
 - `fos.py` — FoS 물리, 산불 f(dNBR,Δt), FoS→확률 시그모이드, 몬테카를로 CI
 - `parameters.py` — 토양도 지반정수 룩업 + 강우→포화도 m
 - `envelope.py` — 계약 정규화 + §7 폴백(tier 1 InSAR / 2 지형 / 3 예보) + graceful degradation
@@ -107,6 +107,71 @@ FoS≈1.9**라 어떤 예보를 넣어도 임계에 도달하지 않는다. 즉 
 버그가 아니라 물리다. 예보 자체의 불확실성은 전파하지 않으며(tier 3 CI 확대는
 `run()`이 별도 처리), 지평은 LDAPS 운영범위에 맞춰 +48h로 제한한다.
 
+### 3-2. 토양격자 샘플러 (a-1) — 위험도가 안 나오던 원인
+
+계약 input에는 토성·토심이 없어서 `_soil` 이 주입되지 않으면 **전국 대표 폴백
+(식양질, c'=8.7kPa, z=0.75m)** 을 썼다. 그런데 이 조합은 **완전포화(m=1.0)에서도
+FoS≈1.9~2.2** 라 어떤 강우를 넣어도 `landslide_prob` 이 0.7을 못 넘는다.
+
+Module O는 `landslide_prob >= 0.7` 일 때만 하류 모듈(D/E/G)을 돌린다
+(`orchestrator.py` `LANDSLIDE_THRESHOLD`). 즉 **트리거가 영영 안 걸려서 노출·대피경로·
+피해액이 전부 비고, 3D 시뮬레이터에 넘길 위험 지오메트리도 없었다.** 발생부 좌표가
+없어서가 아니라 이것이 원인이었다.
+
+`soil_sampler.py` 가 좌표에서 산청 지반정수 격자를 샘플링해 `_soil` 을 자동으로 채운다.
+
+| 같은 좌표(x=1030226, y=1729619 · 경사 37.6° · dNBR 0.49) | `landslide_prob` | 트리거 |
+|---|---|---|
+| 전국 폴백(종전) | 0.015 | ❌ |
+| **격자 샘플링** | **0.798** | ✅ |
+
+격자(`data/sancheong_soil_grid_5m.npz`, 2.1MB)는 **5m 원해상도 그대로**다. 조합이
+33개뿐이라 uint8 인덱스 + 룩업으로 압축했고, rasterio 없이 numpy만으로 읽는다.
+25m로 줄였더니 최근접 리샘플이 고위험 포켓을 뭉개서(한 셀이 0.744→0.391) 되돌렸다.
+
+- **AOI 밖 좌표는 격자를 쓰지 않는다** — `None` 을 반환하고 종전 전국 폴백으로 되돌아간다.
+  다른 지역에서 조용히 산청 토양을 쓰지 않기 위해서다.
+- **dNBR은 격자에 넣지 않았다.** 산불 등급은 계약(`static.dnbr_class`)이 주는 값이고,
+  격자가 그걸 덮어쓰면 계약 밖 데이터로 결과가 바뀐다.
+
+### 3-3. 원시 지반정수 직접 주입
+
+`_soil` 에 토성 카테고리 대신 `c_kpa`·`phi_deg`·`gamma_kn_m3`·`z_m`·`m0` 을 직접 넣을 수
+있다. 격자는 픽셀별 실수값을 갖고 있어 8개 토성 카테고리로 되돌릴 이유가 없고,
+풍화화강토(c'2·φ36)처럼 토성표에 없는 재료도 그대로 쓸 수 있다.
+
+```python
+input["_soil"] = {"c_kpa": 2.0, "phi_deg": 36.0, "gamma_kn_m3": 19.0, "z_m": 1.0, "m0": 0.2}
+```
+
+우선순위: **원시 지반정수 → 토성 카테고리 → 격자 자동샘플링 → 전국 폴백**.
+
+### 3-4. 위험 폴리곤 시계열 (`data/risk_polygons/`)
+
+`risk_polygons[].geometry_5179` 가 비어 있어서 3D 시뮬레이터가 손으로 배치한 흐름
+경로를 쓰고 있었다(`MapExplorer.tsx` 주석). `scripts/45_risk_polygons_timeseries.py`
+가 산청 전역 5m 격자를 실측 강우로 구동해 그 지오메트리를 만든다.
+
+| 레이어 | 면적 | feature |
+|---|---|---|
+| `A_soilmap` critical (P≥0.7) | 0.010 km² | 2 |
+| `A_soilmap` warning (P≥0.5) | 0.238 km² | 4 |
+| `B_weathered` critical | 0.940 km² | 7 |
+| `B_weathered` warning | 5.006 km² | 8 |
+
+각 feature에 **`arrival_hour`(임계 첫 도달 시각)** 이 붙어 있어서, UI는 이 값으로
+필터링하면 시간에 따라 위험이 번지는 애니메이션이 된다. B_weathered critical 기준
+07-19 08:00 5.2ha → **09:00 43.9ha** 로 급증하며, 백테스트 `T_agent` 09:00과 일치한다.
+
+> **A_soilmap 이 Module A(`soil_sampler`)와 정합하는 기본값**이고, `B_weathered` 는
+> 급사면 파괴재료 가정 시나리오다. 면적이 100배 차이 나므로 **섞어 쓰면 안 된다.**
+> 계산은 프레임마다 벡터화하지 않고, 픽셀별 '첫 도달 시각' 래스터를 한 번만 만들어
+> 벡터화한다(FoS가 습윤도에 선형이라 가능 — 스크립트 docstring 참조).
+
+**한계**: Rsat·Wmax·시그모이드 k는 미보정이고, 발생부 참값이 없어 이 폴리곤의
+**공간정확도는 검증되지 않았다.** `arrival_hour` 는 "그 시각에 임계를 처음 넘었다"이지
+"그 시각에 붕괴했다"가 아니다.
+
 **정직성**: 계약 input에는 토성·토심이 없다 → Module A가 좌표에서 토양도를 샘플링해야 함.
 전국 토양도 shapefile은 대용량이라 미커밋 → 부지 미샘플 시 전국 대표 폴백값 사용 +
 `warnings`·`fallback_tier`로 명시(module_c의 PLACEHOLDER 정직성과 동일).
@@ -117,7 +182,7 @@ FoS≈1.9**라 어떤 예보를 넣어도 임계에 도달하지 않는다. 즉 
 
 | 단계 | 작업 | 의존(필요 데이터) |
 |---|---|---|
-| A-1 | 정밀토양도 샘플러 연결(좌표→토성·토심·배수) | 디스크 토양도(확보) — 산청/안동 클립 |
+| ✅ A-1 | 정밀토양도 샘플러 연결(좌표→지반정수) | **완료** — `soil_sampler.py` + 5m 격자 (§3-2) |
 | A-2 | 5m DEM으로 slope·TWI·curvature 정밀화 | 국토정보플랫폼 DEM(키 필요) |
 | A-3 | 강우→포화도 m 계수 실측 보정 | 기상청 AWS·토양수분(일부 확보) |
 | ✅ A-4 | LDAPS 예보 연동 → `hours_to_critical` | **완료** — `forecast.py` (§3-1) |
@@ -138,11 +203,14 @@ module_a_landslide/
   envelope.py       계약 정규화 + 공통 봉투 + 폴백 계층
   fos.py            무한사면 FoS + 산불계수 + 확률 + 몬테카를로 CI
   forecast.py       예보 시간강우 → hours_to_critical 전진적분 (a-htc)
+  soil_sampler.py   좌표 → 부지 지반정수 (a-1, numpy만 사용)
   parameters.py     정밀토양도 → 지반정수 룩업 로더
   data/             문헌 출처 지반정수(가상값 없음) + 토양 코드사전
+    sancheong_soil_grid_5m.npz  산청 지반정수 격자 5m (2.1MB, 33조합 인덱스+룩업)
+    risk_polygons/    위험 폴리곤 시계열 GeoJSON(EPSG:5179) + index
     validation_andong/  안동 사전검증 산출물(방법론 검증 — 산청 참값 확보 전 단계)
   scripts/          데이터 준비·검증 파이프라인 01~15 (아래 §5-1)
-  tests/            계약 6 + 물리 9 + 예보 11 = 26 passed
+  tests/            계약 6 + 물리 9 + 예보 11 + 토양/격자 11 = 37 passed
   README.md         이 문서
   DATA_SOURCES.md   출처·이중검증·라이선스
 ```
@@ -167,6 +235,7 @@ Sentinel 원본)는 저장소에 없으므로 각 스크립트 상단의 경로�
 | `12_sentinel1_acquire` | Sentinel-1 GRD 취득 |
 | `13_clip_dem_5m` · `14_sancheong_slope` | 산청 DEM 클립 → 경사 |
 | `15_sancheong_soil_grid` | 산청 지반정수 격자(`c_kpa`·`phi_deg`·`gamma`·`z_m`·`m0`) |
+| `45_risk_polygons_timeseries` | 위험 폴리곤 시계열 GeoJSON 생성 (§3-4) |
 
 **API 키는 전부 `.env`에서 읽는다 — 소스에 박지 말 것.**
 
