@@ -113,7 +113,7 @@ export default function WhatifPanel() {
           disabled={loading}
           className="mt-4 w-full rounded-lg bg-sky-600 py-2 text-xs font-medium text-white hover:bg-sky-500 disabled:opacity-50"
         >
-          {loading ? (slow ? "서버 깨우는 중… (최대 1분)" : "기준 시나리오와 나란히 재계산 중…") : "기준 대비 재계산"}
+          {loading ? (slow ? "재계산이 늦어지고 있어요…" : "기준 시나리오와 나란히 재계산 중…") : "기준 대비 재계산"}
         </button>
       </div>
 

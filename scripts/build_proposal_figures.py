@@ -12,6 +12,11 @@ from __future__ import annotations
 import json
 import os
 import sys
+
+# 윈도우 콘솔이 cp949면 캡션의 —·… 에서 그냥 죽는다. 출력만 UTF-8로 돌린다.
+for _stream in (sys.stdout, sys.stderr):
+    if hasattr(_stream, "reconfigure"):
+        _stream.reconfigure(encoding="utf-8", errors="replace")
 from pathlib import Path
 
 import matplotlib
@@ -45,28 +50,33 @@ VIOLET = "#7c3aed"
 # MEASURED — 저장소에서 실제로 측정한 값. 각 행에 측정 방법을 적는다.
 # ---------------------------------------------------------------------------
 MEASURED = {
-    # python -m pytest <pkg> -q --collect-only (2026-09-20)
-    "tests": {"A": 26, "B": 15, "C": 187, "D": 55, "E": 0,
-              "G": 90, "H": 85, "O": 16, "V": 17},
-    # find <pkg> -name '*.py' -not -path '*/tests/*' -not -path '*/scripts/*' | xargs cat | wc -l
-    "lines": {"A": 601, "B": 369, "C": 598, "D": 849, "E": 524,
-              "G": 459, "H": 703, "O": 728, "V": 322},
+    # python -m pytest <pkg> -q --collect-only (2026-09-21)
+    "tests": {"A": 46, "B": 15, "C": 187, "D": 55, "E": 9,
+              "G": 90, "H": 85, "O": 24, "V": 17},
+    # 각 패키지의 .py 줄수, tests/·scripts/ 제외 (2026-09-21)
+    "lines": {"A": 920, "B": 419, "C": 602, "D": 855, "E": 751,
+              "G": 463, "H": 708, "O": 1566, "V": 326},
     # 재현 파이프라인 스크립트(계약 밖) — A·B·V만 보유
-    "script_lines": {"A": 1157, "B": 1476, "V": 451},
-    # python -c "len(json.load(...)['features'])"
+    "script_lines": {"A": 1413, "B": 1495, "V": 457},
+    # 커밋된 AOI 클립본의 feature 수 (2026-09-21)
+    #
+    # 산청은 2026-09-21에 "경보지점 반경 12km"에서 **산청군 ∪ 반경 12km**로 넓혔다.
+    # 반경만 쓰면 군의 24%(190/790km²)밖에 못 덮어 고립마을·대피소를 군 전체로
+    # 돌릴 수 없고, 행정경계만 쓰면 데모 좌표가 군 동쪽 경계에서 5.4km라 위험영역이
+    # 함양·진주 쪽으로 12% 샌다. 그래서 합집합이다.
     "aoi": {
-        "산청 건물": 18032,
-        "산청 농경지": 23288,
+        "산청 건물": 51040,
+        "산청 농경지": 72875,
         "강남·서초 건물": 41814,
     },
-    # module_d explain(): use_type_join
+    # module_d explain(): use_type_join — 위험영역에 걸린 건물 기준
     "use_type_join": {
-        "산청": {"조인성공": 11372, "미상": 6660, "pct": 63.1},
+        "산청": {"조인성공": 5281, "미상": 2161, "pct": 71.0},
         "강남·서초": {"조인성공": 36050, "미상": 5764, "pct": 86.2},
     },
-    "git_commits": 128,
-    "ui_lines": 3956,
-    "api_lines": 785,
+    "git_commits": 199,
+    "ui_lines": 5740,
+    "api_lines": 1222,
 }
 
 
@@ -81,17 +91,35 @@ def _alert_envelope() -> dict:
 
 
 def _downstream() -> tuple[dict, dict]:
-    """D·G의 산출 능력을 별도로 계산한다.
+    """D·G의 산출을 커밋된 경보 스냅샷에서 읽는다.
 
-    트랙①의 실모듈이 붙은 뒤로 데모 입력은 운영 임계(0.7)를 넘지 못한다 — 부지
-    토양이 주입되지 않아 Module A가 tier 2 폴백으로 내려가기 때문이다. 그래서
-    파이프라인을 통과시켜 얻은 값이 아니라, **위험영역을 명시적으로 주었을 때**
-    D·G가 내는 값으로 제시한다. 입력은 contracts/module_a.example.json이 문서화한
-    위험 폴리곤(데모 AOI 내 2km×2km)이며, 그림 설명에 그대로 적는다.
+    스냅샷(ui/public/demo/envelope.json)은 산청군 전역 AOI로 실제 파이프라인을
+    통과시킨 결과이고, UI가 화면에 띄우는 값과 같은 값이다. 그림과 본문 표가
+    화면과 어긋나지 않으려면 같은 출처를 써야 한다.
+
+    스냅샷이 없으면 contracts/module_a.example.json의 위험 폴리곤으로 D·G만
+    직접 돌린다. 이 경로는 위험영역이 2km×2km 예시라 값이 훨씬 작으며,
+    그림 설명에 어떤 경로였는지 그대로 적는다.
     """
     sys.path.insert(0, str(REPO))
-    import module_d_exposure_overlay as D  # noqa: PLC0415
     import module_g_damage_cost as G  # noqa: PLC0415
+
+    snapshot = REPO / "ui" / "public" / "demo" / "envelope.json"
+    if snapshot.exists():
+        pkg = json.loads(snapshot.read_text("utf-8"))["data"]["alert_package"]
+        exposure = pkg["exposure"]
+        g_input = {
+            "exposed_buildings": exposure["exposed_buildings"],
+            "exposed_farmland_ha": exposure["exposed_farmland_ha"],
+            "unit_cost_table_ref": "module_g_v1",
+        }
+        g_env = G.run(g_input)
+        g_explain = G.explain(g_input)
+        d_env = {"data": exposure}
+        return ({"d": d_env, "g": g_env},
+                {"d": {"source": "snapshot"}, "g": g_explain, "source": "snapshot"})
+
+    import module_d_exposure_overlay as D  # noqa: PLC0415
     from module_o_orchestrator.exposure_layers import (  # noqa: PLC0415
         building_footprints, farmland_parcels, resolve_aoi,
     )
@@ -121,7 +149,8 @@ def _downstream() -> tuple[dict, dict]:
     }
     g_env = G.run(g_input)
     g_explain = G.explain(g_input)
-    return {"d": d_env, "g": g_env}, {"d": d_explain, "g": g_explain}
+    return ({"d": d_env, "g": g_env},
+            {"d": d_explain, "g": g_explain, "source": "contract_example"})
 
 
 ENV = _alert_envelope()
@@ -492,12 +521,11 @@ def fig_exposure_mix():
     ax2.set_axisbelow(True)
     ax2.set_title("피해비용 구성 — 고시 단가 기반", fontsize=10, fontweight="bold", pad=10)
 
-    fig.suptitle("위험영역이 주어졌을 때 D·G가 산출하는 값 — 커밋된 실데이터로 실제 실행",
+    fig.suptitle("산청군 전역 경보 스냅샷에서 D·G가 산출한 값 — UI가 화면에 띄우는 값과 동일",
                  fontsize=11, fontweight="bold", y=1.02)
     save(fig, "fig06_exposure_and_cost",
-         "노출자산 용도별 구성과 피해비용 — 입력은 contracts/module_a.example.json이 "
-         "문서화한 위험 폴리곤(데모 AOI 내 2km×2km)이며, 실모델 A가 이 영역을 "
-         "산출했다는 뜻이 아니다")
+         "노출자산 용도별 구성과 피해비용 — 2025-07 산청 재현 실행의 위험영역을 "
+         "건축물·농경지와 교차한 결과이며, 단가는 국토부·농식품부 고시값이다")
 
 
 # ---------------------------------------------------------------------------

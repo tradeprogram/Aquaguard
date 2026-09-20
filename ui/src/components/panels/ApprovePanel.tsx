@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { SANGCHEONG_DEMO_INPUT, approveAlert, getAlert } from "@/lib/api";
+import { registerScenario, scenarioRan, whenRegistered } from "@/lib/alertSession";
+import { diagnoseFailure } from "@/lib/backendDiagnosis";
 import type { ModuleOEnvelope } from "@/lib/types";
 import { useSlowLoading } from "@/lib/useSlowLoading";
 import ProvenanceBadge from "@/components/ProvenanceBadge";
@@ -32,11 +34,26 @@ export default function ApprovePanel({ alertId = SANGCHEONG_DEMO_INPUT.alert_id 
     async (isInitial = false) => {
       if (isInitial) start();
       try {
+        // 화면은 저장본으로 뜨고 서버 등록은 뒤에서 돈다(lib/alertSession.ts).
+        // 그 등록이 끝나기 전에 조회하면 404가 나서, 방금 시나리오를 돌린 사용자에게
+        // "먼저 시나리오를 실행하세요"를 띄우게 된다 — 기다렸다가 묻는다.
+        await whenRegistered();
         const result = await getAlert(alertId);
         setEnvelope(result);
         setError(null);
       } catch {
-        setError("이 alert_id의 경보를 찾을 수 없습니다 — 대시보드에서 먼저 시나리오를 실행하세요.");
+        if (!scenarioRan()) {
+          setError("아직 실행된 경보가 없습니다 — 대시보드에서 «위험 현황»을 먼저 실행하세요.");
+        } else {
+          // 시나리오는 돌았는데 서버가 이 경보를 모른다 = 등록이 실패했다는 뜻이다.
+          // 한 번 더 시도해 보고, 그래도 안 되면 무엇이 문제인지 실제로 확인해 알린다.
+          const registered = await registerScenario(SANGCHEONG_DEMO_INPUT);
+          if (registered) {
+            setError(null);
+          } else {
+            setError(await diagnoseFailure("경보 조회", "/alerts/{alert_id}"));
+          }
+        }
       } finally {
         if (isInitial) {
           stop();
@@ -88,7 +105,7 @@ export default function ApprovePanel({ alertId = SANGCHEONG_DEMO_INPUT.alert_id 
 
       {initialLoading && (
         <div className="rounded-xl border border-dashed border-white/10 p-8 text-center text-xs text-slate-500">
-          {slow ? "서버 깨우는 중… (최대 1분, 무료 호스팅이라 오래 쉬면 느려요)" : "불러오는 중…"}
+          {slow ? "서버 응답이 늦어지고 있어요…" : "불러오는 중…"}
         </div>
       )}
 
@@ -166,14 +183,14 @@ export default function ApprovePanel({ alertId = SANGCHEONG_DEMO_INPUT.alert_id 
               disabled={!pending || submitting}
               className="flex-1 rounded-lg bg-emerald-600 py-2.5 text-sm font-semibold text-white hover:bg-emerald-500 disabled:opacity-40"
             >
-              {submitting && slow ? "서버 깨우는 중…" : "승인"}
+              {submitting && slow ? "전송 중…" : "승인"}
             </button>
             <button
               onClick={() => decide("거부")}
               disabled={!pending || submitting}
               className="flex-1 rounded-lg bg-red-700 py-2.5 text-sm font-semibold text-white hover:bg-red-600 disabled:opacity-40"
             >
-              {submitting && slow ? "서버 깨우는 중…" : "거부"}
+              {submitting && slow ? "전송 중…" : "거부"}
             </button>
           </div>
         </>

@@ -879,21 +879,26 @@ def _rule_based_chat_reply(message: str) -> str:
         )
     if "대피소" in text or "대피" in text:
         return (
-            "지금은 사전 등록된 대피소 후보를 기준으로 안내하고 있어요. "
-            "차량/도보 이동시간까지 계산해주는 길찾기 연동은 아직 준비 중이에요."
+            "'대피소 찾기' 메뉴에서 현재 위치 기준으로 대피소를 찾고, 실제 도로를 따라가는 "
+            "경로와 차량·도보 소요시간을 확인할 수 있어요. 직선거리 근사가 아니라 "
+            "도로 경로예요."
         )
     if "산사태" in text or "토사" in text:
         return (
-            "3D 지도의 '토사 깊이' 슬라이더로 토사 유실 예상 범위를 확인할 수 있어요. "
-            "다만 실제 예측 모델(Module A/B) 연동 전 what-if 값이에요."
+            "산사태 위험영역은 무한사면 안전율(Module A)로 계산해 지도에 표시해요. "
+            "주황이 대응을 시작하는 기준(확률 0.5 이상), 그 안의 빨강이 0.7 이상이에요."
         )
     if "침수" in text or "홍수" in text:
         return (
-            "3D 지도의 '침수 수위' 슬라이더로 침수 예상 범위를 확인할 수 있어요. "
-            "마찬가지로 실제 예측 모델 연동 전 what-if 값이에요."
+            "침수 범위는 하천범람 모형(Module B)이 계산한 침수심이에요. 지도에서 얕은 곳은 "
+            "남색, 깊은 물길로 갈수록 노랑으로 표시되고, 아래 시간축을 옮기면 시각별로 "
+            "어떻게 번지는지 볼 수 있어요."
         )
     if "고립" in text:
-        return "그래프 연결성 분석 기반 고립마을 자동탐지 기능은 아직 개발 중이에요."
+        return (
+            "'고립마을 위험' 메뉴에서 볼 수 있어요. 침수로 끊긴 도로를 도로망에서 빼고 나서 "
+            "어느 대피소로도 경로가 남지 않는 건물 군집을 찾아 지도에 표시해요."
+        )
     if "승인" in text:
         return "'원클릭 승인' 메뉴에서 escalation 대기 중인 경보를 확인하고 승인/거부할 수 있어요."
     return (
@@ -936,17 +941,37 @@ def _format_alert_context(alert_id: str) -> str | None:
 
     필드 의미는 §5 Module O 계약(ARCHITECTURE.md) 그대로 — 여기서 새 숫자를
     계산하지 않고 이미 계산된 값만 옮겨 적는다(위 시스템 프롬프트 원칙과 동일).
+
+    경보 저장소에 없으면 **사전계산 저장본**을 본다. 화면은 스냅샷을 자기 오리진에서
+    읽어 띄우기 때문에(브라우저 동시연결 제한 회피), 사용자가 위험현황을 방금 돌렸는데도
+    서버의 alert_store는 비어 있을 수 있다. 그 상태에서 컨텍스트를 None으로 내리면
+    챗봇이 시스템 프롬프트대로 "시나리오를 먼저 실행하세요"라고 답한다 — 방금 돌린
+    사용자에게는 명백히 틀린 말이다(2026-09-21 실측).
     """
     alert = alert_store.get(alert_id)
-    if alert is None:
+    envelope = alert.envelope if alert is not None else None
+    if envelope is None:
+        snapshot = _demo_snapshot()
+        if snapshot and snapshot.get("alert_id") == alert_id:
+            envelope = snapshot.get("envelope")
+    if envelope is None:
         return None
-    data = alert.envelope.get("data", {})
+    data = envelope.get("data", {})
     package = data.get("alert_package", {})
     landslide = package.get("landslide", {})
     flood = package.get("flood", {})
     shelter = package.get("shelter_route", {})
     citizen = data.get("citizen_verification", {})
-    mock_note = "(현재 목업/example 데이터 — 트랙①②④ 실제 모델 연동 전)" if os.environ.get("AQUAGUARD_MOCK_MODE", "1") != "0" else ""
+
+    # 어느 모듈이 실물이고 어느 것이 예시값인지는 환경변수가 아니라 봉투가 안다.
+    # 예전에는 AQUAGUARD_MOCK_MODE 기본값 때문에, 전 모듈이 실물인데도 챗봇이
+    # "현재 목업 데이터"라고 말하고 있었다.
+    sources = (envelope.get("meta") or {}).get("module_sources") or {}
+    example_modules = sorted(k.upper() for k, v in sources.items() if v != "real")
+    if example_modules:
+        mock_note = f"(Module {', '.join(example_modules)}는 예시값 — 실제 관측이 아님)"
+    else:
+        mock_note = ""
 
     lines = [f"alert_id: {alert_id} {mock_note}".strip()]
     if "golden_time_saved_min" in data:
@@ -966,8 +991,21 @@ def _format_alert_context(alert_id: str) -> str | None:
             f"대피 경로(Module E, MODEL): {'시간 내 도달 가능' if shelter['time_feasible'] else '시간 부족'}"
             + (f", 여유 {margin:.0f}분" if margin is not None else "")
         )
-    approval = alert.resolve_status()
-    lines.append(f"승인 상태: {approval}" + (f" (escalation {alert.escalation_level}차)" if alert.escalation_level else ""))
+    if envelope.get("status") and envelope["status"] != "ok":
+        lines.append(f"실행 상태: {envelope['status']} (fallback_tier {envelope.get('fallback_tier')})")
+    for warning in (envelope.get("warnings") or [])[:4]:
+        lines.append(f"주의: {warning}")
+
+    if alert is not None:
+        approval = alert.resolve_status()
+        lines.append(
+            f"승인 상태: {approval}"
+            + (f" (escalation {alert.escalation_level}차)" if alert.escalation_level else "")
+        )
+    else:
+        # 저장본으로 답하는 경우다. 승인 상태는 서버가 경보를 등록해야 생기는 값이라
+        # 여기서 지어내지 않는다 — 모르는 것은 모른다고 적는다.
+        lines.append("승인 상태: 아직 이 서버에 등록되지 않음(원클릭 승인 화면에서 등록됨)")
     return "\n".join(lines)
 
 
@@ -1212,10 +1250,13 @@ def health() -> dict:
     프론트가 "백엔드가 낡았다"와 "백엔드가 죽었다"를 구분해 안내할 수 있어야 해서
     commit과 routes를 함께 준다.
     """
+    sources = module_sources()
     return {
         "status": "ok",
         "commit": _deployed_commit(),
         "routes": sorted({r.path for r in app.routes if hasattr(r, "path")}),
-        "module_sources": module_sources(),
-        "mock_mode": os.environ.get("AQUAGUARD_MOCK_MODE", "1") != "0",
+        "module_sources": sources,
+        # 환경변수가 아니라 실제로 적재된 모듈에서 답한다 — AQUAGUARD_MOCK_MODE는
+        # 기본값이 "1"이라, 전 모듈이 실물인데도 목업이라고 보고하고 있었다.
+        "mock_mode": any(v != "real" for v in sources.values()),
     }

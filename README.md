@@ -88,6 +88,7 @@ flowchart LR
         SNAP["사전계산 스냅샷<br/>build_demo_snapshot.py"]
         UI["Next.js 대시보드<br/>위험현황 · 대피소 · 고립마을"]
         MAP["MapLibre 3D 지도<br/>시간축 스크러버<br/>침수 등고선 · 위험영역"]
+        BOT["AI 상담 챗봇<br/>Gemini · 경보 패키지만 인용"]
     end
 
     RAIN --> A & B & C
@@ -103,7 +104,7 @@ flowchart LR
     D -- "노출 건물·농경지" --> G
     A & B & C & D & E & G & H --> O
     O --> ENV --> API
-    API --> UI & MAP
+    API --> UI & MAP & BOT
     SNAP -. "고정 입력은 미리 계산" .-> UI & MAP
     V -. "정확도 지표" .-> UI
 
@@ -114,7 +115,7 @@ flowchart LR
     class RAIN,TERR,SAT,VEC src
     class A,B,V,C,D,E,G,H mod
     class O,ENV orc
-    class API,SNAP,UI,MAP out
+    class API,SNAP,UI,MAP,BOT out
 ```
 
 ### 모듈이 하는 일

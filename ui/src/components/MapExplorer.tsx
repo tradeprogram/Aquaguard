@@ -1940,7 +1940,7 @@ export default function MapExplorer({
                 />
                 {searching && (
                   <span className="absolute right-2 top-1.5 text-xs text-slate-500">
-                    {searchSlow.slow ? "서버 깨우는 중…" : "검색 중…"}
+                    {searchSlow.slow ? "응답이 늦어지는 중…" : "검색 중…"}
                   </span>
                 )}
                 {searchResults.length > 0 && (
@@ -2305,7 +2305,7 @@ export default function MapExplorer({
               그 시각에 관측된 피해 범위가 아닙니다. 실측은 강우뿐이고(막대·누적), 모형은 그
               강우를 받아 돌아갑니다 — 2025.7.19 산청 사례를 실제 강우로 재현한 것이라
               사후 재현(hindcast)이며 실시간 예보 성능과는 다릅니다.
-              {" "}트랙① 위험영역 {timeline.scenario} {timeline.level}.{" "}
+              {" "}위험영역 시나리오 {timeline.scenario} {timeline.level}.{" "}
               {floodSeries?.available
                 ? "침수는 SFINCS 최대침수심에 같은 모의의 하천 수위 시계열을 적용한 준정적 근사입니다."
                 : "침수는 시간축이 없어 최대 범위로 고정됩니다."}

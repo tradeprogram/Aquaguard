@@ -338,3 +338,52 @@ def test_snapshot_route_is_a_real_road_route(snapshot: dict) -> None:
             f"{name} 모드가 직선 근사다 — 직선은 강을 건너고 능선을 넘는 선이라 "
             f"시간이 늘 짧게 나오고, 대피 가능 시간을 실제보다 낙관적으로 보이게 한다"
         )
+
+
+def test_chat_context_falls_back_to_the_snapshot() -> None:
+    """경보가 저장소에 없어도 챗봇은 맥락을 알아야 한다.
+
+    화면은 저장본을 자기 오리진에서 읽어 띄우므로(브라우저 동시연결 제한 회피),
+    사용자가 위험현황을 방금 돌렸는데도 서버의 alert_store는 비어 있을 수 있다.
+    그때 컨텍스트를 None으로 내리면 챗봇이 시스템 프롬프트대로 "시나리오를 먼저
+    실행하세요"라고 답한다 — 방금 돌린 사람에게는 틀린 말이다(2026-09-21 실측).
+    """
+    import api_server
+
+    api_server.alert_store._alerts.clear()  # 재시작 직후 상태
+
+    with open(SNAPSHOT_PATH, encoding="utf-8") as f:
+        alert_id = json.load(f)["alert_id"]
+
+    context = api_server._format_alert_context(alert_id)
+    assert context is not None, "저장본이 있는 경보인데 맥락 없이 답하게 두면 안 된다"
+    assert "산사태 위험확률" in context
+    assert "하천범람 위험확률" in context
+    # 승인 상태는 서버가 경보를 등록해야 생기는 값이라 지어내면 안 된다
+    assert "등록되지 않음" in context
+
+    # 저장본에 없는 경보는 여전히 맥락 없음 — 아무 id나 물으면 산청 값을 주면 안 된다
+    assert api_server._format_alert_context("NO-SUCH-ALERT") is None
+
+
+def test_chat_context_does_not_claim_mock_when_modules_are_real() -> None:
+    """전 모듈이 실물인데 "목업 데이터"라고 말하면 안 된다.
+
+    예전에는 AQUAGUARD_MOCK_MODE 환경변수(기본값 "1")로 판단해서, 실모듈이 다 붙은
+    뒤에도 챗봇이 "현재 목업/example 데이터"라고 답하고 있었다. 판단 근거는 환경변수가
+    아니라 봉투의 meta.module_sources다.
+    """
+    import api_server
+
+    api_server.alert_store._alerts.clear()
+
+    with open(SNAPSHOT_PATH, encoding="utf-8") as f:
+        snap = json.load(f)
+    sources = (snap["envelope"].get("meta") or {}).get("module_sources") or {}
+    assert sources, "저장본에 module_sources가 없으면 이 판단 자체를 못 한다"
+
+    context = api_server._format_alert_context(snap["alert_id"])
+    if all(v == "real" for v in sources.values()):
+        assert "목업" not in context and "예시값" not in context
+    else:
+        assert "예시값" in context

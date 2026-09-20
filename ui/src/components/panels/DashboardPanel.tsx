@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { SANGCHEONG_DEMO_INPUT, getDemoEnvelope, triggerAlert } from "@/lib/api";
+import { markScenarioRegistered, registerScenario } from "@/lib/alertSession";
 import { diagnoseFailure } from "@/lib/backendDiagnosis";
 import type { ModuleOEnvelope } from "@/lib/types";
 import { useSlowLoading } from "@/lib/useSlowLoading";
@@ -88,7 +89,18 @@ export default function DashboardPanel({
       // 부르는 동안 이 요청이 그 줄 뒤에 서면 서버가 0.013초에 답해도 화면에서는
       // 수십~수백 초가 된다(2026-09-21 실측). 오리진이 다르면 그 줄을 안 탄다.
       const startedAt = Date.now();
-      const result = (!forceLive && (await getDemoEnvelope())) || (await triggerAlert(SANGCHEONG_DEMO_INPUT));
+      const cached = forceLive ? null : await getDemoEnvelope();
+      let result: ModuleOEnvelope;
+      if (cached) {
+        result = cached;
+        // 화면은 저장본으로 즉시 뜨지만, 원클릭 승인은 서버가 이 경보를 알아야 동작한다
+        // (승인은 상태를 바꾸는 일이라 서버의 몫이다). 등록은 뒤에서 돌게 두고 기다리지
+        // 않는다 — 기다리면 저장본을 쓰는 의미가 없어진다.
+        void registerScenario(SANGCHEONG_DEMO_INPUT);
+      } else {
+        result = await triggerAlert(SANGCHEONG_DEMO_INPUT);
+        markScenarioRegistered();
+      }
       const remaining = MIN_PROGRESS_SEC * 1000 - (Date.now() - startedAt);
       if (remaining > 0) await new Promise((r) => setTimeout(r, remaining));
       setEnvelope(result);

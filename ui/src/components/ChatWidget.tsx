@@ -2,6 +2,8 @@
 
 import { useEffect, useRef, useState } from "react";
 import { SANGCHEONG_DEMO_INPUT, sendChatMessage } from "@/lib/api";
+import { whenRegistered } from "@/lib/alertSession";
+import { diagnoseFailure } from "@/lib/backendDiagnosis";
 import { useSlowLoading } from "@/lib/useSlowLoading";
 
 interface ChatMessage {
@@ -73,15 +75,25 @@ export default function ChatWidget() {
     setSending(true);
     start();
     try {
-      // 이 데모는 산청 시나리오 하나만 다루므로, 대시보드/승인 패널에서 이미 실행됐을
-      // 수 있는 그 alert_id를 그대로 컨텍스트로 넘긴다 — 아직 시나리오를 안 돌렸다면
-      // 백엔드에서 alert_store에 없는 id로 조회돼 조용히 무시되고 일반 답변만 온다.
+      // 산청 시나리오 하나만 다루므로 그 alert_id를 그대로 컨텍스트로 넘긴다.
+      //
+      // 위험현황을 방금 돌렸다면 화면은 저장본으로 떴고 서버 등록은 뒤에서 돌고 있다
+      // (lib/alertSession.ts). 그게 끝나기 전에 물으면 서버가 그 경보를 모르는 상태라
+      // "시나리오를 먼저 실행하세요"라고 답해버린다 — 방금 돌린 사람에게는 틀린 말이다.
+      // 그래서 등록이 끝나길 기다렸다가 보낸다(아직 안 돌렸으면 기다리지 않는다).
+      //
+      // 등록이 실패해도 질문은 그대로 보낸다 — 서버가 저장본을 직접 읽어 컨텍스트를
+      // 만들 수 있으므로(api_server._format_alert_context), 답이 맥락 없이 나가지 않는다.
+      await whenRegistered();
       // 인사말은 실제 대화 턴이 아니므로 히스토리에서 제외한다.
       const history = messages.slice(1);
       const reply = await sendChatMessage(text, SANGCHEONG_DEMO_INPUT.alert_id, history);
       playTyping(reply);
     } catch {
-      playTyping("죄송해요, 지금은 응답을 가져올 수 없어요. 서버가 켜져 있는지 확인해주세요.");
+      // 문구를 고정해두면 진단이 헛돈다. 예전엔 무조건 "서버가 켜져 있는지 확인해주세요"
+      // 였는데, 서버가 멀쩡히 살아 있고 배포만 뒤처졌을 때도 같은 말을 해서 원인 파악이
+      // 늦어졌다. 다른 패널들처럼 /health를 실제로 찔러 구분한다.
+      playTyping(await diagnoseFailure("AI 상담", "/chat"));
     } finally {
       stop();
       setSending(false);
@@ -127,7 +139,7 @@ export default function ChatWidget() {
             {sending && !typing && (
               <div className="flex justify-start">
                 <div className="max-w-[85%] rounded-lg border border-white/10 bg-white/10 px-3 py-2 text-sm text-slate-400 backdrop-blur-sm">
-                  {slow ? "서버 깨우는 중… (최대 1분)" : "···"}
+                  {slow ? "답변 생성 중…" : "···"}
                 </div>
               </div>
             )}

@@ -4,16 +4,42 @@
     {
       "name": "aquaguard-ui",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "dev", "--prefix", "ui"],
+      "runtimeArgs": [
+        "run",
+        "dev",
+        "--prefix",
+        "ui"
+      ],
       "port": 3000,
       "autoPort": true
     },
     {
       "name": "aquaguard-ui-deployed-api",
       "runtimeExecutable": "npx",
-      "runtimeArgs": ["--yes", "cross-env", "NEXT_PUBLIC_API_BASE=https://15-164-210-176.sslip.io", "npm", "run", "dev", "--prefix", "ui"],
+      "runtimeArgs": [
+        "--yes",
+        "cross-env",
+        "NEXT_PUBLIC_API_BASE=https://15-164-210-176.sslip.io",
+        "npm",
+        "run",
+        "dev",
+        "--prefix",
+        "ui"
+      ],
       "port": 3000,
       "autoPort": true
+    },
+    {
+      "name": "aquaguard-api",
+      "runtimeExecutable": "python",
+      "runtimeArgs": [
+        "-m",
+        "uvicorn",
+        "api_server:app",
+        "--port",
+        "8011"
+      ],
+      "port": 8011
     }
   ]
 }
