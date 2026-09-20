@@ -2,7 +2,7 @@
 AOI 건물의 주용도(건축물대장 표제부)를 받아 bd_mgt_sn -> 주용도 매핑으로 저장하는
 1회성 배치 스크립트.
 
-왜 필요한가 (policies/use_type_vocabulary.json, TRACK2_CONTRACT_AGENDA.md 6번):
+왜 필요한가 (policies/use_type_vocabulary.json, 계약 합의 항목 6번):
 아쿠아가드가 쓰는 VWorld LT_C_SPBD(건물통합정보) 레이어에는 용도 속성이 아예 없다.
 2026-09-04 실측으로 산청 57,681건·서울 652,026건 전부(709,707건) Module D에서 '미상'으로
 분류되는 것을 확인했다. 그래서 Module D의 use_type은 어휘를 고쳐서가 아니라 주용도를

@@ -1,4 +1,4 @@
-# module_a_landslide — 산사태 예측 (트랙① / 김민석)
+# module_a_landslide — 산사태 예측 (트랙①)
 
 ARCHITECTURE.md §5 Module A 구현. **Infinite Slope 안전율(FoS)을 먼저 계산하고
 `landslide_prob`은 그 FoS를 변환한 값** — 순수 ML 확률모델이 아니다(§5 방법론 확정
@@ -70,7 +70,7 @@ FoS = ────────────────────────�
 - `parameters.py` — 토양도 지반정수 룩업 + 강우→포화도 m
 - `envelope.py` — 계약 정규화 + §7 폴백(tier 1 InSAR / 2 지형 / 3 예보) + graceful degradation
 - `forecast.py` — **LDAPS 예보 시간강우 → `hours_to_critical` 전진적분** (아래 3-1)
-- `__init__.py` — `run(input)->dict`(§4.2 공통 봉투) + `explain()`(§6.1 Provenance)
+- `__init__.py` — `run(input)->dict`(§4.2 공통 봉투) + `explain`(§6.1 Provenance)
 
 **물리 검증** (산청 2025-07-19 조건: 경사 32.5°, dNBR high, 187mm/24h):
 - 사질 풍화토 주입 → **FoS 0.637 (<1) → landslide_prob 0.898, CI[0.81,0.94]** (고위험, 물리 정상)
@@ -105,7 +105,7 @@ input["_forecast"] = {"source": "LDAPS", "rain_1h_mm": [5, 8, 12, 20, 30, ...]}
 FoS≈1.9**라 어떤 예보를 넣어도 임계에 도달하지 않는다. 즉 이 기능은 부지 토양이
 조립질(사질·역질·사력질)로 주입될 때만 값을 낸다 — 폴백 상태에서 null이 나오는 것은
 버그가 아니라 물리다. 예보 자체의 불확실성은 전파하지 않으며(tier 3 CI 확대는
-`run()`이 별도 처리), 지평은 LDAPS 운영범위에 맞춰 +48h로 제한한다.
+`run`이 별도 처리), 지평은 LDAPS 운영범위에 맞춰 +48h로 제한한다.
 
 ### 3-2. 토양격자 샘플러 (a-1) — 위험도가 안 나오던 원인
 
@@ -183,7 +183,7 @@ input["_soil"] = {"c_kpa": 2.0, "phi_deg": 36.0, "gamma_kn_m3": 19.0, "z_m": 1.0
 
 계약(`module_a.schema.json`, 안건 1 · 2026-09-04 합의)은 *"FoS 격자에서 임계치를 넘는
 셀을 어떻게 폴리곤으로 묶을지는 **트랙①이 정한다**"* 라고 정하고, 산출 불가할 때만
-null 을 허용한다. `run()` 이 이제 그 필드를 채운다 — `risk_layers.local()` 이 질의
+null 을 허용한다. `run` 이 이제 그 필드를 채운다 — `risk_layers.local` 이 질의
 지점 반경 2km 안의 위험영역만 잘라 `MultiPolygon` 으로 돌려준다.
 
 Module O 는 이미 `landslide.get("risk_polygon_5179")` 를 읽고 있었다
@@ -230,7 +230,7 @@ exposure / shelter_route / damage_cost  전부 생성
 
 ```
 module_a_landslide/
-  __init__.py       run()/explain() — 계약 진입점
+  __init__.py       run/explain — 계약 진입점
   envelope.py       계약 정규화 + 공통 봉투 + 폴백 계층
   fos.py            무한사면 FoS + 산불계수 + 확률 + 몬테카를로 CI
   forecast.py       예보 시간강우 → hours_to_critical 전진적분 (a-htc)

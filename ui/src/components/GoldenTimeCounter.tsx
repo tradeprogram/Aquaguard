@@ -17,7 +17,7 @@ export default function GoldenTimeCounter({ data }: { data: ModuleOData }) {
 
   return (
     <div className="rounded-xl border border-emerald-800/50 bg-emerald-950/30 p-6">
-      <p className="text-sm text-emerald-300/80">골든타임 비교 (§9 데모 시나리오)</p>
+      <p className="text-sm text-emerald-300/80">골든타임 비교 — 2025.7.19 산청 재현</p>
       <p className="mt-1 text-4xl font-bold text-emerald-300">
         {hours}시간 {minutes}분 확보
       </p>

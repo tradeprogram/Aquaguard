@@ -397,7 +397,7 @@ const TEST_LOCATIONS: { label: string; center: [number, number]; zoom: number; r
 ];
 
 // EvacuationPanel(§6)에서 선택한 대피 경로 — 카카오/네이버 실경로 API 붙기 전까지는
-// 출발지→대피소 직선(하버사인 근사)만 표시한다(HANDOFF.md §6.9).
+// 출발지→대피소 직선(하버사인 근사)만 표시한다(설계 문서 §6.9).
 export interface EvacuationRoute {
   origin: [number, number]; // [lon, lat]
   destination: [number, number]; // [lon, lat]

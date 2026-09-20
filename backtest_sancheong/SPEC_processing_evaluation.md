@@ -1,6 +1,6 @@
 # AquaGuard 트랙① 처리·평가 사양서 (SPEC)
 
-작성 2026-09-10 · 김민석(Kimminseok-01) · 원칙: 실데이터·문헌인용·출처2중검증·가상값 0
+작성 2026-09-10  · 원칙: 실데이터·문헌인용·출처2중검증·가상값 0
 관련: [aquaguard-track1-guardrails], README 방법론(§ARCHITECTURE §5).
 
 이 문서는 (1) Sentinel-1 SAR 전처리 하이퍼파라미터, (2) 평가지표 6종, (3) DEM 정밀도,

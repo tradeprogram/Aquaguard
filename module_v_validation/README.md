@@ -5,7 +5,7 @@
 ## 구조 (module_a/module_b와 동일 패턴)
 | 파일 | 역할 |
 |---|---|
-| `__init__.py` | `run()` / `explain()` — §4.2 공통 봉투 진입점 |
+| `__init__.py` | `run` / `explain` — §4.2 공통 봉투 진입점 |
 | `envelope.py` | **계약 경계** — 계약 필드명을 아는 유일한 곳, 입력 정규화 + 폴백 계층 |
 | `metrics.py` | 예측·관측 폴리곤 공통격자 rasterize → IoU/F1/precision/recall + confusion(TP/FP/FN) |
 | `leadtime.py` | lead_time_min(관측시각 − 예측경보시각) = 골든타임 |

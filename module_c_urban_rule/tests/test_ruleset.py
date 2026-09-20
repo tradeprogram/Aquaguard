@@ -201,7 +201,7 @@ def test_twelve_hour_criterion_is_documented_as_unusable():
     """추가-h. 공식 기준의 12시간 조건을 계약 입력으로 못 쓴다는 사실을 note에 남긴다.
 
     cutpoint_위험의 3시간 조건과 같은 구조적 한계다 — 계약에 누적강우 필드가 추가되면
-    세 절단점 모두 승격 검토 대상이 된다(TRACK2_CONTRACT_AGENDA.md 1·6번).
+    세 절단점 모두 승격 검토 대상이 된다(계약 합의 항목 1·6번).
     """
     rs = ruleset.load("v1_kma_mois")
     for row_id in ("cutpoint_주의", "cutpoint_경계"):

@@ -7,7 +7,7 @@
 무한사면: FoS = [c'+Cr + (γ − m·γw)·z·cos²β·tanφ'] / [γ·z·sinβ·cosβ]
 - Cr(뿌리점착력)=3.0kPa, 산불피해 f(dNBR)로 약화: Cr_eff = 3.0/f  (Key&Benson 등급)
 - m(t) = clip(m0 + 강우기여(t), 0,1),  강우기여 = clip(24h누적/Rsat, 0, Wmax)
-  ※ Rsat/Wmax·확률임계는 미보정 파라미터 → 민감도 함께 제시(HANDOFF §9.3)
+  ※ Rsat/Wmax·확률임계는 미보정 파라미터 → 민감도 함께 제시(설계 문서 §9.3)
 
 정직: 이 결과는 물리 baseline + 미보정 강우-습윤 관계의 산출이며,
 'N명 구했다'가 아니라 '공식경보보다 N시간 이른 actionable 신호'로만 해석.
@@ -58,7 +58,7 @@ def main():
     npix = valid.sum()
     t_official = pd.Timestamp("2025-07-19 12:37"); t_report=pd.Timestamp("2025-07-19 08:00")
 
-    # === 민감도 2시나리오 (HANDOFF §9.3 sensitivity) ===
+    # === 민감도 2시나리오 (설계 문서 §9.3) ===
     # A: 토양도 토성(보수적)  B: 풍화화강토(P3 부산실측 c'2·φ36, 급사면 실제 파괴재료)
     scenarios = {
         "A_soilmap": dict(C=C, A=A, B=B, D=D),

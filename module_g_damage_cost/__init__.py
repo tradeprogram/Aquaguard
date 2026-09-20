@@ -13,7 +13,7 @@ basis_citation에 그 사실을 명시한다.
   error   입력이 dict가 아니거나 exposed_buildings가 배열이 아님
 
 unit_cost_table_ref가 우리 표와 다르면 status는 ok로 두되 warning을 남기고
-basis_citation에 실제로 쓴 표를 밝힌다(2026-09-05 나정우 결정) — Module O가
+basis_citation에 실제로 쓴 표를 밝힌다(2026-09-05 트랙② 결정) — Module O가
 "재해연보_2024_원단위"를 하드코딩해 넘기고 있어 상시 불일치 상태다.
 """
 from __future__ import annotations

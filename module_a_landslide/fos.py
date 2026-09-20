@@ -9,7 +9,7 @@ Infinite Slope 구현. landslide_prob은 이 FoS를 변환한 값이며, 순수 
   P2 PSU GEOL 615 'Some Useful Numbers' (Waltham/Holtz&Kovacs 계열)
   P3 Hwangryeong Mt., Busan, MDPI Sustainability 2020, 12(7):2839
 가상값 없음. 모델 구조(FoS→확률 시그모이드, 몬테카를로 CI)는 산청 백테스트로
-보정 예정(HANDOFF §9.3) — 미보정 구간은 provenance로 표기한다.
+보정 예정(설계 문서 §9.3) — 미보정 구간은 provenance로 표기한다.
 """
 from __future__ import annotations
 
@@ -66,7 +66,7 @@ def fos_to_probability(fos: float, k: float = 6.0) -> float:
     """FoS → landslide_prob 시그모이드(FoS=1에서 0.5). k는 산청 백테스트로 보정 예정.
 
     P = 1 / (1 + exp(k·(FoS − 1)))  — FoS<1이면 P>0.5. 구조는 MODEL,
-    기울기 k는 미보정(기본 6.0, 문헌 관행 범위). 근거: HANDOFF §9.3 보정 대상.
+    기울기 k는 미보정(기본 6.0, 문헌 관행 범위). 근거: 설계 문서 §9.3 보정 대상.
     """
     fos = max(0.0, min(fos, 5.0))
     return 1.0 / (1.0 + math.exp(k * (fos - 1.0)))

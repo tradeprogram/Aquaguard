@@ -6,7 +6,7 @@ import { getEvacuationRoutes, type EvacuationRouteResult } from "@/lib/api";
 import { diagnoseFailure } from "@/lib/backendDiagnosis";
 import { DEMO_REGIONS, DEFAULT_REGION, type RegionKey } from "@/lib/demoShelters";
 
-// Module E(대피소·경로 라우팅) — HANDOFF.md §6. 대피소 목록은 lib/demoShelters.ts의
+// Module E(대피소·경로 라우팅) — 설계 문서 §6. 대피소 목록은 lib/demoShelters.ts의
 // 지역별 공통 정의를 쓴다(region prop) — IsolationPanel·MapExplorer도 같은 목록
 // 기준으로 계산해야 화면 간 앞뒤가 맞는다.
 
@@ -15,7 +15,7 @@ import { DEMO_REGIONS, DEFAULT_REGION, type RegionKey } from "@/lib/demoShelters
 const PLACEHOLDER_ETA = { carMin: 14.5, walkMin: 52.0, feasible: true } as const;
 
 const CAR_KMH = 30; // 산간도로 실도로거리 보정을 반쯤 흡수한 가정 속도 — 실API 전 근사치
-const WALK_KMH = 4; // §6.3
+const WALK_KMH = 4; // 성인 평균 보행속도 가정(module_e_routing과 같은 값)
 const MAX_QUERIED_SHELTERS = 12; // 후보가 이보다 많은 지역(산청군 전체 104곳)은 출발지에서 직선거리가 가까운 곳만 네이버로 조회
 const TIME_BUDGET_MIN = 120; // contracts/module_e.example.json의 time_budget_hours 2.0
 
@@ -217,8 +217,9 @@ export default function EvacuationPanel({
       )}
       {origin && !backendLoading && rows.some((r) => r.real) && (
         <div className="rounded-lg border border-dashed border-emerald-800/40 bg-emerald-950/10 p-3 text-[11px] text-emerald-300/80">
-          네이버 Directions 실제 도로 경로 기준 — 차량 시간은 실경로, 도보 시간은 여전히
-          직선거리 근사(공개 API에 도보 길찾기가 없음, HANDOFF.md §6.3).
+          네이버 Directions 실제 도로 경로 기준 — 차량은 실경로 소요시간, 도보는 그 경로
+          길이에 보행속도 4km/h를 적용한 값입니다(공개 도보 경로 탐색 API가 없어 차량
+          경로를 따라 걷는 것으로 봅니다).
         </div>
       )}
       {origin && !backendLoading && !rows.some((r) => r.real) && (

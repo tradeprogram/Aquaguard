@@ -163,7 +163,7 @@ def run(input: dict[str, Any]) -> dict[str, Any]:  # noqa: A002 - §4.2 규약�
     flood = _merge_module_result("b", call_module("b", module_b_input), warnings, fallback_tier)
 
     # Module C는 지하차도 1건 단위 계약인데 UI는 배열(road_flooding)을 기대한다 —
-    # 누가 순회할지가 미정이었고(TRACK2_CONTRACT_AGENDA.md 5번) 감시 주체인 O가 맡는 것으로
+    # 누가 순회할지가 미정이었고(계약 합의 항목 5번) 감시 주체인 O가 맡는 것으로
     # 정했다. C가 계약 밖 편의함수 run_many()를 갖고 있지만 그걸 쓰면 modules_client의
     # 어댑터 경계를 우회하게 되므로, 여기서 call_module을 건별로 돌린다(한 건이 degraded여도
     # 나머지는 그대로 남는다). 입력이 없으면 호출 자체를 건너뛴다.
@@ -185,7 +185,7 @@ def run(input: dict[str, Any]) -> dict[str, Any]:  # noqa: A002 - §4.2 규약�
     explains: dict[str, Any] = {}
     if triggered:
         # A는 risk_polygon_5179, B는 inundation_extent_5179가 실제 위험영역이다
-        # (TRACK2_CONTRACT_AGENDA.md 1번, 2026-09-04 합의로 A 계약에 폴리곤 필드 추가).
+        # (계약 합의 항목 1번, 2026-09-04 합의로 A 계약에 폴리곤 필드 추가).
         # A의 폴리곤이 null이면 — FoS 격자에서 영역을 못 뽑은 경우 — location(점)으로
         # 폴백하고, 그때 D가 반경 버퍼로 흡수하면서 status: degraded로 내린다(ASSUMPTION 표기).
         risk_polygons = [
@@ -277,7 +277,7 @@ def run(input: dict[str, Any]) -> dict[str, Any]:  # noqa: A002 - §4.2 규약�
                     "citizen_reports": input.get("citizen_reports", []),
                     # H의 response_latency_min은 "경보 발송 → 시민 응답" 시간이라 경보 시각이
                     # 없으면 계산이 안 된다. 계약에 그 필드가 없어서 H가 alert_id 문자열을
-                    # 파싱하고 degraded로 내려가고 있었는데(TRACK2_CONTRACT_AGENDA.md 7번),
+                    # 파싱하고 degraded로 내려가고 있었는데(계약 합의 항목 7번),
                     # O는 그 값을 이미 갖고 있으므로 그대로 넘긴다. 스키마가 추가 속성을 막지
                     # 않아 계약 위반이 아니고, 정식 필드 승격은 4인 합의 사안으로 남아 있다.
                     "alert_issued_at": input["timestamp"],

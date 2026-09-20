@@ -99,7 +99,7 @@ export default function DashboardPanel({
       // 배포는 EC2였고, 진짜 원인은 메모리 부족으로 uvicorn이 OOM-kill 당한 것이라
       // "기다리면 되는 문제"로 읽혀 원인 파악이 늦어졌다. 다른 패널들처럼 /health를
       // 실제로 찔러 서버가 죽었는지·배포가 뒤처졌는지·요청 자체 문제인지 구분한다.
-      setError(await diagnoseFailure("데모 실행", "/alerts/trigger"));
+      setError(await diagnoseFailure("위험 현황 조회", "/alerts/trigger"));
     } finally {
       stop();
       setLoading(false);
@@ -127,7 +127,7 @@ export default function DashboardPanel({
       <div className="flex items-center justify-between gap-3">
         <p className="text-xs text-slate-400">
           {govOnly
-            ? "2025.7.19 산청 산사태 재연 — Module O(§5) 목업 파이프라인"
+            ? "2025.7.19 산청 산사태 재연 — Module O 통합 파이프라인"
             : "2025.7.19 산청 산사태 재연 데이터 기반 — 우리 동네 위험 현황"}
         </p>
         <button

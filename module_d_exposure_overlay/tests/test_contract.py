@@ -13,7 +13,7 @@ def test_contract_example_input_reproduces_its_own_output(contract):
     """0. 계약 예시의 input이 자기 output을 그대로 재현한다 (Module C와 같은 기준).
 
     2026-09-04 4인 합의로 안건 2번이 해결되면서 example.json의 input이 빈 값에서
-    실좌표로 교체됐다(TRACK2_CONTRACT_AGENDA.md 2번). 그 전까지 이 자리에 있던
+    실좌표로 교체됐다(계약 합의 항목 2번). 그 전까지 이 자리에 있던
     test_contract_example_input_cannot_produce_its_own_output — 불일치 자체를 고정하던
     테스트 — 는 역할이 끝나 이 재현 테스트로 승격했다.
     """

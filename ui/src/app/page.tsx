@@ -60,7 +60,7 @@ export default function HomePage() {
   const [mode, setMode] = useState<Mode>("citizen");
   const [active, setActive] = useState<PanelKey | null>(null);
   // 대피소 찾기(§6.9)에서 고른 경로 — EvacuationPanel과 MapExplorer가 형제 컴포넌트라
-  // 여기서 상태를 끌어올려 양쪽에 내려준다(HANDOFF.md §6.9 "권장" 방식).
+  // 여기서 상태를 끌어올려 양쪽에 내려준다(설계 문서 §6.9 "권장" 방식).
   const [evacuationRoute, setEvacuationRoute] = useState<EvacuationRoute | null>(null);
   // §6.8 폴백 ① — "지도에서 선택" 모드와, 클릭으로 받은 좌표도 같은 방식으로 연결.
   const [pickingOrigin, setPickingOrigin] = useState(false);

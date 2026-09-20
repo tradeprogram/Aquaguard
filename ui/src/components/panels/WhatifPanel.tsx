@@ -118,9 +118,10 @@ export default function WhatifPanel() {
       </div>
 
       <div className="rounded-lg border border-dashed border-amber-800/40 bg-amber-950/10 p-3 text-[11px] text-amber-300/80">
-        현재 Module A/B/E는 목업(AQUAGUARD_MOCK_MODE=1)이라 슬라이더 값과 무관하게 contracts/의 example.json
-        고정값을 반환합니다 — 아래 대피 가능시간 비교도 그래서 현재는 항상 같은 값입니다. 트랙①④의 실제 모델이
-        연동되면 이 슬라이더가 실제 위험확률·폴리곤·대피 여유시간을 즉시 재계산합니다.
+        강우량을 바꿔 Module A/B/E를 다시 돌린 결과를 기준 시나리오와 나란히 비교합니다.
+        서버가 목업 모드(AQUAGUARD_MOCK_MODE=1)로 떠 있으면 모듈이 contracts/의 고정
+        예시값을 돌려주므로 슬라이더를 움직여도 값이 그대로일 수 있습니다 — 그때는
+        아래 비교가 &ldquo;동일&rdquo;로 나옵니다.
       </div>
 
       {baselineMargin !== null && currentMargin !== null && (
@@ -139,7 +140,7 @@ export default function WhatifPanel() {
             기준 시나리오({BASELINE_RAINFALL_MM}mm) 대비 강우 {pctDelta >= 0 ? "+" : ""}
             {pctDelta}%일 때 대피 가능시간이{" "}
             {currentMargin === baselineMargin
-              ? "동일합니다(목업 고정값 — 실모델 연동 전)"
+              ? "동일합니다 — 서버가 목업 모드면 고정값이 옵니다"
               : currentMargin < baselineMargin
                 ? `${(baselineMargin - currentMargin).toFixed(0)}분 감소합니다`
                 : `${(currentMargin - baselineMargin).toFixed(0)}분 증가합니다`}

@@ -3,7 +3,7 @@
 module_c_urban_rule/envelope.py와 같은 세 함수를 갖는다 — 공용 패키지로 올리지
 않고 복제했다. 공유 대상이 15줄뿐이고 normalize()는 모듈마다 입력이 완전히 달라
 공유할 수 없는데, 최상위 공용 패키지는 ARCHITECTURE §8 트리에 없어 4인 합의가
-필요하기 때문이다(2026-09-04 나정우 승인).
+필요하기 때문이다(2026-09-04 트랙② 승인).
 """
 from __future__ import annotations
 

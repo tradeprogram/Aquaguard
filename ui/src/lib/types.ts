@@ -35,7 +35,7 @@ export interface FloodData {
   inundation_extent_5179: { type: "FeatureCollection"; features: unknown[] };
 }
 
-// HANDOFF.md §6.6 제안 — 차량/도보 이동수단을 따로 보여주기 위한 확장. 아직 4인
+// 설계 문서 §6.6 제안 — 차량/도보 이동수단을 따로 보여주기 위한 확장. 아직 4인
 // 합의 전이라 contracts/module_e.schema.json엔 없음 — EvacuationPanel이 지금 쓰는
 // 클라이언트 계산값(하버사인 근사)과 실제 API 응답을 같은 모양으로 받기 위한 준비용
 // optional 필드. 합의되면 그때 module_e.schema.json에도 반영할 것.

@@ -42,7 +42,7 @@ Hwangryeong Mt., Busan — MDPI *Sustainability* (2020) **12(7):2839**.
 ARCHITECTURE §2.5. A_max: low 1.2 / moderate 2.0 / high 3.5–4.0(중앙값 3.75), Δt<2년 감쇠없음.
 근거: 산림청(화재 2년 후 토양유출 3–4배), KIGAM, USGS post-fire debris flow, Key&Benson(2006) dNBR 등급.
 
-## 4. 미보정 파라미터 (provenance 명시, 백테스트로 대체 예정 — HANDOFF §9.3)
+## 4. 미보정 파라미터 (provenance 명시, 백테스트로 대체 예정 — 설계 문서
 - FoS→확률 시그모이드 기울기 k(기본 6.0): 산청 백테스트로 보정.
 - 강우→포화도 m 계수: 구조는 물리, 계수는 미보정.
 - 배수등급→선행습윤 m₀: 모델링 가정(ASSUMPTION).

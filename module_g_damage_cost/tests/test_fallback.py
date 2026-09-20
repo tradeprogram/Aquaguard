@@ -54,7 +54,7 @@ def test_table_ref_mismatch_stays_ok_but_says_so():
     """24. unit_cost_table_ref 불일치는 status ok + warning + basis_citation 명시.
 
     Module O가 재해연보_2024_원단위를 하드코딩해 넘기고 있어 상시 불일치다
-    (TRACK2_CONTRACT_AGENDA.md 10번). 요청한 표를 쓴 척하지 않는 게 핵심이다.
+    (계약 합의 항목 10번). 요청한 표를 쓴 척하지 않는 게 핵심이다.
     """
     result = run(payload(buildings(주거=1), table_ref="재해연보_2024_원단위"))
     assert result["status"] == "ok"

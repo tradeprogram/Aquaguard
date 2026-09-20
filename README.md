@@ -10,7 +10,7 @@
 
 ## 빠른 시작 (트랙③ 프로토타입 — Module O + 대시보드, 전부 목업 모드)
 
-`module_o_orchestrator`가 A~H를 `contracts/`의 example.json으로 목업 호출하고, `ui/`의 Next.js 대시보드가 그 결과를 그린다. `AQUAGUARD_MOCK_MODE=0`으로 바꾸면 **설치된 모듈만** 실제 `run()`으로 전환되고 아직 없는 모듈은 example.json으로 메워진다(코드 변경 없음, `module_o_orchestrator/modules_client.py` 참조) — 트랙별 진도가 달라도 real 모드를 쓸 수 있게 모듈 단위로 내려간다. 어느 모듈이 실물이고 어느 것이 예시값인지는 봉투의 `meta.module_sources`로 나오며, UI의 Provenance 배지(§7)가 이 값을 근거로 삼는다. 기본값 `1`은 전 모듈을 example로 고정하므로 §9 데모 리허설처럼 출력이 결정적이어야 할 때 쓴다.
+`module_o_orchestrator`가 A~H를 `contracts/`의 example.json으로 목업 호출하고, `ui/`의 Next.js 대시보드가 그 결과를 그린다. `AQUAGUARD_MOCK_MODE=0`으로 바꾸면 **설치된 모듈만** 실제 `run`으로 전환되고 아직 없는 모듈은 example.json으로 메워진다(코드 변경 없음, `module_o_orchestrator/modules_client.py` 참조) — 트랙별 진도가 달라도 real 모드를 쓸 수 있게 모듈 단위로 내려간다. 어느 모듈이 실물이고 어느 것이 예시값인지는 봉투의 `meta.module_sources`로 나오며, UI의 Provenance 배지(§7)가 이 값을 근거로 삼는다. 기본값 `1`은 전 모듈을 example로 고정하므로 §9 데모 리허설처럼 출력이 결정적이어야 할 때 쓴다.
 
 ```bash
 # 1) 백엔드 (FastAPI + Module O)
@@ -20,23 +20,23 @@ python -m uvicorn api_server:app --port 8000
 # 2) 프론트엔드 (다른 터미널)
 cd ui
 npm install
-npm run dev   # http://localhost:3000
+npm run dev # http://localhost:3000
 
 # 3) 테스트
 python -m pytest module_o_orchestrator/tests/ -v
 ```
 
-대시보드(`/`)에서 "산청 시나리오 실행" → 골든타임 카운터·위험 패널이 뜸 → `/whatif`에서 강수 슬라이더(현재는 목업이라 값 고정, 실모델 연동 시 즉시 반영) → `/map3d`에서 MapLibre 3D 지도(위성영상, 지형, 건물/도로/교량 입체화, 전국 행정동 경계 검색·표시, 골든타임 시간슬라이더). (이 문단은 지도-메인-화면 개편 이전 설명이 섞여 있어 일부 낡음 — 현재 실제 구조는 [HANDOFF.md §1.4](HANDOFF.md) 참조.)
+대시보드(`/`)에서 "산청 시나리오 실행" → 골든타임 카운터·위험 패널이 뜸 → `/whatif`에서 강수 슬라이더(현재는 목업이라 값 고정, 실모델 연동 시 즉시 반영) → `/map3d`에서 MapLibre 3D 지도(위성영상, 지형, 건물/도로/교량 입체화, 전국 행정동 경계 검색·표시, 골든타임 시간슬라이더). (이 문단은 지도-메인-화면 개편 이전 설명이 섞여 있어 일부 낡음 — 현재 실제 구조.)
 
 `/map3d`의 지리 데이터 파이프라인:
 - **행정경계 3계층**(시도/시군구/읍면동, 전국) — 사용자 제공 `BND_ADM_DONG_PG`(원본 EPSG:5186, 읍면동 레벨)를 EPSG:5179로 저장하고, 시군구·시도는 그 지오메트리를 코드 접두어 기준으로 dissolve해서 생성(`data/vector/adm_{sido,sigungu,dong}_5179.geojson`). 이름(시/도, 시/군/구)은 [`vuski/admdongkor`](https://github.com/vuski/admdongkor)(MIT, 동일 SGIS adm_cd 스킴)와 코드로 조인해 붙임 — `data/vector/adm_index.json`이 3계층 통합 검색 인덱스(이름·전체경로명·중심점·bbox). `api_server.py`의 `GET /boundaries?bbox=...`가 뷰포트만큼만 3계층 모두 EPSG:4326으로 재투영해 내려주고(§4.1: 재투영은 UI 출력 직전에만), `GET /search?q=...`가 도/시군구/읍면동 이름으로 검색해 지도 이동에 씀.
 - **노출자산(건축물·농경지)**: `data/vector/aoi_buildings_{sancheong,seoul}_5179.{ndjson,geojson}`, `data/vector/aoi_farmland_sancheong_5179.ndjson` — Module D의 `building_footprints_5179` / `farmland_parcels_5179` 입력. 지도 렌더링용이 아니라 **모듈 입력**이라 EPSG:5179로 저장한다. 전국 원본은 `.gitignore`라 배포 서버에 없으므로 AOI만 잘라 커밋했다(산청 = 산청군 ∪ 경보지점 반경 12km, 건물 51,040동 + 농경지 72,875필지 / 서울 = 강남·서초구, 건물 41,814동; `scripts/build_aoi_exposure_layers.py`로 재생성).
 
-  **산청을 행정경계 ∪ 반경으로 자르는 이유**(2026-09-21): 둘 중 하나만으로는 각각 다른 구멍이 난다. 행정경계만 쓰면 데모 좌표가 군 동쪽 경계에서 5.4km라 위험영역이 함양·진주 쪽으로 12% 새고(생비량면으로 자르면 18%), 반경만 쓰면 군의 24%(190/790km²)밖에 못 덮어 고립마을·대피소를 군 전체로 넓혔을 때 나머지가 "건물 없음"으로 계산된다.
+ **산청을 행정경계 ∪ 반경으로 자르는 이유**(2026-09-21): 둘 중 하나만으로는 각각 다른 구멍이 난다. 행정경계만 쓰면 데모 좌표가 군 동쪽 경계에서 5.4km라 위험영역이 함양·진주 쪽으로 12% 새고(생비량면으로 자르면 18%), 반경만 쓰면 군의 24%(190/790km²)밖에 못 덮어 고립마을·대피소를 군 전체로 넓혔을 때 나머지가 "건물 없음"으로 계산된다.
 
-  **산청 파일이 `.ndjson`인 이유**: 한 줄에 feature 하나다. 군 전체로 넓히면서 농경지가 70.8MB가 됐는데 `json.load`로 올리면 파싱 피크가 +339MB이고, 배포 서버는 RAM 908MB에 기준선이 560MB라 그 자리에서 OOM이다. 한 줄씩 읽으며 위험영역에 닿는 것만 남기면 피크가 +0MB다(`module_o_orchestrator/exposure_layers.py`의 `_stream_clipped`). `.geojson`만 있는 환경은 종전 경로로 폴백한다.
+ **산청 파일이 `.ndjson`인 이유**: 한 줄에 feature 하나다. 군 전체로 넓히면서 농경지가 70.8MB가 됐는데 `json.load`로 올리면 파싱 피크가 +339MB이고, 배포 서버는 RAM 908MB에 기준선이 560MB라 그 자리에서 OOM이다. 한 줄씩 읽으며 위험영역에 닿는 것만 남기면 피크가 +0MB다(`module_o_orchestrator/exposure_layers.py`의 `_stream_clipped`). `.geojson`만 있는 환경은 종전 경로로 폴백한다.
 
-  속성 중 `bd_mgt_sn`(25자리 건물관리번호)이 `exposed_buildings[].building_id`이자 건축물대장 주용도 조인키(앞 19자리 = 필지키)다.
+ 속성 중 `bd_mgt_sn`(25자리 건물관리번호)이 `exposed_buildings[].building_id`이자 건축물대장 주용도 조인키(앞 19자리 = 필지키)다.
 - **지형**: `GET /terrain-tiles/{z}/{x}/{y}.png`가 AWS 공개 지형 타일을 프록시(CORS 우회).
 - **위성영상**: Esri World Imagery(무료, 키 불필요).
 - **건물·도로·교량**: OpenFreeMap 무료 벡터타일(OSM, OpenMapTiles 스키마) — 건물은 `render_height`로 실높이 압출, 교량은 `@turf/buffer`로 폭만큼 버퍼링해 지면에서 띄운 `fill-extrusion`.
@@ -76,15 +76,15 @@ python -m pytest module_o_orchestrator/tests/ -v
 
 > **한 문장 포지셔닝**: 아쿠아가드는 새로운 산사태 위험지도가 아니다. 기존 산불·강우·지형·하천 신호를 하나의 재해연쇄로 연결해 위험도가 임계치를 넘은 순간 "어떤 도로가 끊기고, 어떤 마을이 고립되며, 누구를 어느 대피소로 보내야 하는지"를 하나의 의사결정 패키지로 생성하고, 실제 재난에서 그 의사결정이 몇 분 빨라질 수 있었는지를 검증하는 시스템이다.
 
-- **독창성 축 1 — 재해연쇄**: `f(dNBR, Δt)`로 화재→산사태→하천범람 사슬을 정량 모델링 (산불 자체는 실시간 예측 대상이 아닌 정적 이력값). **주의**: 산불 이력이 산사태 위험을 높인다는 인과관계 자체는 이미 알려진 현상이다 — 산림청 강우반영 산사태위험도가 이미 산불피해지를 반영하고, 미국 USGS도 post-fire debris flow 확률·부피를 burn severity 기반으로 운영한다. 그래서 이 축의 진짜 독창점은 "산불→산사태 연결"이 아니라 **화재부터 하천범람·고립·의사결정까지 전체 사슬을 하나로 엮고, 그 사슬이 만든 골든타임을 실측으로 검증**한다는 것 — 축 2·4와 함께 봐야 의미가 있다.
-- **독창성 축 2 — 골든타임 격차**: "예측 정확도"가 아니라 "관의 판단·전파 지연"을 자동화로 우회
-- **독창성 축 3 — 판단 지연 자체를 겨냥한 2종 장치**: ① 시민 신고 역검증 루프(Module H — 시민 모드 기본값. 관 담당자 승인 게이트 없이 이 신뢰도 보강만으로 곧바로 경보격상) ② What-if 예측 시뮬레이터(가상 강수 시나리오를 사용자가 직접 조작해 위험 범위 변화를 확인). (2026-08-28: "원클릭 승인"은 삭제가 아니라 **관공서 모드**로 재배치 — 아래 "시민 모드 vs 관공서 모드" 참조)
-- **독창성 축 4 — 고립마을 자동탐지**(신규 제안, [HANDOFF.md §7](HANDOFF.md)): 실제 도로망 그래프에서 위험지역과 겹치는 링크를 제거하고, 대피소로 가는 경로가 하나도 안 남는 건물 클러스터를 찾아낸다 — "물이 찼다"가 아니라 "이 마을은 이제 고립됐다"를 그래프 알고리즘으로 증명
+- **핵심 특징 1 — 재해연쇄**: `f(dNBR, Δt)`로 화재→산사태→하천범람 사슬을 정량 모델링 (산불 자체는 실시간 예측 대상이 아닌 정적 이력값). **주의**: 산불 이력이 산사태 위험을 높인다는 인과관계 자체는 이미 알려진 현상이다 — 산림청 강우반영 산사태위험도가 이미 산불피해지를 반영하고, 미국 USGS도 post-fire debris flow 확률·부피를 burn severity 기반으로 운영한다. 그래서 이 특징의 핵심은 "산불→산사태 연결"이 아니라 **화재부터 하천범람·고립·의사결정까지 전체 사슬을 하나로 엮고, 그 사슬이 만든 골든타임을 실측으로 검증**한다는 것 — 특징 2·4와 함께 봐야 의미가 있다.
+- **핵심 특징 2 — 골든타임 격차**: "예측 정확도"가 아니라 "관의 판단·전파 지연"을 자동화로 우회
+- **핵심 특징 3 — 판단 지연 자체를 겨냥한 2종 장치**: ① 시민 신고 역검증 루프(Module H — 시민 모드 기본값. 관 담당자 승인 게이트 없이 이 신뢰도 보강만으로 곧바로 경보격상) ② What-if 예측 시뮬레이터(가상 강수 시나리오를 사용자가 직접 조작해 위험 범위 변화를 확인). (2026-08-28: "원클릭 승인"은 삭제가 아니라 **관공서 모드**로 재배치 — 아래 "시민 모드 vs 관공서 모드" 참조)
+- **핵심 특징 4 — 고립마을 자동탐지**(신규 제안,): 실제 도로망 그래프에서 위험지역과 겹치는 링크를 제거하고, 대피소로 가는 경로가 하나도 안 남는 건물 클러스터를 찾아낸다 — "물이 찼다"가 아니라 "이 마을은 이제 고립됐다"를 그래프 알고리즘으로 증명
 
 **시민 모드 vs 관공서 모드** (2026-08-28): 내 위치 기반 대피 경로 찾기 같은 시민 기능과, 관 대응 비교·피해비용·원클릭 승인 같은 지자체 운영 기능이 한 화면에 섞여 있으면 "이거 누구 쓰라고 만든 거야?"가 돼버린다. 그래서 화면 우상단 토글로 **모드를 명시적으로 분리**했다.
-  - **시민 모드**(기본값, 배포 대상): 대피소 찾기, 고립마을 위험, 우리 동네 위험 현황(산사태·홍수 확률, 지하차도, 노출자산, 대피 경로만 — 관 대응 비교·피해비용은 숨김). 승인 게이트 없음 — 시민 역검증(Module H)만으로 곧바로 경보격상.
-  - **관공서 모드**(옵트인, 지자체 재난상황실용): 위 시민용 화면에 더해 골든타임 비교(관 대응 vs 에이전트), 예상 피해비용(Module G), 모델 성능 검증, What-if 시뮬레이터, 그리고 **원클릭 승인**(`ApprovePanel.tsx`, §5 Module O) — 담당자가 버튼 하나로 승인/보류하는 human-in-the-loop 장치.
-  - 두 모드가 같은 데이터·같은 파이프라인을 공유하되 노출 범위만 다르다는 점이 포인트: 시민에게는 "내가 지금 뭘 해야 하는지"만 보여주고, 관공서에는 그 판단의 근거와 통제권까지 보여준다.
+ - **시민 모드**(기본값, 배포 대상): 대피소 찾기, 고립마을 위험, 우리 동네 위험 현황(산사태·홍수 확률, 지하차도, 노출자산, 대피 경로만 — 관 대응 비교·피해비용은 숨김). 승인 게이트 없음 — 시민 역검증(Module H)만으로 곧바로 경보격상.
+ - **관공서 모드**(옵트인, 지자체 재난상황실용): 위 시민용 화면에 더해 골든타임 비교(관 대응 vs 에이전트), 예상 피해비용(Module G), 모델 성능 검증, What-if 시뮬레이터, 그리고 **원클릭 승인**(`ApprovePanel.tsx`, §5 Module O) — 담당자가 버튼 하나로 승인/보류하는 human-in-the-loop 장치.
+ - 두 모드가 같은 데이터·같은 파이프라인을 공유하되 노출 범위만 다르다는 점이 포인트: 시민에게는 "내가 지금 뭘 해야 하는지"만 보여주고, 관공서에는 그 판단의 근거와 통제권까지 보여준다.
 
 **스코프 확정**: 실시간 예측 대상은 수해(산사태·하천범람·도로침수)뿐. 산불은 정적 증폭계수로만 쓰이고 별도 화재위험 예측 모델은 스코프 제외. 데이터 처리 범위도 우기 집중기간(6~9월)만.
 
@@ -170,10 +170,10 @@ decay(Δt): Δt<2년 → 1.0(감쇠없음) / Δt≥2년 → NDVI 회복곡선 �
 
 ```json
 {
-  "status": "ok",        // "ok" | "degraded" | "error"
-  "fallback_tier": 1,     // 1=정상, 2=2순위 폴백, 3=3순위 폴백
-  "data": { "...": "모듈별 실제 데이터" },
-  "warnings": []
+ "status": "ok", // "ok" | "degraded" | "error"
+ "fallback_tier": 1, // 1=정상, 2=2순위 폴백, 3=3순위 폴백
+ "data": { "...": "모듈별 실제 데이터" },
+ "warnings": []
 }
 ```
 
@@ -192,18 +192,18 @@ decay(Δt): Δt<2년 → 1.0(감쇠없음) / Δt≥2년 → NDVI 회복곡선 �
 ```jsonc
 // input
 {
-  "x_5179": 1090452.3, "y_5179": 1662188.7, "timestamp": "2025-07-19T08:00:00+09:00",
-  "static": { "slope_deg": 32.5, "curvature": -0.02, "twi": 6.8, "aspect_deg": 210,
-    "dnbr": 0.62, "dnbr_class": "high", "days_since_fire": 121 },
-  "dynamic": { "rainfall_1h_mm": [12.0, 18.5, 24.0], "rainfall_cumulative_24h_mm": 187.3,
-    "rainfall_cumulative_72h_mm": 245.0, "api_index": 0.81, "source": "observed" },
-  "insar_displacement_mm_per_day": null
+ "x_5179": 1090452.3, "y_5179": 1662188.7, "timestamp": "2025-07-19T08:00:00+09:00",
+ "static": { "slope_deg": 32.5, "curvature": -0.02, "twi": 6.8, "aspect_deg": 210,
+ "dnbr": 0.62, "dnbr_class": "high", "days_since_fire": 121 },
+ "dynamic": { "rainfall_1h_mm": [12.0, 18.5, 24.0], "rainfall_cumulative_24h_mm": 187.3,
+ "rainfall_cumulative_72h_mm": 245.0, "api_index": 0.81, "source": "observed" },
+ "insar_displacement_mm_per_day": null
 }
 // output (data)
 { "landslide_prob": 0.78, "confidence_interval": [0.65, 0.88], "source": "observed",
-  "amplification_factor": 3.1, "precursor_flag": false,
-  "hours_to_critical": 2.5,
-  "location": { "x_5179": 1090452.3, "y_5179": 1662188.7 } }
+ "amplification_factor": 3.1, "precursor_flag": false,
+ "hours_to_critical": 2.5,
+ "location": { "x_5179": 1090452.3, "y_5179": 1662188.7 } }
 ```
 
 `hours_to_critical`은 "골든타임"을 실제 숫자로 만드는 핵심 필드 — LDAPS 예보 시계열(1시간 스텝)로 `landslide_prob`을 계산해 임계치(예: 0.7)를 처음 넘는 시점까지의 시간. 예보 구간 내내 안 넘으면 `null`. 폴백: InSAR+실측강수 → 지형+실측강수 → LDAPS 예보모드(CI 확대, `source:"forecast"`).
@@ -215,10 +215,10 @@ decay(Δt): Δt<2년 → 1.0(감쇠없음) / Δt≥2년 → NDVI 회복곡선 �
 ```jsonc
 // input
 { "reach_id": "GEUMHO_042", "static": { "drainage_area_km2": 58.2, "river_order": 3, "slope_pct": 1.8 },
-  "dynamic": { "rainfall_cumulative_24h_mm": [187.3], "river_level_m": 3.2 }, "sar_water_extent": null }
+ "dynamic": { "rainfall_cumulative_24h_mm": [187.3], "river_level_m": 3.2 }, "sar_water_extent": null }
 // output (data)
 { "flood_prob": 0.61, "confidence_interval": [0.45, 0.75], "hours_to_critical": 4.0,
-  "inundation_extent_5179": { "type": "FeatureCollection", "features": [] } }
+ "inundation_extent_5179": { "type": "FeatureCollection", "features": [] } }
 ```
 
 폴백: 실측강수+수위+SAR → 실측강수+SAR → 실측강수만(CI 확대).
@@ -245,30 +245,30 @@ UI 표기 시 신뢰도 배지를 A/B와 다르게(모델 아님을 명시).
 ```jsonc
 // input — A/B/C의 data를 위험폴리곤 배열로 (전부 5179)
 { "risk_polygons": [
-    { "source_module": "A", "geometry_5179": { "type": "Polygon", "coordinates": [] }, "risk_prob": 0.78 },
-    { "source_module": "B", "geometry_5179": { "type": "Polygon", "coordinates": [] }, "risk_prob": 0.61 }
-  ],
-  "building_footprints_5179": { "type": "FeatureCollection", "features": [] },
-  "farmland_parcels_5179": { "type": "FeatureCollection", "features": [] } }
+ { "source_module": "A", "geometry_5179": { "type": "Polygon", "coordinates": [] }, "risk_prob": 0.78 },
+ { "source_module": "B", "geometry_5179": { "type": "Polygon", "coordinates": [] }, "risk_prob": 0.61 }
+ ],
+ "building_footprints_5179": { "type": "FeatureCollection", "features": [] },
+ "farmland_parcels_5179": { "type": "FeatureCollection", "features": [] } }
 // output (data)
 { "exposed_buildings": [ { "building_id": "B12345", "risk_prob": 0.78, "use_type": "주거" } ],
-  "exposed_farmland_ha": 4.2 }
+ "exposed_farmland_ha": 4.2 }
 ```
 
 ### Module E — 대피소·경로 라우팅 (`module_e_routing`)
 
-> **구현 결정(2026-08-27)**: 자체 A* 대신 **네이버/카카오 길찾기 API**(차량)로 대체 확정, 도보는 직선거리 근사. 상세 명세·착수 순서는 **[HANDOFF.md §6](HANDOFF.md)** 참조.
+> **구현 결정(2026-08-27)**: 자체 A* 대신 **네이버 길찾기 API**(차량)로 대체 확정. 도보는 그 경로 길이에 보행속도를 적용한다(공개 도보 경로 탐색 API가 없어서 생기는 한계 — `module_e_routing/__init__.py` 참조).
 
 ```jsonc
 // input — time_budget_hours = Module O가 A/B의 hours_to_critical에서 안전여유(기본 0.5h)를 뺀 값
 { "origin": { "x_5179": 1090452.3, "y_5179": 1662188.7 },
-  "risk_polygons": [ { "geometry_5179": {}, "risk_prob": 0.78 } ],
-  "shelter_candidates": [ { "shelter_id": "S001", "x_5179": 1091200.0, "y_5179": 1663500.0, "capacity": 200 } ],
-  "road_graph_source": "standard_node_link_v1", "time_budget_hours": 2.0 }
+ "risk_polygons": [ { "geometry_5179": {}, "risk_prob": 0.78 } ],
+ "shelter_candidates": [ { "shelter_id": "S001", "x_5179": 1091200.0, "y_5179": 1663500.0, "capacity": 200 } ],
+ "road_graph_source": "standard_node_link_v1", "time_budget_hours": 2.0 }
 // output (data)
 { "shelter_id": "S001", "route_5179": { "type": "LineString", "coordinates": [] },
-  "eta_min": 14.5, "route_confidence": "high",
-  "time_feasible": true, "time_margin_min": 105.5, "fallback_used": false }
+ "eta_min": 14.5, "route_confidence": "high",
+ "time_feasible": true, "time_margin_min": 105.5, "fallback_used": false }
 ```
 
 **알고리즘**: ① 후보별 위험가중 A*(risk_prob ≥ 0.7 셀/링크는 제외 또는 페널티)로 경로·`eta_min` 계산 → ② `eta_min ≤ time_budget_hours×60` 만족하는 후보 중 최단시간 선택(동률이면 capacity 큰 쪽) → ③ 아무 대피소도 시간 내 도달 불가면(`time_feasible: false`) 최근접 안전지점(`risk_prob < 0.3`)으로 목적지 변경하는 긴급 폴백 실행, `fallback_used: true` + UI에 "지정 대피소까지 시간 부족 — 가까운 안전지대로 즉시 이동" 경고 **명시적으로** 노출(생명안전상 가장 중요한 예외처리 — 절대 조용히 넘어가지 않는다).
@@ -278,29 +278,29 @@ UI 표기 시 신뢰도 배지를 A/B와 다르게(모델 아님을 명시).
 ```jsonc
 // input — Module D 출력을 그대로 받음
 { "exposed_buildings": [ { "building_id": "B12345", "risk_prob": 0.78, "use_type": "주거" } ],
-  "exposed_farmland_ha": 4.2, "unit_cost_table_ref": "재해연보_2024_원단위" }
+ "exposed_farmland_ha": 4.2, "unit_cost_table_ref": "재해연보_2024_원단위" }
 // output (data)
 { "estimated_cost_krw": 1250000000, "cost_range_krw": [900000000, 1600000000],
-  "basis_citation": "행안부 재해연보 2024 건축물 침수 원단위" }
+ "basis_citation": "행안부 재해연보 2024 건축물 침수 원단위" }
 ```
 
-### Module H — 시민 신고 역검증 (`module_h_citizen_verification`, 신규·창의성 축 3)
+### Module H — 시민 신고 역검증 (`module_h_citizen_verification`, 신규·핵심 특징)
 
 산청 사건의 진짜 실패(신고는 08:00부터 있었는데 경보는 12:37)를 정면으로 겨냥. Module A의 `precursor_flag`(InSAR 땅밀림 전조)가 뜬 반경 내 주민에게 자동으로 "이상 징후가 보이십니까?"를 푸시하고, 응답을 모아 확신도를 보정해 Module O에 되돌려주는 역검증 루프.
 
 ```jsonc
 // input — Module A의 precursor_flag=true 지점 반경 내에서 트리거
 { "alert_id": "AL-20250719-0915", "trigger_location": { "x_5179": 1090452.3, "y_5179": 1662188.7 },
-  "trigger_radius_m": 500,
-  "citizen_reports": [
-    { "report_id": "R001", "x_5179": 1090480.1, "y_5179": 1662201.4,
-      "timestamp": "2025-07-19T09:22:00+09:00",
-      "report_type": "이상징후_목격", "photo_url": null } // "이상징후_목격"|"이미_대피함"|"오탐_신고"
-  ] }
+ "trigger_radius_m": 500,
+ "citizen_reports": [
+ { "report_id": "R001", "x_5179": 1090480.1, "y_5179": 1662201.4,
+ "timestamp": "2025-07-19T09:22:00+09:00",
+ "report_type": "이상징후_목격", "photo_url": null } // "이상징후_목격"|"이미_대피함"|"오탐_신고"
+ ] }
 // output (data)
 { "report_count": 6, "verification_status": "현장확인", // "미확인"|"현장확인"|"오탐판정"
-  "confidence_adjustment": 0.12, // Module A의 landslide_prob에 가산(-0.3~+0.3), 오탐 다수면 음수
-  "response_latency_min": 4.5 }
+ "confidence_adjustment": 0.12, // Module A의 landslide_prob에 가산(-0.3~+0.3), 오탐 다수면 음수
+ "response_latency_min": 4.5 }
 ```
 
 폴백: 응답 0건이면 `verification_status: "미확인"`, `confidence_adjustment: 0` — Module O는 시민 확인 없이도 원래 임계치 로직대로 진행(역검증은 보조 채널, 단일 실패점 아님).
@@ -320,13 +320,13 @@ UI 표기 시 신뢰도 배지를 A/B와 다르게(모델 아님을 명시).
 ```jsonc
 // output (data)
 { "timeline_actual": { "advisory": "2025-07-17T00:00:00+09:00", "report_start": "2025-07-19T08:00:00+09:00",
-    "warning_escalated": "2025-07-19T12:37:00+09:00" },
-  "timeline_agent": { "detected": "2025-07-19T09:15:00+09:00", "alert_sent": "2025-07-19T09:20:00+09:00" },
-  "golden_time_saved_min": 197,
-  "approval_status": "권고중(escalation)", // "대기"|"승인"|"거부"|"권고중(escalation)" — 자동승인 값 없음(2026-08-29)
-  "escalation_level": 1,
-  "citizen_verification": { "verification_status": "현장확인", "confidence_adjustment": 0.12 },
-  "alert_package": { "landslide": {}, "flood": {}, "shelter_route": {}, "damage_cost": {} } }
+ "warning_escalated": "2025-07-19T12:37:00+09:00" },
+ "timeline_agent": { "detected": "2025-07-19T09:15:00+09:00", "alert_sent": "2025-07-19T09:20:00+09:00" },
+ "golden_time_saved_min": 197,
+ "approval_status": "권고중(escalation)", // "대기"|"승인"|"거부"|"권고중(escalation)" — 자동승인 값 없음(2026-08-29)
+ "escalation_level": 1,
+ "citizen_verification": { "verification_status": "현장확인", "confidence_adjustment": 0.12 },
+ "alert_package": { "landslide": {}, "flood": {}, "shelter_route": {}, "damage_cost": {} } }
 ```
 
 > `input` 필드(`alert_id`/`trigger_location`/`timestamp`/`auto_approve_timeout_min`/`safety_margin_hours`)는 원문서 §5에 명시적 예시가 없어 트랙③이 추론해 `contracts/module_o.example.json`에 넣은 값 — 3인이 함께 확정할 것.
@@ -335,7 +335,7 @@ UI 표기 시 신뢰도 배지를 A/B와 다르게(모델 아님을 명시).
 
 - **대시보드**: 지도+타임라인, 골든타임 비교 카운터, 대피소/경로/피해비용 패널, 근거/신뢰도 배지, (보조) 서울 확장성 화면
 - **LLM 채팅**: Module O의 `alert_package` 위에 얹는 자연어 해석층
-- **What-if 시뮬레이터**: 새 모델 불필요 — Module A/B의 `run()`을 가상 강수값으로 즉시 재호출해 위험 폴리곤 실시간 재계산 (순수 UI 레이어, 트랙①과 독립적으로 트랙③에서 구현 가능)
+- **What-if 시뮬레이터**: 새 모델 불필요 — Module A/B의 `run`을 가상 강수값으로 즉시 재호출해 위험 폴리곤 실시간 재계산 (순수 UI 레이어, 트랙①과 독립적으로 트랙③에서 구현 가능)
 - **3D**: MapLibre GL JS(지형) + deck.gl(TerrainLayer/PolygonLayer/PathLayer/ScatterplotLayer). 지형 1순위 V-World 3D API, 2순위 자체 DEM. 레이어: 지형메시/산사태 위험드레이프/침수 bathtub 볼륨("정밀 수리모형 아님" 배지 필수)/건물 압출/경로 3D 라인/시간슬라이더/What-if 슬라이더. AOI: 상능마을 일대 수 km²
 
 ---
@@ -375,23 +375,23 @@ C는 `underpass_id` 결측, D는 입력 구조 자체가 깨진 경우를 `statu
 ## 9. 저장소 구조
 
 ```
-README.md                  # 이 파일 — 개요 + §0~§9 핵심 요약
-ARCHITECTURE.md             # 아키텍처 확정안 v2.4 전문
-docs/                        # 원본 PDF (다이어그램 §3/§11 포함)
-contracts/                   # §5 — 8개 모듈 입출력 계약 (Day 1 최우선, 3인 합의 없이 수정 금지)
-  module_*.example.json
-  module_*.schema.json
-module_a_landslide/         # 트랙① — 산사태 예측
-module_b_flood/             # 트랙① — 하천범람 예측
-module_c_urban_rule/        # 트랙② — 도로·지하차도 침수 (규칙기반)
-module_d_exposure_overlay/  # 트랙② — 노출자산 오버레이
-module_e_routing/           # 트랙② — 대피소·경로 라우팅
-module_g_damage_cost/       # 트랙② — 피해비용 추정
+README.md # 이 파일 — 개요 + §0~§9 핵심 요약
+ARCHITECTURE.md # 아키텍처 확정안 v2.4 전문
+docs/ # 원본 PDF (다이어그램 §3/§11 포함)
+contracts/ # §5 — 8개 모듈 입출력 계약 (Day 1 최우선, 3인 합의 없이 수정 금지)
+ module_*.example.json
+ module_*.schema.json
+module_a_landslide/ # 트랙① — 산사태 예측
+module_b_flood/ # 트랙① — 하천범람 예측
+module_c_urban_rule/ # 트랙② — 도로·지하차도 침수 (규칙기반)
+module_d_exposure_overlay/ # 트랙② — 노출자산 오버레이
+module_e_routing/ # 트랙② — 대피소·경로 라우팅
+module_g_damage_cost/ # 트랙② — 피해비용 추정
 module_h_citizen_verification/ # 트랙② — 시민 신고 역검증
-module_o_orchestrator/      # 트랙③ — 골든타임 오케스트레이션
-ui/                           # 트랙③ — Next.js 대시보드 + 3D
-data/                         # static(10m) / dynamic(500m, 6~9월만) / vector
-api_server.py                  # FastAPI, 전 모듈 import
+module_o_orchestrator/ # 트랙③ — 골든타임 오케스트레이션
+ui/ # 트랙③ — Next.js 대시보드 + 3D
+data/ # static(10m) / dynamic(500m, 6~9월만) / vector
+api_server.py # FastAPI, 전 모듈 import
 ```
 
 ---
@@ -400,21 +400,21 @@ api_server.py                  # FastAPI, 전 모듈 import
 
 | 트랙 | 담당 | 소유 모듈 | 핵심 산출물 |
 |------|------|-----------|-------------|
-| ① 예측모델·위성·검증 | 김민석 | A, B, **V(신규)** | Infinite Slope/FoS 기반 산사태 polygon(TRIGRS 원리), SFINCS/ANUGA 기반 홍수 polygon, **Sentinel-1 predicted-vs-observed 자동 검증(Module V, A/B와 동급 우선순위)**, `f(dNBR,Δt)`, LDAPS 편차보정, 신뢰구간 |
-| ② 대응로직·데이터통합 | 나정우 | C, D, G, H | 도로침수 규칙엔진, 노출자산 오버레이, 피해비용, 시민 역검증 (Module E는 ④로 이관) |
-| ③ 오케스트레이션·UI·3D | 하수범 | O, UI, UI-3D | 상태머신·경보 전파, 대시보드, MapLibre+VWorld 3D 지도(건물/도로/교량 실데이터, 토사·침수 시뮬레이터), **자동승인 삭제→escalation 교체**, **Provenance 4단계 배지**, Module V 결과 predicted/observed 오버레이 — 이후 통합·데모 총괄 |
-| ④ 대피경로·고립분석 (신규) | 동현 | E (확장판) | 네이버/카카오 길찾기로 대피소 도달가능성, 도로망 그래프 기반 고립마을 자동탐지 — **독창성 축 4** |
+| ① 예측모델·위성·검증 | | A, B, **V(신규)** | Infinite Slope/FoS 기반 산사태 polygon(TRIGRS 원리), SFINCS/ANUGA 기반 홍수 polygon, **Sentinel-1 predicted-vs-observed 자동 검증(Module V, A/B와 동급 우선순위)**, `f(dNBR,Δt)`, LDAPS 편차보정, 신뢰구간 |
+| ② 대응로직·데이터통합 | | C, D, G, H | 도로침수 규칙엔진, 노출자산 오버레이, 피해비용, 시민 역검증 (Module E는 ④로 이관) |
+| ③ 오케스트레이션·UI·3D | | O, UI, UI-3D | 상태머신·경보 전파, 대시보드, MapLibre+VWorld 3D 지도(건물/도로/교량 실데이터, 토사·침수 시뮬레이터), **자동승인 삭제→escalation 교체**, **Provenance 4단계 배지**, Module V 결과 predicted/observed 오버레이 — 이후 통합·데모 총괄 |
+| ④ 대피경로·고립분석 (신규) | | E (확장판) | 네이버/카카오 길찾기로 대피소 도달가능성, 도로망 그래프 기반 고립마을 자동탐지 — **핵심 특징 4** |
 
-담당자가 바뀌어도 이 표와 §5~6(+ [HANDOFF.md](HANDOFF.md) §6·§7) 계약만 유지되면 재구성 가능. **Module E가 트랙②→④로 이관된 이유**: 네이버/카카오 API 연동 + 그래프 분석이 더해지면서 독립 서브시스템 규모로 커졌기 때문(상세: [HANDOFF.md §6·§7](HANDOFF.md)). **Module V가 트랙①에 배정된 이유**: 위성 데이터가 이미 트랙①의 스코프이고, A/B output을 가장 잘 아는 사람이 검증도 짜는 게 자연스럽다.
+담당자가 바뀌어도 이 표와 §5~6(+ §6·§7) 계약만 유지되면 재구성 가능. **Module E가 트랙②→④로 이관된 이유**: 네이버/카카오 API 연동 + 그래프 분석이 더해지면서 독립 서브시스템 규모로 커졌기 때문(상세:). **Module V가 트랙①에 배정된 이유**: 위성 데이터가 이미 트랙①의 스코프이고, A/B output을 가장 잘 아는 사람이 검증도 짜는 게 자연스럽다.
 
 ## 11. 2주 로드맵 (4인 체제 갱신판)
 
-| 구간 | ① 예측모델·검증(김민석) | ② 대응로직(나정우) | ③ 오케스트레이션/UI(하수범) | ④ 대피경로·고립분석(동현) |
+| 구간 | ① 예측모델·검증(트랙①) | ② 대응로직(트랙②) | ③ 오케스트레이션/UI(트랙③) | ④ 대피경로·고립분석(동현) |
 |------|-----------|-----------|---------------------|---------------------|
-| Day 1 | 넷이 §5~6(+§6·§7 HANDOFF) 리뷰, `contracts/` 확정(신규 `module_v.*` 포함) → 각자 착수. 산청 backtest용 실제 데이터 확보 가능한지 점검 | 〃 | 〃 + 자동승인 삭제→escalation 교체(간단해서 Day 1에 끝내는 게 좋음) | 〃 + 카카오/네이버 API 키 본인 발급 |
+| Day 1 | 넷이 §5~6 리뷰, `contracts/` 확정(신규 `module_v.*` 포함) → 각자 착수. 산청 backtest용 실제 데이터 확보 가능한지 점검 | 〃 | 〃 + 자동승인 삭제→escalation 교체(간단해서 Day 1에 끝내는 게 좋음) | 〃 + 카카오/네이버 API 키 본인 발급 |
 | Day 2-5 | 500m/1.5km/10m 파이프라인, Module A는 Infinite Slope/FoS baseline(목업 InSAR), Module B는 SFINCS/HydroMT-SFINCS 셋업(안 되면 ANUGA) — **Module V 뼈대도 병행 착수**(mock output으로 IoU/F1 로직 먼저 개발 가능) | Module C 규칙엔진, Module D(A/B example.json 입력), Module H 뼈대 | Module O mock→real 스위치 점검, Provenance 4단계 배지 UI, UI 안정화, 트랙 지원 | 대피경로 뼈대(손 대피소 후보 + 직선거리 근사) → 키 받으면 실연동 |
 | Day 6-9 | A/B 실데이터 학습·검증, 신뢰구간 산출·공유. **Module V를 실제 Sentinel-1(또는 실측 inventory)로 전환** | 실제 A/B output으로 D 전환, Module H를 precursor_flag와 실연동 | 트랙①②④ output 순차 실연동, **Module V predicted/observed 오버레이 UI**, 통합 테스트 | 고립마을 자동탐지(`networkx`, 기존 `/vworld/roads` 재사용) |
-| Day 10-12 | 산청 leakage-free 백테스트로 `golden_time_saved_min` 산출, Module V 지표 확정, 서울 out-of-sample 착수 여부 결정 | 산청 대피소/경로 실사례 검증 | §9 데모(검증화면 포함) 풀 리허설, 3D 지도 폴리싱, `api_server.py` 최종 통합 | 대피경로·고립탐지 UI를 Module O/3D 지도에 연결(하수범과 Day 10 전후 협업) |
+| Day 10-12 | 산청 leakage-free 백테스트로 `golden_time_saved_min` 산출, Module V 지표 확정, 서울 out-of-sample 착수 여부 결정 | 산청 대피소/경로 실사례 검증 | §9 데모(검증화면 포함) 풀 리허설, 3D 지도 폴리싱, `api_server.py` 최종 통합 | 대피경로·고립탐지 UI를 Module O/3D 지도에 연결(트랙③과 Day 10 전후 협업) |
 | Day 13-14 | 전원: 발표자료·기획서, 최종 리허설, 예상 질의응답 준비 | 〃 | 〃 | 〃 |
 
 ## 12. 남은 TODO
@@ -427,7 +427,7 @@ api_server.py                  # FastAPI, 전 모듈 import
 6. Module H 푸시 알림 채널 결정(문자/앱푸시/카톡 알림톡 — 데모는 웹 대시보드 시뮬레이션 대체 가능)
 7. ~~원클릭 승인 `auto_approve_timeout_min` 기본값 조정~~ → **2026-08-29 변경**: 자동승인 완전 삭제, escalation으로 교체(트랙③ 최우선, 상세는 [ARCHITECTURE.md §5 Module O](ARCHITECTURE.md#module-o--골든타임-오케스트레이션-module_o_orchestrator))
 8. Module O `input` 스키마(위 §6 참고사항) 4인 합의로 확정
-9. Module E — 네이버/카카오 길찾기 API 연동으로 대피 경로 실구현 (최우선, 상세 명세는 [HANDOFF.md §6](HANDOFF.md))
+9. Module E — 네이버/카카오 길찾기 API 연동으로 대피 경로 실구현 (최우선, 상세 명세는)
 10. `contracts/module_v.schema.json`/`module_v.example.json` 생성 및 4인 확정(신규, Module V)
 11. Module V leakage-free backtest용 실데이터(산청 실제 산사태 polygon·시간별 강우·도로통제·대피정보) 확보 가능 여부 Day 1~2에 점검 — 확보 안 되면 백테스트 사례 재검토
 
@@ -439,10 +439,10 @@ api_server.py                  # FastAPI, 전 모듈 import
 
 > 이 저장소의 README.md(또는 ARCHITECTURE.md)를 읽어라 — 배경(재해연쇄+골든타임 격차, 산청 사건)부터 반드시 이해한 뒤 §5~6(통합 규약·모듈 계약)으로 넘어가라. 다른 트랙의 내부 구현은 몰라도 된다 — 오직 `contracts/`의 example.json/schema.json이 네 모듈의 입출력 계약 전부다. Day 1엔 나머지 세 세션과 함께 `contracts/`를 먼저 확정하라.
 
-- **트랙①**: `module_a_landslide`, `module_b_flood`, **`module_v_validation`(신규, 2026-08-29)**. **방법론 필수**: Module A는 Infinite Slope/FoS(TRIGRS 원리)를 먼저 계산, ML은 그 위에 보정용으로만. Module B는 SFINCS(1순위, HydroMT-SFINCS)/ANUGA(대체) 통합 — 자체 solver 금지. **Module V는 A/B와 동급 우선순위**: Sentinel-1 predicted-vs-observed 자동 검증(IoU/F1/Recall), data leakage 절대 금지. 전문은 **[ARCHITECTURE.md §5 Module A/B/V](ARCHITECTURE.md)**. **2026-08-28 추가**: 실제 학습 후엔 AUC/ROC·정밀도재현율·혼동행렬·산청/서울 사례별 시계열 예측값을 남길 것(트랙③이 받을 UI는 이미 완성 — `ModelPerformancePanel.tsx`), 실시간 강수·수위 데이터 연동도 검토 — 상세는 **[HANDOFF.md §8](HANDOFF.md)**. 특히 **산청 leakage-free 백테스트**가 이 프로젝트에서 가장 중요한 단일 과제다 — 사건 이후 취득한 관측 데이터를 예측 입력에 섞지 않는 것이 핵심 원칙이다.
+- **트랙①**: `module_a_landslide`, `module_b_flood`, **`module_v_validation`(신규, 2026-08-29)**. **방법론 필수**: Module A는 Infinite Slope/FoS(TRIGRS 원리)를 먼저 계산, ML은 그 위에 보정용으로만. Module B는 SFINCS(1순위, HydroMT-SFINCS)/ANUGA(대체) 통합 — 자체 solver 금지. **Module V는 A/B와 동급 우선순위**: Sentinel-1 predicted-vs-observed 자동 검증(IoU/F1/Recall), data leakage 절대 금지. 전문은 **[ARCHITECTURE.md §5 Module A/B/V](ARCHITECTURE.md)**. **2026-08-28 추가**: 실제 학습 후엔 AUC/ROC·정밀도재현율·혼동행렬·산청/서울 사례별 시계열 예측값을 남길 것(트랙③이 받을 UI는 이미 완성 — `ModelPerformancePanel.tsx`), 실시간 강수·수위 데이터 연동도 검토 —. 특히 **산청 leakage-free 백테스트**가 이 프로젝트에서 가장 중요한 단일 과제다 — 사건 이후 취득한 관측 데이터를 예측 입력에 섞지 않는 것이 핵심 원칙이다.
 - **트랙②**: `module_c_urban_rule`, `module_d_exposure_overlay`, `module_g_damage_cost`, `module_h_citizen_verification` — D/G/H는 `contracts/module_a.example.json`, `module_b.example.json`을 목업 삼아 트랙①을 기다리지 않고 개발. **`module_e_routing`은 더 이상 이 트랙 소유가 아님 — 트랙④ 참조.**
 - **트랙③**: `module_o_orchestrator`, `ui/`(대시보드+채팅+경보 전파+3D) — **대부분 이미 완성돼 있음**, 먼저 읽고 실행해볼 것. A~H를 전부 `contracts/`의 example.json으로 목업 호출하는 파이프라인부터 굴려보고 실제 모듈로 하나씩 교체. 화면은 시민 모드/관공서 모드로 분리돼 있고(2026-08-28, §2), 원클릭 승인은 관공서 모드 메뉴에 이미 연결돼 있음. **최우선 신규 작업(2026-08-29)**: ① 자동승인 완전 삭제→escalation 교체(Day 1에 끝낼 것, 전문 [ARCHITECTURE.md §5 Module O](ARCHITECTURE.md)) ② Provenance 4단계 배지(OBSERVED/FORECAST/MODEL/ASSUMPTION, §7 참조) ③ Module V의 predicted/observed/TP-FP-FN 오버레이 화면 — 발표에서 3D 자유회전보다 비중이 커야 함
-- **트랙④ (신규)**: `module_e_routing`(확장판) — 네이버/카카오 길찾기 API로 대피 경로, 도로망 그래프로 고립마을 자동탐지. 상세 명세는 **[HANDOFF.md §6·§7](HANDOFF.md)을 그대로 따를 것** — 외부 API 키는 본인이 직접 발급받아야 함(계정 생성은 Claude Code가 대신 못 함)
+- **트랙④ (신규)**: `module_e_routing`(확장판) — 네이버/카카오 길찾기 API로 대피 경로, 도로망 그래프로 고립마을 자동탐지. 상세 명세는 **을 그대로 따를 것** — 외부 API 키는 본인이 직접 발급받아야 함(계정 생성은 Claude Code가 대신 못 함)
 
 ---
 

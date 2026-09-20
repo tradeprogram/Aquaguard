@@ -19,7 +19,7 @@ from typing import Any
 
 DRAINAGE_CLASSES = ("low", "medium", "high")
 
-# 결측 시 보수적 기본값 (2026-09-04 나정우 결정 1 — 경보 누락 방지가 이 프로젝트의 존재 이유)
+# 결측 시 보수적 기본값 (2026-09-04 트랙② 결정 1 — 경보 누락 방지가 이 프로젝트의 존재 이유)
 CONSERVATIVE_KNOWN_RISK = True
 CONSERVATIVE_DRAINAGE_CLASS = "low"
 

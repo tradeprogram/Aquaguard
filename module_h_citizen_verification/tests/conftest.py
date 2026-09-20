@@ -53,7 +53,7 @@ def payload(reports: list[dict], *, with_alert_issued_at: bool = True, radius_m:
         "citizen_reports": reports,
     }
     if with_alert_issued_at:
-        # 계약에 경보 시각 필드가 없어 트랙②가 제안한 optional 입력(TRACK2_CONTRACT_AGENDA.md 7번).
+        # 계약에 경보 시각 필드가 없어 트랙②가 제안한 optional 입력(계약 합의 항목 7번).
         body["alert_issued_at"] = ALERT_AT.isoformat()
     return body
 

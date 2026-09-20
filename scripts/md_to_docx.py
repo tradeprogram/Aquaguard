@@ -3,10 +3,10 @@
 저장소의 .md를 원본으로 두고 배포본을 만들기 위한 것이다 — 내용을 따로 옮겨 적으면
 두 벌이 어긋나므로, 항상 .md에서 생성한다.
 
-지원하는 문법은 docs/handoff/ 문서가 실제로 쓰는 것만이다:
+지원하는 문법은 작업 지시서 문서가 실제로 쓰는 것만이다:
   # ## ###  제목 · **굵게** · `코드` · 표 · ``` 코드블록 · > 인용 · - 목록 · --- 구분선
 
-    python scripts/md_to_docx.py docs/handoff/TRACK1_WORK_ORDER.md [출력.docx]
+    python scripts/md_to_docx.py 작업 지시서 [출력.docx]
 """
 
 from __future__ import annotations

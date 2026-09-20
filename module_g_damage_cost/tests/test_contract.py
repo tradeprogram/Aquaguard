@@ -14,7 +14,7 @@ def test_contract_example_input_cannot_produce_its_own_output(contract):
 
     주거 1세대 x 3,500,000 + 4.2ha(42,000m2) x 381 = 19,502,000원인데 문서값은
     1,250,000,000원으로 약 64배다. 단가 고시(국토부 제2026-90호·농식품부 제2026-78호)를
-    쓰는 한 재현할 수 없다. Day 1 계약 회의 안건 9번(TRACK2_CONTRACT_AGENDA.md).
+    쓰는 한 재현할 수 없다. Day 1 계약 회의 안건 9번(계약 합의 항목).
     """
     result = run(contract["input"])
     assert result["data"]["estimated_cost_krw"] == 19_502_000

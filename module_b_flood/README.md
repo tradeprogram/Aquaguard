@@ -5,14 +5,14 @@
 ## 구조 (module_a_landslide와 동일 패턴)
 | 파일 | 역할 |
 |---|---|
-| `__init__.py` | `run()` / `explain()` — §4.2 공통 봉투 진입점 |
+| `__init__.py` | `run` / `explain` — §4.2 공통 봉투 진입점 |
 | `envelope.py` | **계약 경계** — 계약 필드명을 아는 유일한 곳, 입력 정규화 + 폴백 계층 |
 | `flood.py` | 수문 모델(설명가능 로지스틱) — flood_prob·신뢰구간(MC 1000)·hours_to_critical |
 | `fim.py` | 침수 범위 → GeoJSON FeatureCollection(EPSG:5179): SFINCS 래스터 폴리곤화 / HAND-FIM |
 | `tests/` | pytest — 계약 준수·폴백 4계층·모델 단조성·MC 재현성 (15 통과) |
 
 ## 방법론
-- **flood_prob**: 순수 ML 아님. 실측 수위·강우를 홍수특보 기준(150mm/24h)·실측 홍수사례로 보정한 로지스틱. `explain()`이 logit·보정근거 노출(설명가능성 §6.1).
+- **flood_prob**: 순수 ML 아님. 실측 수위·강우를 홍수특보 기준(150mm/24h)·실측 홍수사례로 보정한 로지스틱. `explain`이 logit·보정근거 노출(설명가능성 §6.1).
 - **물리 백본**: 자체 solver 금지. **Deltares SFINCS**(국지관성+subgrid, 1순위) / **ANUGA**(완전 2D 동파, 대체)로 오프라인 보정·검증.
   - 검증(산청 경호강 2025-07-19): **경호교 수위 RMSE 1.42m**, 2엔진 교차 IoU 0.775, SFINCS 2.5일 시뮬 43초.
 - **inundation_extent_5179**: SFINCS/ANUGA 최대침수심 래스터 폴리곤화 또는 예측 수위 HAND-FIM. 지형 미주입 시 빈 FC + warning(정직).

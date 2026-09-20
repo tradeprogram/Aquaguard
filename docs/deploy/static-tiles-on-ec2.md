@@ -23,7 +23,7 @@ Vercel은 **배포할 때마다 정적 파일을 통째로 새로 저장**하고
       └─ 그 외          → reverse_proxy localhost:8000 (uvicorn, 기존 그대로)
 ```
 
-UI 쪽 연결점은 [`ui/src/lib/api.ts`](../../ui/src/lib/api.ts)의 `tileBase()` 하나다.
+UI 쪽 연결점은 [`ui/src/lib/api.ts`](../../ui/src/lib/api.ts)의 `tileBase` 하나다.
 `NEXT_PUBLIC_TILE_BASE`가 없으면 `window.location.origin`으로 떨어지므로
 **로컬 `npm run dev`는 아무 설정 없이 그대로 돈다**(`ui/public`에 파일이 있으니까).
 
