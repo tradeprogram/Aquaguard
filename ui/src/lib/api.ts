@@ -173,7 +173,15 @@ export interface AlertTimeline {
   // true면 UI는 "최대 범위"로만 표기하고 시간에 따라 번지는 척하지 않는다.
   flood_is_max: boolean;
   limits?: string[];
+  // 200이 아니었을 때의 상태코드. 화면 문구는 이걸 그대로 쓰지 않고 /health를 찔러
+  // "배포가 뒤처짐 / 서버가 죽음 / 요청 자체 문제"를 구분해 만든다(backendDiagnosis).
+  // 상태코드만 띄우면 2026-09-06 때처럼 진단이 헛돈다.
+  httpStatus?: number;
 }
+
+// FastAPI가 등록한 라우트 문자열 그대로 — /health의 routes와 대조해야 해서 경로
+// 파라미터가 치환되지 않은 형태여야 한다.
+export const TIMELINE_ROUTE = "/alerts/{alert_id}/timeline";
 
 const EMPTY_TIMELINE: AlertTimeline = {
   available: false,
@@ -185,7 +193,7 @@ const EMPTY_TIMELINE: AlertTimeline = {
 
 export async function getAlertTimeline(alertId: string): Promise<AlertTimeline> {
   const res = await fetch(`${API_BASE}/alerts/${alertId}/timeline`, { cache: "no-store" });
-  if (!res.ok) return { ...EMPTY_TIMELINE, reason: `시간축 조회 실패 (${res.status})` };
+  if (!res.ok) return { ...EMPTY_TIMELINE, httpStatus: res.status };
   const body = (await res.json()) as Partial<AlertTimeline>;
   return { ...EMPTY_TIMELINE, ...body };
 }

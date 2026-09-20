@@ -27,10 +27,12 @@ import {
   getVWorldRoads,
   searchAdmin,
   tileBase,
+  TIMELINE_ROUTE,
   type AdminLevel,
   type AdminSearchResult,
   type AlertTimeline,
 } from "@/lib/api";
+import { diagnoseFailure } from "@/lib/backendDiagnosis";
 import { DEFAULT_REGION, DEMO_REGIONS, type RegionKey } from "@/lib/demoShelters";
 import { useSlowLoading } from "@/lib/useSlowLoading";
 
@@ -410,6 +412,9 @@ export default function MapExplorer({
   // 읽을 수가 없다. 트랙①의 프레임(39시간)과 폴리곤별 도달시각을 받아서, 스크러버가
   // 가리키는 시각까지 도달한 영역만 누적해 세운다.
   const [timeline, setTimeline] = useState<AlertTimeline | null>(null);
+  // 시간축을 못 받았을 때 화면에 띄울 진단 문구. 상태코드가 아니라 /health를 찔러
+  // 만든 문장이라 "재시작하면 되는 건지"까지 바로 읽힌다.
+  const [timelineError, setTimelineError] = useState<string | null>(null);
   const [frameIdx, setFrameIdx] = useState(0);
   const [playing, setPlaying] = useState(false);
 
@@ -1347,6 +1352,14 @@ export default function MapExplorer({
       .then((t) => {
         if (cancelled) return;
         setTimeline(t);
+        if (t.httpStatus !== undefined) {
+          // 서버가 200을 안 줬다 — 왜인지는 /health가 알고 있다.
+          diagnoseFailure("시간축 조회", TIMELINE_ROUTE).then((msg) => {
+            if (!cancelled) setTimelineError(msg);
+          });
+        } else {
+          setTimelineError(null);
+        }
         // 처음 보이는 시각은 "탐지 시각"으로 맞춘다 — 빈 지도로 시작하면 무엇을
         // 보고 있는지 알 수 없고, 마지막 프레임으로 시작하면 번져가는 과정이 안 보인다.
         const detected = t.markers?.detected;
@@ -1354,7 +1367,11 @@ export default function MapExplorer({
         setFrameIdx(idx >= 0 ? idx : Math.max(t.frames.length - 1, 0));
       })
       .catch(() => {
-        if (!cancelled) setTimeline(null);
+        if (cancelled) return;
+        setTimeline(null);
+        diagnoseFailure("시간축 조회", TIMELINE_ROUTE).then((msg) => {
+          if (!cancelled) setTimelineError(msg);
+        });
       });
     return () => {
       cancelled = true;
@@ -1887,9 +1904,9 @@ export default function MapExplorer({
       {!showScrubber && (
         <div className="pointer-events-none absolute inset-x-0 bottom-0 flex justify-center p-4">
           <p className="pointer-events-auto rounded-lg border border-white/10 bg-slate-950/75 px-3 py-2 text-xs text-slate-400 backdrop-blur-xl">
-            {shelterRegion === "sancheong"
-              ? `시간축 없음 — ${timeline?.reason ?? "시계열 위험영역 레이어가 없습니다"}`
-              : "시간축 없음 — 시각별 위험영역은 산청 AOI만 사전계산돼 있습니다"}
+            {shelterRegion !== "sancheong"
+              ? "시간축 없음 — 시각별 위험영역은 산청 AOI만 사전계산돼 있습니다"
+              : (timelineError ?? `시간축 없음 — ${timeline?.reason ?? "시계열 위험영역 레이어가 없습니다"}`)}
           </p>
         </div>
       )}

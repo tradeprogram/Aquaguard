@@ -38,12 +38,18 @@ export async function diagnoseFailure(feature: string, requiredPath: string): Pr
       : `${feature} 실패 — 백엔드 서버가 응답하지 않습니다(${API_BASE}). 서버가 실행 중인지 확인해주세요.`;
   }
 
-  // 서버는 살아 있는데 그 엔드포인트가 없다 = 배포된 코드가 뒤처졌다.
+  // 서버는 살아 있는데 그 엔드포인트가 없다 = 돌고 있는 코드가 뒤처졌다.
+  //
+  // commit을 "그러니까 업데이트하세요"의 근거로 쓰면 안 된다 — api_server의
+  // _deployed_commit()은 요청받을 때마다 .git/HEAD를 읽으므로 **작업트리**의 커밋이지
+  // 프로세스가 적재한 코드가 아니다. git pull만 하고 재시작을 안 하면 commit은 최신인데
+  // routes에는 새 엔드포인트가 없는 상태가 된다(2026-09-20 로컬 재현). routes가 유일하게
+  // 믿을 수 있는 신호이고, 그래서 문구도 "재시작"을 먼저 말한다.
   if (Array.isArray(health.routes) && !health.routes.includes(requiredPath)) {
     return (
       `${feature} 실패 — 백엔드는 살아 있지만 ${requiredPath} 엔드포인트가 없습니다. ` +
-      `배포된 코드가 오래된 버전입니다(현재 ${health.commit ?? "버전 불명"}). ` +
-      `서버에서 git pull 후 재시작이 필요합니다.`
+      `돌고 있는 프로세스가 옛 코드입니다 — 서버에서 재시작해주세요` +
+      `(파일은 ${health.commit ?? "버전 불명"}까지 받아져 있는데 프로세스가 그걸 안 읽었을 수 있습니다).`
     );
   }
 
