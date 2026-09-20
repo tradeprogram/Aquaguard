@@ -18,7 +18,7 @@ from __future__ import annotations
 from typing import Any
 
 from . import envelope as _env
-from . import fos, parameters
+from . import forecast, fos, parameters
 from .envelope import envelope as _make
 
 __all__ = ["run", "explain"]
@@ -39,6 +39,36 @@ def _resolve_soil(input: dict, norm) -> tuple[dict, str, str, list[str]]:
         warns.append("부지 토양 미샘플 → 전국 대표 지반정수 폴백(ASSUMPTION). "
                      "정밀토양도 샘플러 연결 시 부지값으로 대체")
     return parameters.texture_strength(texture_kr), ad_kr, dc_kr, warns
+
+
+def _resolve_hours_to_critical(input: dict, norm, res, strength: dict,
+                               z: float, dc_kr: str):
+    """예보 시계열이 주입되면 도달시각을 적분하고, 없으면 관측 기준 0/null.
+
+    산불로 약화된 뿌리점착력(Cr/f)을 전진 적분에도 그대로 써서 run()의 현재값과
+    같은 물리를 쓴다 — 현재 P와 미래 P가 다른 모형이면 안 된다.
+    """
+    series, provenance = forecast.extract_series(input, norm.source)
+    cr_eff = parameters.ROOT_COHESION_HEALTHY_KPA / max(res.amplification_factor, 1e-6)
+
+    arrival = forecast.time_to_critical(
+        future_rain_1h_mm=series,
+        past_rain_1h_mm=(input.get("dynamic") or {}).get("rainfall_1h_mm"),
+        rain_24h_mm=norm.rain_24h_mm,
+        api_index=norm.api_index,
+        dc_kr=dc_kr,
+        strength=strength,
+        z_soil_depth_m=z,
+        slope_deg=norm.slope_deg,
+        cr_eff_kpa=cr_eff,
+        critical_prob=_env.CRITICAL_PROB,
+        current_prob=res.landslide_prob,
+    )
+    if series and arrival.hours_to_critical is not None:
+        arrival.warnings.append(
+            f"hours_to_critical={arrival.hours_to_critical}h — 예보강우 시계열"
+            f"({provenance}, +{len(series)}h) 전진적분 결과")
+    return arrival
 
 
 def run(input: dict) -> dict:  # noqa: A002 - §4.2 규약이 지정한 이름
@@ -68,14 +98,12 @@ def run(input: dict) -> dict:  # noqa: A002 - §4.2 규약이 지정한 이름
         precursor = norm.insar_mm_per_day is not None and \
             norm.insar_mm_per_day >= _env.PRECURSOR_INSAR_MM_PER_DAY
 
-        # hours_to_critical: 관측만이면 '이미 임계 초과(0)' 또는 '판단불가(null)'.
-        # 미래 시각은 LDAPS 예보 시계열이 있어야 산출(§5) — 연결 시 확장.
-        if res.landslide_prob >= _env.CRITICAL_PROB:
-            htc = 0.0
-        else:
-            htc = None
+        # hours_to_critical: 예보 시간강우 시계열이 있으면 1시간씩 전진시켜 첫
+        # 임계초과 시각을 구한다. 없으면 '이미 초과(0)'/'판단불가(null)' (§5).
+        arrival = _resolve_hours_to_critical(input, norm, res, strength, z, dc_kr)
+        htc = arrival.hours_to_critical
 
-        warnings = norm.warnings + soil_warns
+        warnings = norm.warnings + soil_warns + arrival.warnings
         return _make(
             status="ok" if norm.fallback_tier == 1 else "degraded",
             fallback_tier=norm.fallback_tier,

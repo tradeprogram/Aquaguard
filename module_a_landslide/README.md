@@ -65,15 +65,47 @@ FoS = ────────────────────────�
 
 ## 3. 구현·검증 상태
 
-**구현 완료** (`pytest module_a_landslide/tests/ -q` → 15 passed):
+**구현 완료** (`pytest module_a_landslide/tests/ -q` → **26 passed**):
 - `fos.py` — FoS 물리, 산불 f(dNBR,Δt), FoS→확률 시그모이드, 몬테카를로 CI
 - `parameters.py` — 토양도 지반정수 룩업 + 강우→포화도 m
 - `envelope.py` — 계약 정규화 + §7 폴백(tier 1 InSAR / 2 지형 / 3 예보) + graceful degradation
+- `forecast.py` — **LDAPS 예보 시간강우 → `hours_to_critical` 전진적분** (아래 3-1)
 - `__init__.py` — `run(input)->dict`(§4.2 공통 봉투) + `explain()`(§6.1 Provenance)
 
 **물리 검증** (산청 2025-07-19 조건: 경사 32.5°, dNBR high, 187mm/24h):
 - 사질 풍화토 주입 → **FoS 0.637 (<1) → landslide_prob 0.898, CI[0.81,0.94]** (고위험, 물리 정상)
 - 단조성 테스트 통과: 경사↑·포화↑·산불등급↑ → 위험↑
+
+### 3-1. hours_to_critical (a-htc)
+
+관측만으로는 미래 시각을 알 수 없어 종전에는 '이미 초과(0)' 또는 '판단불가(null)'뿐이었다.
+이제 **시간별 예보강우 시계열**을 받아 1시간씩 전진시키며 첫 임계초과(P≥0.7) 시각을 찾는다.
+
+```
+예보 시간강우 → 24h 이동누적 → m(t) → FoS(t) → P(t) → 첫 P≥0.7 시각
+```
+
+주입 방법(기존 `_soil`·`_terrain` 관례와 동일):
+
+```python
+input["_forecast"] = {"source": "LDAPS", "rain_1h_mm": [5, 8, 12, 20, 30, ...]}
+# 또는 dynamic.source=="forecast" 이면 dynamic.rainfall_1h_mm 자체를 예보로 해석
+```
+
+동작 확인(사질 풍화토 35° 사면):
+
+| 예보 | hours_to_critical |
+|---|---|
+| 30mm/h 지속 | **3.0 h** |
+| 점증(2→40mm/h) | **8.0 h** |
+| 3mm/h 약한 비 | null (지평 내 미도달) |
+| 28° 완사면 + 폭우 | null |
+
+**한계(중요)**: 전국 대표 폴백 토양(식양질, c'=8.7kPa)은 **완전포화(m=1.0)에서도
+FoS≈1.9**라 어떤 예보를 넣어도 임계에 도달하지 않는다. 즉 이 기능은 부지 토양이
+조립질(사질·역질·사력질)로 주입될 때만 값을 낸다 — 폴백 상태에서 null이 나오는 것은
+버그가 아니라 물리다. 예보 자체의 불확실성은 전파하지 않으며(tier 3 CI 확대는
+`run()`이 별도 처리), 지평은 LDAPS 운영범위에 맞춰 +48h로 제한한다.
 
 **정직성**: 계약 input에는 토성·토심이 없다 → Module A가 좌표에서 토양도를 샘플링해야 함.
 전국 토양도 shapefile은 대용량이라 미커밋 → 부지 미샘플 시 전국 대표 폴백값 사용 +
@@ -88,9 +120,10 @@ FoS = ────────────────────────�
 | A-1 | 정밀토양도 샘플러 연결(좌표→토성·토심·배수) | 디스크 토양도(확보) — 산청/안동 클립 |
 | A-2 | 5m DEM으로 slope·TWI·curvature 정밀화 | 국토정보플랫폼 DEM(키 필요) |
 | A-3 | 강우→포화도 m 계수 실측 보정 | 기상청 AWS·토양수분(일부 확보) |
-| A-4 | LDAPS 예보 연동 → `hours_to_critical` 실제 시간 | 기상청 API허브(키 필요) |
-| A-5 | FoS→확률 시그모이드 k 보정 + Ablation(±dNBR) | 산청 leakage-free 백테스트(HANDOFF §9.3) |
-| A-6 | (선택) LightGBM/XGBoost 보정을 physics 위에 | A-1~A-5 완료 후 |
+| ✅ A-4 | LDAPS 예보 연동 → `hours_to_critical` | **완료** — `forecast.py` (§3-1) |
+| ✅ A-5 | Ablation(±dNBR) | **완료** — `backtest_sancheong/` 39번. 산불이 peak 위험도 **1.88배**, 절대문턱 0.05%에서 **8h 앞당김** |
+| ✅ A-6 | (선택) ML 보정을 physics 위에 | **평가 후 기각** — 공간CV에서 유의한 개선 없음(p=0.074). 43번 참조 |
+| A-3′ | FoS→확률 시그모이드 k 실측 보정 | **발생부 좌표 필요** (산림청 요청 중) |
 
 미보정 구간(시그모이드 k, 강우 계수, InSAR 임계, 배수 m₀)은 코드·문서에 provenance로
 명시했고 백테스트 완료 시 실측으로 대체한다. **가상값을 성능처럼 제시하지 않는다.**
@@ -104,9 +137,10 @@ module_a_landslide/
   __init__.py       run()/explain() — 계약 진입점
   envelope.py       계약 정규화 + 공통 봉투 + 폴백 계층
   fos.py            무한사면 FoS + 산불계수 + 확률 + 몬테카를로 CI
+  forecast.py       예보 시간강우 → hours_to_critical 전진적분 (a-htc)
   parameters.py     정밀토양도 → 지반정수 룩업 로더
   data/             문헌 출처 지반정수(가상값 없음) + 토양 코드사전
-  tests/            계약 6 + 물리 9 = 15 passed
+  tests/            계약 6 + 물리 9 + 예보 11 = 26 passed
   README.md         이 문서
   DATA_SOURCES.md   출처·이중검증·라이선스
 ```
