@@ -20,7 +20,7 @@ from typing import Any
 from . import envelope as _env
 from dataclasses import dataclass
 
-from . import forecast, fos, parameters, soil_sampler
+from . import forecast, fos, parameters, risk_layers, soil_sampler
 from .envelope import envelope as _make
 
 __all__ = ["run", "explain"]
@@ -56,7 +56,7 @@ def _resolve_soil(input: dict, norm) -> _ResolvedSoil:
         sampled = soil_sampler.sample(norm.x_5179, norm.y_5179)
         if sampled:
             soil = sampled
-            warns.append("부지 토양: 산청 토양격자 25m 자동 샘플링(MEASURED)")
+            warns.append("부지 토양: 산청 토양격자 5m 자동 샘플링(MEASURED)")
 
     raw = parameters.strength_from_raw(soil)
     if raw is not None:
@@ -150,7 +150,19 @@ def run(input: dict) -> dict:  # noqa: A002 - §4.2 규약이 지정한 이름
                                              soil.dc_kr, soil.m0)
         htc = arrival.hours_to_critical
 
-        warnings = norm.warnings + soil.warnings + arrival.warnings
+        # 계약 risk_polygon_5179 (안건 1, 2026-09-04): FoS 격자에서 임계를 넘는 셀을
+        # 폴리곤으로 묶는 방식은 트랙①이 정한다 — scripts/45 가 사전계산한 레이어에서
+        # 질의 지점 주변만 잘라 넘긴다. 없으면 null 이고, 그때 Module D 가 location 을
+        # 반경 버퍼로 흡수한다(계약이 정한 폴백).
+        risk_poly = risk_layers.local(norm.x_5179, norm.y_5179)
+        poly_warns = []
+        if risk_poly is not None:
+            poly_warns.append(
+                f"risk_polygon_5179: 사전계산 위험영역 레이어 사용"
+                f"({risk_layers.DEFAULT_SCENARIO}/{risk_layers.DEFAULT_LEVEL}, 반경 "
+                f"{risk_layers.LOCAL_RADIUS_M:.0f}m). 공간정확도는 발생부 참값 부재로 미검증")
+
+        warnings = norm.warnings + soil.warnings + arrival.warnings + poly_warns
         return _make(
             status="ok" if norm.fallback_tier == 1 else "degraded",
             fallback_tier=norm.fallback_tier,
@@ -162,6 +174,7 @@ def run(input: dict) -> dict:  # noqa: A002 - §4.2 규약이 지정한 이름
                 "precursor_flag": precursor,
                 "hours_to_critical": htc,
                 "location": {"x_5179": norm.x_5179, "y_5179": norm.y_5179},
+                "risk_polygon_5179": risk_poly,
             },
             warnings=warnings,
         )

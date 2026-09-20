@@ -62,7 +62,8 @@ K_SIG = 6.0
 # 확률 임계 → FoS 임계. P = 1/(1+exp(k(FoS−1))) 를 FoS 에 대해 푼 값.
 LEVELS = {"warning": 0.5, "critical": 0.7}
 SIMPLIFY_M = 5.0          # 5m 격자라 5m 단순화는 계단만 깎고 형상은 보존
-MIN_AREA_M2 = 250.0       # 10셀 미만 파편 제거 — 3D 에서 점처럼 보이고 파일만 키운다
+MIN_AREA_M2 = 100.0       # 4셀 미만 파편 제거. 250(10셀)은 과해서 A_soilmap
+                          # 면적의 34%가 날아갔다 — 버린 양을 index 에 기록한다
 
 
 def fos_threshold(p: float) -> float:
@@ -110,8 +111,15 @@ def arrival_raster(margin, valid, rt_max):
 
 
 def vectorize(arr, transform, times):
-    """도달시각 래스터 → 폴리곤. 같은 도달시각끼리 병합해 feature 수를 줄인다."""
+    """도달시각 래스터 → 폴리곤. 같은 도달시각끼리 병합해 feature 수를 줄인다.
+
+    반환: (features, 버린면적_m2, 대표지점들)
+    대표지점은 면적 큰 폴리곤의 대표점(representative_point)이다 — 데모/시뮬레이터가
+    "어디를 트리거로 잡아야 실제 위험영역이 잡히는가"를 알아야 하기 때문.
+    """
     feats = []
+    dropped_m2 = 0.0
+    reps: list[tuple[float, float, float]] = []
     for hour_idx in np.unique(arr):
         if hour_idx == 0:
             continue
@@ -121,10 +129,14 @@ def vectorize(arr, transform, times):
             continue
         merged = unary_union(geoms)
         merged = merged.simplify(SIMPLIFY_M, preserve_topology=True)
-        parts = [g for g in (merged.geoms if merged.geom_type == "MultiPolygon" else [merged])
-                 if g.area >= MIN_AREA_M2]
+        allparts = list(merged.geoms if merged.geom_type == "MultiPolygon" else [merged])
+        parts = [g for g in allparts if g.area >= MIN_AREA_M2]
+        dropped_m2 += sum(g.area for g in allparts if g.area < MIN_AREA_M2)
         if not parts:
             continue
+        for g in sorted(parts, key=lambda q: -q.area)[:3]:
+            rp = g.representative_point()
+            reps.append((float(g.area), float(rp.x), float(rp.y)))
         geom = unary_union(parts)
         t = times[int(hour_idx) - 1]
         feats.append({
@@ -136,7 +148,8 @@ def vectorize(arr, transform, times):
             },
             "geometry": json.loads(json.dumps(mapping(geom))),
         })
-    return feats
+    reps.sort(key=lambda r: -r[0])
+    return feats, round(dropped_m2, 1), reps[:5]
 
 
 def main() -> None:
@@ -182,7 +195,7 @@ def main() -> None:
                   f"도달 픽셀 {n_px:,} ({n_px*25/1e6:.3f} km²)", flush=True)
             if n_px == 0:
                 continue
-            feats = vectorize(arr, tr, times)
+            feats, dropped, reps = vectorize(arr, tr, times)
             fc = {
                 "type": "FeatureCollection",
                 "crs": {"type": "name", "properties": {"name": "urn:ogc:def:crs:EPSG::5179"}},
@@ -202,6 +215,10 @@ def main() -> None:
                 "file": fn.name, "features": len(feats), "pixels": n_px,
                 "area_km2": round(n_px * 25 / 1e6, 4), "size_kb": round(size_kb, 1),
                 "prob_threshold": p_thr,
+                "dropped_fragment_m2": dropped,
+                "dropped_pct": round(100 * dropped / max(n_px * 25, 1), 1),
+                "대표지점_5179": [{"area_m2": round(a, 1), "x_5179": round(x, 1),
+                                "y_5179": round(y, 1)} for a, x, y in reps],
             }
 
     index["frames"] = [{"hour": i, "time": t.strftime("%Y-%m-%dT%H:%M:%S+09:00"),

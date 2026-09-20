@@ -65,7 +65,7 @@ FoS = ────────────────────────�
 
 ## 3. 구현·검증 상태
 
-**구현 완료** (`pytest module_a_landslide/tests/ -q` → **37 passed**):
+**구현 완료** (`pytest module_a_landslide/tests/ -q` → **46 passed**):
 - `fos.py` — FoS 물리, 산불 f(dNBR,Δt), FoS→확률 시그모이드, 몬테카를로 CI
 - `parameters.py` — 토양도 지반정수 룩업 + 강우→포화도 m
 - `envelope.py` — 계약 정규화 + §7 폴백(tier 1 InSAR / 2 지형 / 3 예보) + graceful degradation
@@ -152,12 +152,19 @@ input["_soil"] = {"c_kpa": 2.0, "phi_deg": 36.0, "gamma_kn_m3": 19.0, "z_m": 1.0
 경로를 쓰고 있었다(`MapExplorer.tsx` 주석). `scripts/45_risk_polygons_timeseries.py`
 가 산청 전역 5m 격자를 실측 강우로 구동해 그 지오메트리를 만든다.
 
-| 레이어 | 면적 | feature |
-|---|---|---|
-| `A_soilmap` critical (P≥0.7) | 0.010 km² | 2 |
-| `A_soilmap` warning (P≥0.5) | 0.238 km² | 4 |
-| `B_weathered` critical | 0.940 km² | 7 |
-| `B_weathered` warning | 5.006 km² | 8 |
+| 레이어 | 면적 | feature | 대표지점(EPSG:5179) |
+|---|---|---|---|
+| `A_soilmap` critical (P≥0.7) | 0.010 km² | 2 | 1046783, 1707543 |
+| `A_soilmap` warning (P≥0.5) | 0.238 km² | 6 | 1028356, 1696214 |
+| `B_weathered` critical | 0.940 km² | 10 | 1028452, 1694587 |
+| `B_weathered` warning | 5.006 km² | 9 | 1028548, 1694617 |
+
+**대표지점**은 각 레이어에서 가장 큰 폴리곤의 대표점이다(`risk_landslide_index.json`).
+데모·시뮬레이터가 "어디를 트리거로 잡아야 실제 위험영역이 잡히는가"를 알아야 해서 넣었다 —
+고립된 1~2셀 파편 위를 찍으면 `risk_polygon_5179` 가 null 로 나온다.
+
+4셀(100m²) 미만 파편은 버린다. 버린 양은 레이어별 11~17%이고 `dropped_pct` 로 기록해
+뒀다(처음엔 10셀 기준이라 34%가 날아가서 낮췄다).
 
 각 feature에 **`arrival_hour`(임계 첫 도달 시각)** 이 붙어 있어서, UI는 이 값으로
 필터링하면 시간에 따라 위험이 번지는 애니메이션이 된다. B_weathered critical 기준
@@ -171,6 +178,30 @@ input["_soil"] = {"c_kpa": 2.0, "phi_deg": 36.0, "gamma_kn_m3": 19.0, "z_m": 1.0
 **한계**: Rsat·Wmax·시그모이드 k는 미보정이고, 발생부 참값이 없어 이 폴리곤의
 **공간정확도는 검증되지 않았다.** `arrival_hour` 는 "그 시각에 임계를 처음 넘었다"이지
 "그 시각에 붕괴했다"가 아니다.
+
+### 3-5. 계약 `risk_polygon_5179` 연결
+
+계약(`module_a.schema.json`, 안건 1 · 2026-09-04 합의)은 *"FoS 격자에서 임계치를 넘는
+셀을 어떻게 폴리곤으로 묶을지는 **트랙①이 정한다**"* 라고 정하고, 산출 불가할 때만
+null 을 허용한다. `run()` 이 이제 그 필드를 채운다 — `risk_layers.local()` 이 질의
+지점 반경 2km 안의 위험영역만 잘라 `MultiPolygon` 으로 돌려준다.
+
+Module O 는 이미 `landslide.get("risk_polygon_5179")` 를 읽고 있었다
+(`orchestrator.py`). Module A 쪽만 비어 있어서 D 가 *"점 좌표를 반경 100m로 버퍼링 —
+실제 위험영역이 아니라 가정값(ASSUMPTION)"* 경고를 달고 돌던 것이다. 이제 그 경고가
+사라진다.
+
+통합 실행 결과(Module O, `AQUAGUARD_MOCK_MODE=0`, 대표지점 트리거):
+
+```
+landslide_prob     0.798
+risk_polygon_5179  MultiPolygon 폴리곤 3개   ← 종전 null
+D 버퍼폴백 경고     없음                      ← 종전 ASSUMPTION 경고
+exposure / shelter_route / damage_cost  전부 생성
+```
+
+위험영역에서 먼 지점은 계약대로 **null** 을 돌려준다 — 없는 위험영역을 지어내지 않고,
+그때 D 가 반경 버퍼로 흡수하며 `degraded` 로 내린다.
 
 **정직성**: 계약 input에는 토성·토심이 없다 → Module A가 좌표에서 토양도를 샘플링해야 함.
 전국 토양도 shapefile은 대용량이라 미커밋 → 부지 미샘플 시 전국 대표 폴백값 사용 +
@@ -203,6 +234,7 @@ module_a_landslide/
   envelope.py       계약 정규화 + 공통 봉투 + 폴백 계층
   fos.py            무한사면 FoS + 산불계수 + 확률 + 몬테카를로 CI
   forecast.py       예보 시간강우 → hours_to_critical 전진적분 (a-htc)
+  risk_layers.py    사전계산 위험 폴리곤 로더 → 계약 risk_polygon_5179
   soil_sampler.py   좌표 → 부지 지반정수 (a-1, numpy만 사용)
   parameters.py     정밀토양도 → 지반정수 룩업 로더
   data/             문헌 출처 지반정수(가상값 없음) + 토양 코드사전
@@ -210,7 +242,7 @@ module_a_landslide/
     risk_polygons/    위험 폴리곤 시계열 GeoJSON(EPSG:5179) + index
     validation_andong/  안동 사전검증 산출물(방법론 검증 — 산청 참값 확보 전 단계)
   scripts/          데이터 준비·검증 파이프라인 01~15 (아래 §5-1)
-  tests/            계약 6 + 물리 9 + 예보 11 + 토양/격자 11 = 37 passed
+  tests/            계약 6 + 물리 9 + 예보 11 + 토양 11 + 위험영역 9 = 46 passed
   README.md         이 문서
   DATA_SOURCES.md   출처·이중검증·라이선스
 ```

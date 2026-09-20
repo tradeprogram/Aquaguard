@@ -1,37 +1,148 @@
 {
-  "생성": "2026-09-20 18:15",
+  "생성": "2026-09-20 18:25",
   "layers": {
     "A_soilmap_warning": {
       "file": "risk_landslide_A_soilmap_warning_5179.geojson",
-      "features": 4,
+      "features": 6,
       "pixels": 9507,
       "area_km2": 0.2377,
-      "size_kb": 60.5,
-      "prob_threshold": 0.5
+      "size_kb": 97.6,
+      "prob_threshold": 0.5,
+      "dropped_fragment_m2": 34338.6,
+      "dropped_pct": 14.4,
+      "대표지점_5179": [
+        {
+          "area_m2": 4058.2,
+          "x_5179": 1028356.4,
+          "y_5179": 1696214.0
+        },
+        {
+          "area_m2": 3483.8,
+          "x_5179": 1028427.0,
+          "y_5179": 1694672.3
+        },
+        {
+          "area_m2": 3309.0,
+          "x_5179": 1028907.6,
+          "y_5179": 1696683.8
+        },
+        {
+          "area_m2": 2734.6,
+          "x_5179": 1046785.8,
+          "y_5179": 1707550.5
+        },
+        {
+          "area_m2": 1648.3,
+          "x_5179": 1047710.2,
+          "y_5179": 1712637.8
+        }
+      ]
     },
     "A_soilmap_critical": {
       "file": "risk_landslide_A_soilmap_critical_5179.geojson",
       "features": 2,
       "pixels": 411,
       "area_km2": 0.0103,
-      "size_kb": 2.7,
-      "prob_threshold": 0.7
+      "size_kb": 4.1,
+      "prob_threshold": 0.7,
+      "dropped_fragment_m2": 1161.3,
+      "dropped_pct": 11.3,
+      "대표지점_5179": [
+        {
+          "area_m2": 3221.6,
+          "x_5179": 1046783.0,
+          "y_5179": 1707543.0
+        },
+        {
+          "area_m2": 974.0,
+          "x_5179": 1046638.3,
+          "y_5179": 1707320.6
+        },
+        {
+          "area_m2": 874.1,
+          "x_5179": 1047713.5,
+          "y_5179": 1712632.8
+        },
+        {
+          "area_m2": 786.7,
+          "x_5179": 1031508.9,
+          "y_5179": 1697300.9
+        }
+      ]
     },
     "B_weathered_warning": {
       "file": "risk_landslide_B_weathered_warning_5179.geojson",
-      "features": 8,
+      "features": 9,
       "pixels": 200225,
       "area_km2": 5.0056,
-      "size_kb": 1251.9,
-      "prob_threshold": 0.5
+      "size_kb": 2015.8,
+      "prob_threshold": 0.5,
+      "dropped_fragment_m2": 846989.8,
+      "dropped_pct": 16.9,
+      "대표지점_5179": [
+        {
+          "area_m2": 34650.8,
+          "x_5179": 1028548.0,
+          "y_5179": 1694617.4
+        },
+        {
+          "area_m2": 34201.3,
+          "x_5179": 1033753.6,
+          "y_5179": 1695337.0
+        },
+        {
+          "area_m2": 32140.9,
+          "x_5179": 1033990.1,
+          "y_5179": 1694757.3
+        },
+        {
+          "area_m2": 9202.7,
+          "x_5179": 1032864.5,
+          "y_5179": 1694002.7
+        },
+        {
+          "area_m2": 7592.0,
+          "x_5179": 1028443.7,
+          "y_5179": 1694587.4
+        }
+      ]
     },
     "B_weathered_critical": {
       "file": "risk_landslide_B_weathered_critical_5179.geojson",
-      "features": 7,
+      "features": 10,
       "pixels": 37611,
       "area_km2": 0.9403,
-      "size_kb": 214.7,
-      "prob_threshold": 0.7
+      "size_kb": 394.0,
+      "prob_threshold": 0.7,
+      "dropped_fragment_m2": 158007.5,
+      "dropped_pct": 16.8,
+      "대표지점_5179": [
+        {
+          "area_m2": 16407.6,
+          "x_5179": 1028452.4,
+          "y_5179": 1694587.4
+        },
+        {
+          "area_m2": 8191.3,
+          "x_5179": 1028380.6,
+          "y_5179": 1696206.5
+        },
+        {
+          "area_m2": 7691.8,
+          "x_5179": 1028375.1,
+          "y_5179": 1695079.6
+        },
+        {
+          "area_m2": 1048.9,
+          "x_5179": 1032871.3,
+          "y_5179": 1694080.1
+        },
+        {
+          "area_m2": 1036.4,
+          "x_5179": 1047408.4,
+          "y_5179": 1710563.9
+        }
+      ]
     }
   },
   "frames": [
