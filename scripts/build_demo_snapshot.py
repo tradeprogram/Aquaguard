@@ -31,6 +31,15 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
+# .env를 읽어야 Module E가 네이버 Directions를 실제로 부른다.
+#
+# 이게 빠져 있어서 키를 .env에 넣어도 스냅샷은 **직선거리 근사**를 구운 채로 나왔다.
+# 저장본은 한 번 구우면 화면이 계속 그걸 쓰므로, 여기서 키를 못 읽으면 실도로 경로가
+# 영영 안 들어간다 — api_server.py는 load_dotenv()를 부르는데 이 스크립트만 빠져 있었다.
+from dotenv import load_dotenv  # noqa: E402
+
+load_dotenv(REPO_ROOT / ".env")
+
 from module_o_orchestrator.snapshot import SNAPSHOT_PATH, input_fingerprint  # noqa: E402
 
 DEMO_INPUT_PATH = REPO_ROOT / "contracts" / "module_o.example.json"
@@ -61,6 +70,10 @@ def build(verbose: bool = True) -> dict:
     from module_o_orchestrator.orchestrator import run as run_orchestrator
 
     payload = demo_input()
+
+    if not (os.environ.get("NAVER_CLIENT_ID") and os.environ.get("NAVER_CLIENT_SECRET")):
+        print("  [경고] NAVER_CLIENT_ID/SECRET이 없습니다 — 대피 경로가 직선거리 근사로 "
+              "구워집니다. .env에 키를 넣고 다시 만드십시오.")
 
     # 시간축 프레임(트랙①의 사전계산 강우 시계열) — 침수 수위를 여기에 맞춰 붙인다.
     frames = []
@@ -287,6 +300,16 @@ def main() -> int:
     print(f"완료: {size_mb:.2f}MB  input_sha={snapshot['input_sha']}  "
           f"commit={snapshot['built_commit']}")
     write_ui_copies(snapshot)
+
+    # 구운 결과가 실제로 실도로 경로인지 마지막에 다시 확인한다 — 빌드는 성공했는데
+    # 내용이 근사인 채로 배포되는 게 제일 나쁜 경우다.
+    route = (snapshot["envelope"]["data"]["alert_package"].get("shelter_route") or {})
+    if route.get("fallback_used"):
+        print("  [경고] 대피 경로가 직선거리 근사입니다 — tests/test_demo_snapshot.py가 "
+              "이걸 실패로 잡습니다.")
+    else:
+        pts = len((route.get("route_5179") or {}).get("coordinates") or [])
+        print(f"  대피 경로: 실도로 {pts}점, ETA {route.get('eta_min')}분")
     return 0
 
 

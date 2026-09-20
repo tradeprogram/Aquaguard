@@ -263,3 +263,29 @@ def test_geojson_serves_flood_before_the_demo_is_triggered() -> None:
 
     # 저장본에 없는 경보는 여전히 404 — 아무 id나 물으면 침수를 주면 안 된다
     assert client.get("/alerts/NO-SUCH-ALERT/geojson").status_code == 404
+
+
+def test_snapshot_route_is_a_real_road_route(snapshot: dict) -> None:
+    """저장된 대피 경로가 실도로여야 한다 — 직선거리 근사는 받지 않는다.
+
+    대피 경로는 이 시스템이 시민에게 "이 길로 가세요"라고 말하는 부분이다. 직선은
+    강을 건너고 산을 넘는 선이라 안내로 쓸 수 없고, 저장본에 한 번 구워지면 화면이
+    계속 그걸 보여준다.
+
+    깨지면 고칠 게 아니라 키를 넣고 다시 구우면 된다:
+        1. .env 에 NAVER_CLIENT_ID / NAVER_CLIENT_SECRET 추가 (채팅에 붙여넣지 말 것)
+        2. python scripts/build_demo_snapshot.py
+    """
+    route = snapshot["envelope"]["data"]["alert_package"].get("shelter_route") or {}
+    assert route, "대피 경로가 아예 없다"
+
+    assert not route.get("fallback_used"), (
+        "대피 경로가 직선거리 근사다 — .env에 NAVER_CLIENT_ID/SECRET을 넣고 "
+        "python scripts/build_demo_snapshot.py 로 다시 구우십시오"
+    )
+
+    coords = (route.get("route_5179") or {}).get("coordinates") or []
+    assert len(coords) > 2, f"경로 점이 {len(coords)}개뿐 — 실도로라면 꺾임이 있어야 한다"
+
+    for mode in (route.get("modes") or {}).values():
+        assert mode.get("source") != "straight_line_approx", f"{mode}가 직선 근사다"
