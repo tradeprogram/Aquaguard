@@ -1116,26 +1116,34 @@ export default function MapExplorer({
         paint: {
           // 침수심에 따라 색이 이어진다. 구간이 15단(0.3~14m)이고 그 사이를 보간해서
           // 얕은 하늘색에서 깊은 남색까지 물처럼 번진다.
+          // 깊이 램프 — 얕은 가장자리는 짙은 남색, 깊은 물길은 시안→연두→노랑으로
+          // 타오르게. FLOW-3D 유속도 같은 형광 느낌이 시안~연두 구간에서 나온다.
+          //
+          // **주황·빨강은 쓰지 않는다.** 그 색은 산사태 위험영역과 통행 불가 도로가
+          // 이미 쓰고 있어서, 깊은 물까지 빨개지면 지도에서 두 재해가 구분되지 않는다.
+          // 노랑에서 멈추는 건 미적 취향이 아니라 그 이유다.
+          //
+          // (참고: 레퍼런스는 유속을 칠한 것이고 우리 값은 침수심이다. 유속 산출물이
+          //  없어서 같은 양을 칠할 수는 없다 — 범례에 '침수심'이라고 적어 둔다.)
           "fill-color": [
             "interpolate",
             ["linear"],
             ["number", ["get", "depth_min_m"], 0.3],
-            0.3, "#bae6fd",
-            1.0, "#7dd3fc",
-            2.0, "#38bdf8",
+            0.3, "#1e3a8a",
+            1.0, "#1d4ed8",
+            2.0, "#2563eb",
             3.0, "#0ea5e9",
-            4.0, "#0284c7",
-            5.0, "#0369a1",
-            6.0, "#075985",
-            8.0, "#1e40af",
-            10.0, "#1e3a8a",
-            14.0, "#172554",
+            4.0, "#06b6d4",
+            5.0, "#22d3ee",
+            6.0, "#2dd4bf",
+            8.0, "#4ade80",
+            10.0, "#a3e635",
+            12.0, "#facc15",
+            14.0, "#fde047",
           ],
-          // 구간이 누적이라 깊은 쪽이 얕은 쪽 위에 겹친다. 불투명하게 두면 맨 위
-          // 색만 보여 정확하지만 아래 지형이 아예 안 보이고, 너무 투명하면 겹친
-          // 만큼 색이 진해져 범례와 어긋난다. 0.82면 맨 위 색이 사실상 그대로 보이면서
-          // 가장자리 얕은 구간으로 지형이 비친다.
-          "fill-opacity": 0.82,
+          // 형광 느낌을 살리려면 색이 살아야 한다 — 0.82에서 0.88로 올리되
+          // 완전 불투명으로 가지는 않는다(가장자리 얕은 구간으로 지형이 비쳐야 물처럼 보인다).
+          "fill-opacity": 0.88,
           "fill-antialias": true,
         },
       });
@@ -1988,15 +1996,21 @@ export default function MapExplorer({
                 </div>
               </div>
               <div className="flex items-start gap-2">
-                <span className="mt-0.5 h-3 w-3 shrink-0 rounded-sm bg-sky-500" />
+                <span
+                  className="mt-0.5 h-3 w-3 shrink-0 rounded-sm"
+                  style={{ background: "linear-gradient(135deg,#1e3a8a,#22d3ee,#a3e635,#fde047)" }}
+                />
                 <div>
                   <p className="text-slate-200">침수 범위 · Module B</p>
                   <p className="text-slate-500">
                     {floodSeries?.available ? (
                       <>
                         이 시각의 침수
-                        {frameMaxDepth !== null && <> (최심 {frameMaxDepth.toFixed(1)}m)</>}. 얕은 곳은
-                        하늘색, 깊을수록 남색입니다 — 깊이는{" "}
+                        {frameMaxDepth !== null && <> (최심 {frameMaxDepth.toFixed(1)}m)</>}. 가장자리
+                        얕은 곳이 <span className="text-blue-300">남색</span>, 깊은 물길로 갈수록{" "}
+                        <span className="text-cyan-300">시안</span> →{" "}
+                        <span className="text-lime-300">연두</span> →{" "}
+                        <span className="text-yellow-300">노랑</span>입니다 — 깊이는{" "}
                         <span className="text-slate-300">높이가 아니라 색</span>으로 표시합니다.
                       </>
                     ) : (
