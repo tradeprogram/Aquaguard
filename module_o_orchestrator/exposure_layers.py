@@ -48,6 +48,11 @@ AOI_LAYERS = {
         # 아니라 경보지점 반경으로 잘랐다(이유는 scripts/build_aoi_exposure_layers.py).
         "clip_center_5179": (1_050_511.5, 1_706_245.2),
         "clip_radius_m": 12_000,
+        # Module B가 침수 폴리곤을 만들 때 쓰는 최대침수심 래스터(50m, EPSG:5179).
+        # 트랙①의 SFINCS 산출물이며 ANUGA 대체본도 같은 디렉터리에 있다 — 두 엔진
+        # 교차 IoU 0.775, 경호교 수위 RMSE는 SFINCS 1.42m / ANUGA 2.48m라 SFINCS를
+        # 기본으로 둔다(module_v_validation/data/module_b_engine_comparison.json).
+        "flood_depth_raster": REPO_ROOT / "module_b_flood" / "data" / "sfincs_maxdepth_50m.tif",
     },
     "seoul": {
         "bbox_5179": (950_684.0, 1_939_337.0, 963_484.0, 1_951_281.0),
@@ -56,6 +61,8 @@ AOI_LAYERS = {
         "farmland": None,
         "boundary_level": "sigungu",
         "boundary_codes": ("11220", "11230"),
+        # 수리모형을 산청 유역에만 구축했다 — 강남·서초는 침수심 래스터가 없다.
+        "flood_depth_raster": None,
     },
 }
 DEFAULT_AOI = "sancheong"  # §9 메인 데모
@@ -182,3 +189,21 @@ def building_footprints(aoi: str = DEFAULT_AOI) -> tuple[dict[str, Any], str | N
 def farmland_parcels(aoi: str = DEFAULT_AOI) -> tuple[dict[str, Any], str | None]:
     """농경지 필지(EPSG:5179)와 문제가 있었다면 그 경고."""
     return _load_farmland(aoi)
+
+
+def flood_depth_raster(aoi: str = DEFAULT_AOI) -> tuple[str | None, str | None]:
+    """Module B에 넘길 최대침수심 래스터 경로와, 없다면 그 경고.
+
+    건물·농경지와 달리 Module B는 파일을 직접 읽으므로 경로만 돌려준다.
+    래스터가 없으면 Module B가 빈 FeatureCollection + 경고로 내려가고,
+    지도에는 침수 3D 볼륨이 그려지지 않는다 — "침수 없음"이 아니라
+    "계산하지 못함"이므로 그 구분이 경고로 올라가야 한다.
+    """
+    path = AOI_LAYERS.get(aoi, {}).get("flood_depth_raster")
+    if path is None:
+        return None, (f"{aoi} 침수심 래스터 없음 — 수리모형 미구축 지역이라 "
+                      "침수범위를 산출하지 않는다(침수 없음과 다름)")
+    if not path.exists():
+        return None, (f"{aoi} 침수심 래스터를 찾을 수 없음({path.name}) → 침수범위 미산출. "
+                      "재생성: python module_b_flood/scripts/34_sfincs_run_validate.py")
+    return str(path), None

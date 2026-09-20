@@ -17,6 +17,7 @@ from .exposure_layers import (
     building_footprints,
     coverage_warning,
     farmland_parcels,
+    flood_depth_raster,
     resolve_aoi,
 )
 from .modules_client import call_explain, call_module, module_sources, resolve_source
@@ -122,6 +123,17 @@ def run(input: dict[str, Any]) -> dict[str, Any]:  # noqa: A002 - §4.2 규약�
     }
     module_b_input = {"reach_id": input.get("reach_id"), **input.get("module_b_extra", {})}
 
+    # 침수심 래스터는 어느 모듈의 출력도 아니라 O가 §10 데이터 접근 계층에서 경로를
+    # 찾아 넘긴다(건물·농경지와 같은 원칙). 이게 없으면 Module B는 확률만 내고
+    # 침수 폴리곤은 빈 FC가 되어 지도에 3D 침수 볼륨이 안 그려진다.
+    trigger_aoi = resolve_aoi(trigger_location.get("x_5179"), trigger_location.get("y_5179"))
+    if resolve_source("b") == "real" and "_terrain" not in module_b_input:
+        depth_raster, depth_warning = flood_depth_raster(trigger_aoi)
+        if depth_raster:
+            module_b_input["_terrain"] = {"depth_raster": depth_raster}
+        elif depth_warning:
+            warnings.append(depth_warning)
+
     # 1. 관측 → 예측: Module A/B/C
     landslide = _merge_module_result("a", call_module("a", module_a_input), warnings, fallback_tier)
     flood = _merge_module_result("b", call_module("b", module_b_input), warnings, fallback_tier)
@@ -167,7 +179,7 @@ def run(input: dict[str, Any]) -> dict[str, Any]:  # noqa: A002 - §4.2 규약�
         # 건물·농경지는 어느 모듈의 출력도 아니라 O가 데이터에서 직접 읽어 넘긴다
         # (§10 데이터 접근 계층). 레이어를 못 읽어도 파이프라인은 계속 돌고, 대신
         # 그 사실이 경고로 올라온다 — 특히 농경지는 "0ha"와 "확인 불가"가 다르다.
-        aoi = resolve_aoi(trigger_location.get("x_5179"), trigger_location.get("y_5179"))
+        aoi = trigger_aoi  # 위에서 이미 해석했다
         buildings, buildings_warning = building_footprints(aoi)
         farmland, farmland_warning = farmland_parcels(aoi)
         # 단, 목업 D는 입력을 무시하고 example.json의 출력(농경지 4.2ha 등)을 그대로
@@ -289,19 +301,24 @@ def run(input: dict[str, Any]) -> dict[str, Any]:  # noqa: A002 - §4.2 규약�
         "explains": {k: v for k, v in explains.items() if v is not None},
     }
 
-    if triggered:
-        # 승인 대기 타임아웃은 재연 데모의 과거 이벤트 시각(timestamp)이 아니라
-        # 이 알림이 실제로 등록된 현재 시각을 기준으로 흘러야 한다.
-        alert_store.add(
-            Alert(
-                alert_id=alert_id,
-                created_at=datetime.now(timestamp.tzinfo),
-                escalation_timeout_min=escalation_timeout_min,
-                envelope=envelope,
-                trigger_input=input,
-            )
+    # 임계 미달이어도 등록한다. 예전에는 초과했을 때만 저장해서, 확률이 0.7을 못 넘으면
+    # /alerts/{id}/geojson이 404가 났다 — 그러면 화면은 "아직 대피 수준은 아니지만 Module B가
+    # 계산한 침수는 이만큼"을 보여줄 방법이 없다. 승인 대상이 아니라는 사실은 상태값으로
+    # 구분한다(감시중): escalation도 안 걸리고 approve()도 받지 않는다.
+    #
+    # 승인 대기 타임아웃은 재연 데모의 과거 이벤트 시각(timestamp)이 아니라
+    # 이 알림이 실제로 등록된 현재 시각을 기준으로 흘러야 한다.
+    alert_store.add(
+        Alert(
+            alert_id=alert_id,
+            created_at=datetime.now(timestamp.tzinfo),
+            escalation_timeout_min=escalation_timeout_min,
+            envelope=envelope,
+            trigger_input=input,
+            triggered=triggered,
         )
-        envelope["data"]["approval_status"] = alert_store.get(alert_id).resolve_status()
-        envelope["data"]["escalation_level"] = alert_store.get(alert_id).escalation_level
+    )
+    envelope["data"]["approval_status"] = alert_store.get(alert_id).resolve_status()
+    envelope["data"]["escalation_level"] = alert_store.get(alert_id).escalation_level
 
     return envelope

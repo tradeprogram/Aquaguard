@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any, Literal
 
-ApprovalStatus = Literal["대기", "승인", "거부", "권고중(escalation)"]
+ApprovalStatus = Literal["대기", "승인", "거부", "권고중(escalation)", "감시중"]
 
 
 @dataclass
@@ -27,6 +27,10 @@ class Alert:
     escalation_timeout_min: int
     envelope: dict[str, Any]  # Module O의 전체 출력 envelope
     trigger_input: dict[str, Any] = field(default_factory=dict)  # run()에 원래 넘어온 input (지도 재투영용)
+    # 임계치를 넘지 않은 관측도 저장한다 — 예전에는 넘었을 때만 등록해서, 화면이
+    # "아직 대피 수준은 아니지만 이만큼 침수가 계산됐다"를 보여줄 방법이 없었다.
+    # 승인 대상이 아니므로 escalation 대상도 아니다(resolve_status 참조).
+    triggered: bool = True
     approval_status: ApprovalStatus = "대기"
     escalation_level: int = 0
     approver_id: str | None = None
@@ -37,6 +41,8 @@ class Alert:
         시민 역검증이 '오탐판정'이면 escalation을 걸지 않는다 — 이미 오탐 신호가
         있는 상태에서 담당자를 다급하게 재촉할 이유가 없다.
         """
+        if not self.triggered:
+            return "감시중"
         if self.approval_status in ("승인", "거부"):
             return self.approval_status
 
@@ -70,6 +76,9 @@ class AlertStore:
             alert = self._alerts.get(alert_id)
             if alert is None:
                 return None
+            # 임계 미달 관측은 승인 대상이 아니다 — 승인할 경보가 애초에 없다.
+            if not alert.triggered:
+                return alert
             # 이미 사람이 확정한 상태(승인/거부)만 재확정하지 않는다 — "권고중(escalation)"은
             # 여전히 판단 대기 중인 상태이므로 escalation 이후에도 승인/거부를 받아준다.
             if alert.resolve_status() not in ("승인", "거부"):

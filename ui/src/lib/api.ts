@@ -17,18 +17,63 @@ export interface TriggerInput {
   timestamp: string;
   escalation_timeout_min?: number;
   safety_margin_hours?: number;
+  // 실모듈이 붙은 뒤로 A/B는 좌표만으로는 계산하지 못한다 — 관측 static/dynamic이
+  // 있어야 FoS와 수위가 나온다. 서버의 TriggerRequest도 같은 필드를 받는다.
+  module_a_extra?: Record<string, unknown>;
+  module_b_extra?: Record<string, unknown>;
+  reach_id?: string;
+  underpasses?: Record<string, unknown>[];
+  detection_lag_min?: number;
 }
 
-// §9 데모 시나리오: 2025.7.19 산청 산사태 재연
-// trigger_location은 contracts/module_a.example.json의 x_5179/y_5179(문서가 명시한
-// "예시 값", 실제 지리 위치 아님)와 달리, data/vector/saengbiryang_myeon_5179.geojson
-// (행정동 경계 실데이터, EPSG:5179)으로 확인한 산청군 생비량면 AOI 내부 실좌표다.
+// §9 데모 시나리오: 2025.7.19 산청 산사태 재연.
+// contracts/module_o.example.json의 input과 같은 값이다 — 한쪽만 고치면 화면과
+// 계약 예시가 어긋나므로 둘을 함께 바꿀 것.
+//
+// trigger_location은 data/vector/adm_dong_5179.geojson(행정동 경계 실데이터)으로
+// 확인한 산청군 생비량면 AOI 내부 실좌표다.
+// detection_lag_min=60은 트랙①의 산청 백테스트가 실측한 T_agent(09:00)에 맞춘 값
+// (backtest_sancheong/outputs/backtest_leadtime_summary.json).
 export const SANGCHEONG_DEMO_INPUT: TriggerInput = {
   alert_id: "AL-20250719-0915",
   trigger_location: { x_5179: 1050511.5, y_5179: 1706245.2 },
   timestamp: "2025-07-19T08:00:00+09:00",
   escalation_timeout_min: 15,
   safety_margin_hours: 0.5,
+  detection_lag_min: 60,
+  module_a_extra: {
+    static: {
+      slope_deg: 32.5,
+      curvature: -0.02,
+      twi: 6.8,
+      aspect_deg: 210,
+      dnbr: 0.62,
+      dnbr_class: "high",
+      days_since_fire: 121,
+    },
+    dynamic: {
+      rainfall_1h_mm: [12.0, 18.5, 24.0],
+      rainfall_cumulative_24h_mm: 187.3,
+      rainfall_cumulative_72h_mm: 245.0,
+      api_index: 0.81,
+      source: "observed",
+    },
+    insar_displacement_mm_per_day: null,
+  },
+  reach_id: "GEUMHO_042",
+  module_b_extra: {
+    static: { drainage_area_km2: 58.2, river_order: 3, slope_pct: 1.8 },
+    dynamic: { rainfall_cumulative_24h_mm: [187.3], river_level_m: 3.2 },
+    sar_water_extent: null,
+  },
+  underpasses: [
+    {
+      underpass_id: "SC-UP-003",
+      rainfall_intensity_1h_mm: 45.0,
+      known_risk: true,
+      drainage_capacity_class: "low",
+    },
+  ],
 };
 
 export async function triggerAlert(input: TriggerInput): Promise<ModuleOEnvelope> {

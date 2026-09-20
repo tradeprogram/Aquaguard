@@ -18,7 +18,9 @@ import { lineString as turfLineString } from "@turf/helpers";
 import type { Feature, FeatureCollection, LineString, MultiLineString, Polygon, MultiPolygon } from "geojson";
 import {
   API_BASE,
+  SANGCHEONG_DEMO_INPUT,
   checkIsolation,
+  getAlertGeojson,
   getBoundaries,
   getVWorldBuildings,
   getVWorldRivers,
@@ -412,6 +414,9 @@ export default function MapExplorer({
   const searchSlow = useSlowLoading();
   const [selectedRegion, setSelectedRegion] = useState<AdminSearchResult | null>(null);
   const [debrisDepth, setDebrisDepth] = useState(0);
+  // Module B가 실제로 계산한 최대 침수심(m). 슬라이더 값이 아니라 모형 산출이라
+  // 범례에 "모형" 배지를 달아 what-if 값과 구분해 표시한다. null이면 미산출.
+  const [modelFloodDepth, setModelFloodDepth] = useState<number | null>(null);
   const [floodDepth, setFloodDepth] = useState(0);
   const [floodedBuildingCount, setFloodedBuildingCount] = useState<number | null>(null);
   const [hazardIsolatedCount, setHazardIsolatedCount] = useState<number | null>(null);
@@ -972,6 +977,37 @@ export default function MapExplorer({
         },
       });
 
+      // Module B 실산출 침수 — 위의 flood-water와 달리 슬라이더가 아니라 SFINCS/ANUGA
+      // 최대침수심 래스터에서 나온 값이다(module_b_flood/fim.py가 깊이 구간별로 폴리곤화,
+      // api_server의 /alerts/{id}/geojson이 4326으로 재투영). 높이는 그 구간의 실제
+      // 침수심 90분위(depth_p90_m)이고, 색은 구간(band)으로 정한다 — what-if 볼륨과
+      // 섞이면 안 되므로 소스·레이어를 따로 둔다.
+      map.addSource("flood-model", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
+      map.addLayer({
+        id: "flood-model-3d",
+        type: "fill-extrusion",
+        source: "flood-model",
+        paint: {
+          "fill-extrusion-color": [
+            "match",
+            ["get", "band"],
+            0, "#bae6fd",
+            1, "#38bdf8",
+            2, "#0284c7",
+            3, "#1e3a8a",
+            "#38bdf8",
+          ],
+          // 지형 기복 위에 얹히므로 수심을 그대로 쓰면 얕은 구간이 안 보인다 —
+          // 최소 높이를 두되 과장하지 않는다(실제 수심 값은 팝업에 그대로 표기).
+          // ["number", x, fallback]으로 감싸는 이유: 속성이 없거나 null이면 ["max"]가
+          // null을 돌려주고 MapLibre가 그 폴리곤을 조용히 안 그린다(스타일 스펙
+          // 검증기로 확인). 침수 구역이 이유 없이 사라지는 것보다 최소 높이가 낫다.
+          "fill-extrusion-height": ["max", ["number", ["get", "depth_p90_m"], 0.5], 0.5],
+          "fill-extrusion-base": 0,
+          "fill-extrusion-opacity": 0.72,
+        },
+      });
+
       // §7 — 토사/침수 슬라이더가 만드는 3D 볼륨의 가장 바깥 밴드를 그대로
       // /isolation-check의 hazard_polygon으로 재사용한다. Module A/B의 실제 예측
       // 폴리곤이 아니라 what-if 슬라이더값 기반이지만, 지오메트리 자체는 진짜라
@@ -1257,6 +1293,37 @@ export default function MapExplorer({
     const areasSource = mapRef.current?.getSource("isolated-areas") as GeoJSONSource | undefined;
     areasSource?.setData(isolatedAreas ?? { type: "FeatureCollection", features: [] });
   }, [mapReady, isolatedAreas]);
+
+  // Module B의 실제 침수 폴리곤을 받아 3D로 세운다. 경보가 아직 등록되지 않았거나
+  // (트리거 전) 침수심 래스터가 없는 AOI면 404/빈 배열이 오는데, 그건 오류가 아니라
+  // "계산된 침수가 없음"이므로 조용히 비워 둔다 — 콘솔 에러로 올리지 않는다.
+  useEffect(() => {
+    if (!mapReady) return;
+    let cancelled = false;
+
+    getAlertGeojson(SANGCHEONG_DEMO_INPUT.alert_id)
+      .then((fc) => {
+        if (cancelled) return;
+        const source = mapRef.current?.getSource("flood-model") as GeoJSONSource | undefined;
+        if (!source) return;
+        const inundation = fc.features.filter((f) => f.properties?.kind === "inundation");
+        source.setData({ type: "FeatureCollection", features: inundation });
+        const depths = inundation
+          .map((f) => Number(f.properties?.depth_p90_m))
+          .filter((v) => Number.isFinite(v));
+        setModelFloodDepth(depths.length ? Math.max(...depths) : null);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        const source = mapRef.current?.getSource("flood-model") as GeoJSONSource | undefined;
+        source?.setData({ type: "FeatureCollection", features: [] });
+        setModelFloodDepth(null);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [mapReady]);
 
   useEffect(() => {
     if (!mapReady || !focusBbox) return;

@@ -11,7 +11,7 @@ import math
 import os
 import re
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 import geopandas as gpd
 import requests
@@ -52,11 +52,33 @@ app.add_middleware(
 
 
 class TriggerRequest(BaseModel):
+    """Module O의 run() 입력.
+
+    실모듈이 붙은 뒤로 A/B는 좌표만으로는 아무것도 못 한다 — 관측 static/dynamic이
+    있어야 FoS와 수위를 계산한다. 그 값들은 module_a_extra/module_b_extra로 넘어가고,
+    여기에 선언하지 않으면 Pydantic이 조용히 버려서 HTTP 경로에서만 위험도가 0이 된다.
+    """
+
     alert_id: str
     trigger_location: dict[str, float]
     timestamp: str
     escalation_timeout_min: int = 15
     safety_margin_hours: float = 0.5
+    # Module A/B가 실제 계산에 쓰는 관측값 (contracts/module_a·b.example.json의 input 형태)
+    module_a_extra: dict[str, Any] | None = None
+    module_b_extra: dict[str, Any] | None = None
+    reach_id: str | None = None
+    # Module C는 지하차도 1건 단위 계약이라 O가 배열을 받아 순회한다
+    underpasses: list[dict[str, Any]] | None = None
+    # 골든타임 계산의 탐지·전파 지연 (기본 75/5분, 산청 백테스트 실측 T_agent는 60분)
+    detection_lag_min: int | None = None
+    dispatch_lag_min: int | None = None
+    shelter_candidates: list[dict[str, Any]] | None = None
+    timeline_actual_override: dict[str, str] | None = None
+
+    def to_orchestrator_input(self) -> dict[str, Any]:
+        """None인 선택 필드는 빼고 넘긴다 — orchestrator가 .get() 기본값을 쓰게 둔다."""
+        return {k: v for k, v in self.model_dump().items() if v is not None}
 
 
 class ApproveRequest(BaseModel):
@@ -69,7 +91,7 @@ def trigger_alert(req: TriggerRequest) -> dict:
     """Module A/B 감시 결과 임계치를 넘었다고 가정하고 Module O 파이프라인을 실행한다.
     (실제 연동 시에는 Module A/B의 상시 감시 루프가 임계치 초과를 감지했을 때 이 함수를 내부 호출하게 된다.)
     """
-    return run_orchestrator(req.model_dump())
+    return run_orchestrator(req.to_orchestrator_input())
 
 
 @app.get("/alerts/{alert_id}")
@@ -111,16 +133,22 @@ def approve_alert(alert_id: str, req: ApproveRequest) -> dict:
 def get_alert_geojson(alert_id: str) -> dict:
     """§5 Module UI-3D 입력 — 여기서만 EPSG:5179 → EPSG:4326 재투영을 수행한다(§4.1).
 
-    Module B의 inundation_extent_5179, Module E의 route_5179는 아직 목업 단계라
-    좌표가 비어있으므로(contracts/module_b·e.example.json 참조), 산사태 지점 반경
-    버퍼 원과 출발지→대피소 직선을 시각적 placeholder로 대신 그린다.
+    Module B가 최대침수심 래스터를 받으면 inundation_extent_5179에 깊이 구간별
+    폴리곤이 들어온다(module_b_flood/fim.py). 그 경우 kind="inundation"으로 그대로
+    내보내며, UI는 properties.depth_p90_m를 3D 높이로 쓴다.
+
+    아직 지오메트리가 없는 출력은 placeholder로 대신 그린다 — Module A의
+    risk_polygon_5179는 지점 FoS만 계산하므로 null이고(반경 버퍼 원으로 대체),
+    Module E의 route_5179는 키가 없으면 직선 근사로 내려간다.
     """
     alert = alert_store.get(alert_id)
     if alert is None:
         raise HTTPException(status_code=404, detail="alert not found")
 
-    landslide = alert.envelope["data"]["alert_package"]["landslide"]
-    shelter_route = alert.envelope["data"]["alert_package"].get("shelter_route") or {}
+    package = alert.envelope["data"]["alert_package"]
+    landslide = package["landslide"]
+    flood = package.get("flood") or {}
+    shelter_route = package.get("shelter_route") or {}
     # landslide["location"]이 아니라 원래 요청의 trigger_location을 쓴다 — 목업 모드에서는
     # Module A가 입력을 무시하고 contracts/module_a.example.json의 고정 location을 돌려주므로
     # (문서가 명시한 "예시 값"), 지도에는 실제 질의 위치(AOI 내부)를 그리는 게 맞다.
@@ -153,6 +181,14 @@ def get_alert_geojson(alert_id: str) -> dict:
                 },
             }
         )
+
+    # Module B 실산출 — SFINCS/ANUGA 최대침수심을 깊이 구간별로 폴리곤화한 것이다.
+    # placeholder가 아니라 물리모형 결과이므로 kind로 구분해 내보낸다(UI가 배지를
+    # MODEL로 달고, 슬라이더 what-if 볼륨과 섞이지 않게 별도 레이어로 그린다).
+    for feature in geo.featurecollection_5179_to_lonlat(flood.get("inundation_extent_5179")):
+        feature["properties"]["kind"] = "inundation"
+        feature["properties"]["flood_prob"] = flood.get("flood_prob")
+        features.append(feature)
 
     shelter = (alert.trigger_input.get("shelter_candidates") or DEFAULT_SHELTER_CANDIDATES)[0]
     features.append(
