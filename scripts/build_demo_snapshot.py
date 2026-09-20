@@ -130,6 +130,11 @@ def build(verbose: bool = True) -> dict:
         )
         if stage_by_time:
             peak = max(stage_by_time.values())
+            # 첨두 시각은 **전체 수위 곡선**에서 찾는다. 프레임(7/18 00:00~7/19 14:00)
+            # 안에서만 찾으면 구간 끝의 국소 최대를 첨두라고 부르게 되는데, 실제
+            # SFINCS 첨두는 7/19 16:00으로 프레임 밖이다 — 화면이 "첨두 지남"이라고
+            # 말하면 그건 틀린 말이다.
+            peak_time = max(stage_by_time, key=lambda k: stage_by_time[k])
             # 프레임 시각(ISO+09:00)을 수위 CSV의 키("YYYY-MM-DD HH:MM:SS")로 맞춘다
             drop_by_hour = {}
             for frame in frames:
@@ -143,6 +148,8 @@ def build(verbose: bool = True) -> dict:
                 "levels": contours_5179["levels"],
                 "observed_max_m": contours_5179["observed_max_m"],
                 "peak_stage_m": round(peak, 3),
+                # ISO+09:00 로 맞춰 둔다 — 화면이 프레임 시각과 직접 빼서 쓴다.
+                "peak_time": peak_time.replace(" ", "T") + "+09:00",
                 "stage_drop_by_hour": drop_by_hour,
                 "gauge": "경호교",
                 "build_seconds": round(time.perf_counter() - t0, 2),

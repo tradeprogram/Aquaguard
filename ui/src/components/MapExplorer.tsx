@@ -1600,6 +1600,30 @@ export default function MapExplorer({
           ? `탐지 +${leadHours}시간`
           : `탐지 ${leadHours}시간`;
 
+  // 이 시점의 **예보 구간** — 지금 프레임에서 앞으로 무엇이 언제 오는가.
+  //
+  // 스크러버가 가리키는 시각은 "그때의 상태"인데, 그것만 보면 이 시스템이 몇 시간
+  // 앞을 내다보는 물건인지가 화면에 없다. 다음 위험영역이 언제 도달하는지, 하천이
+  // 언제 첨두에 닿는지를 함께 쓰면 그 시점에서의 예보 구간이 그대로 읽힌다.
+  const nextRiskArrival = (() => {
+    if (!currentFrame) return null;
+    const ahead = (timeline?.risk.features ?? [])
+      .map((f) => Number(f.properties?.arrival_hour))
+      .filter((h) => Number.isFinite(h) && h > currentFrame.hour);
+    if (!ahead.length) return null;
+    const hour = Math.min(...ahead);
+    return { inHours: hour - currentFrame.hour, count: ahead.filter((h) => h === hour).length };
+  })();
+
+  // 하천 첨두까지 남은 시간. **프레임 안에서 찾지 않는다** — 프레임은 7/19 14:00에서
+  // 끝나는데 실제 첨두는 16:00이라, 구간 안의 국소 최대를 첨두라고 부르면 틀린 말이 된다.
+  const floodPeakAhead = (() => {
+    const peakTime = floodSeries?.peak_time;
+    if (!peakTime || !currentFrame) return null;
+    const diffH = (Date.parse(peakTime) - Date.parse(currentFrame.time)) / 3_600_000;
+    return diffH > 0 ? Math.round(diffH) : null;
+  })();
+
   const arrivalHours = new Set(
     (timeline?.risk.features ?? []).map((f) => Number(f.properties?.arrival_hour))
   );
@@ -2071,6 +2095,25 @@ export default function MapExplorer({
                   )}
                 </div>
                 <p className="font-mono text-2xl font-bold text-slate-100">{frameLabel(currentFrame.time)}</p>
+                {/* 이 시점에서 앞으로 무엇이 언제 오는지 — "몇 시간 뒤를 내다보는가" */}
+                <p className="mt-0.5 text-[11px] text-slate-400">
+                  {nextRiskArrival || floodPeakAhead !== null ? (
+                    <>
+                      이 시점 예보 구간 ·{" "}
+                      {nextRiskArrival && (
+                        <span className="text-orange-300">
+                          +{nextRiskArrival.inHours}시간 뒤 위험영역 {nextRiskArrival.count}곳 추가
+                        </span>
+                      )}
+                      {nextRiskArrival && floodPeakAhead !== null && " · "}
+                      {floodPeakAhead !== null && (
+                        <span className="text-sky-300">+{floodPeakAhead}시간 뒤 하천 첨두</span>
+                      )}
+                    </>
+                  ) : (
+                    <span className="text-slate-500">이 시점 이후 추가 도달 없음 (첨두 지남)</span>
+                  )}
+                </p>
               </div>
               <div className="flex items-end gap-4 text-right">
                 <div>

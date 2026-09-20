@@ -222,6 +222,9 @@ export interface AlertTimeline {
     levels?: number[];
     observed_max_m?: number;
     peak_stage_m?: number;
+    // 첨두 시각(ISO+09:00). 프레임 구간 밖일 수 있다 — 실제 SFINCS 첨두는 7/19 16:00,
+    // 프레임은 14:00에서 끝난다. 구간 안에서 찾으면 국소 최대를 첨두로 오인한다.
+    peak_time?: string;
     // 프레임 hour -> 첨두 대비 수위강하(m). 값이 없는 시각은 수위 자료가 없는 것이다.
     stage_drop_by_hour?: Record<string, number>;
     gauge?: string;

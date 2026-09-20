@@ -31,6 +31,13 @@ const PIPELINE_STEPS = [
 // 배포본(EC2) 실측값. 화면에 "보통 N초"라고 쓰려면 실제로 재 본 값이어야 한다.
 const TYPICAL_RUN_SEC = 20;
 
+// 결과가 0.06초에 와도 진행 화면을 이만큼은 띄워 둔다.
+//
+// 시연에서 어느 모듈이 어떤 순서로 도는지가 보여야 하는데, 눈 깜짝할 새에 지나가면
+// 화면이 한 번 깜빡인 것으로만 남는다. 결과를 늦게 받는 게 아니라 **이미 받아 둔
+// 결과를 이만큼 뒤에 보여주는 것**이다.
+const MIN_PROGRESS_SEC = 5;
+
 const DEMO_UNDERPASSES: { id: string; name: string; level: "정상" | "주의" | "경계" | "위험" }[] = [
   { id: "SC-UP-003", name: "산청천 지하차도", level: "위험" },
   { id: "SC-UP-011", name: "생비량로 지하차도", level: "주의" },
@@ -80,7 +87,10 @@ export default function DashboardPanel({
       // 사전계산본을 프론트 자기 오리진에서 먼저 읽는다. 지도가 EC2로 타일을 수백 장
       // 부르는 동안 이 요청이 그 줄 뒤에 서면 서버가 0.013초에 답해도 화면에서는
       // 수십~수백 초가 된다(2026-09-21 실측). 오리진이 다르면 그 줄을 안 탄다.
+      const startedAt = Date.now();
       const result = (!forceLive && (await getDemoEnvelope())) || (await triggerAlert(SANGCHEONG_DEMO_INPUT));
+      const remaining = MIN_PROGRESS_SEC * 1000 - (Date.now() - startedAt);
+      if (remaining > 0) await new Promise((r) => setTimeout(r, remaining));
       setEnvelope(result);
       onAlertUpdated?.();
     } catch {
@@ -175,7 +185,7 @@ export default function DashboardPanel({
         <div className="rounded-xl border border-sky-900/50 bg-sky-950/20 p-4 text-xs">
           <div className="flex items-baseline justify-between">
             <p className="font-medium text-sky-200">
-              7개 모듈을 순서대로 돌리고 결과를 통합하고 있습니다
+              7개 모듈의 결과를 순서대로 불러오고 통합하고 있습니다
             </p>
             <p className="font-mono text-base text-sky-300">{elapsed.toFixed(1)}초</p>
           </div>
