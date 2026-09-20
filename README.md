@@ -30,7 +30,13 @@ python -m pytest module_o_orchestrator/tests/ -v
 
 `/map3d`의 지리 데이터 파이프라인:
 - **행정경계 3계층**(시도/시군구/읍면동, 전국) — 사용자 제공 `BND_ADM_DONG_PG`(원본 EPSG:5186, 읍면동 레벨)를 EPSG:5179로 저장하고, 시군구·시도는 그 지오메트리를 코드 접두어 기준으로 dissolve해서 생성(`data/vector/adm_{sido,sigungu,dong}_5179.geojson`). 이름(시/도, 시/군/구)은 [`vuski/admdongkor`](https://github.com/vuski/admdongkor)(MIT, 동일 SGIS adm_cd 스킴)와 코드로 조인해 붙임 — `data/vector/adm_index.json`이 3계층 통합 검색 인덱스(이름·전체경로명·중심점·bbox). `api_server.py`의 `GET /boundaries?bbox=...`가 뷰포트만큼만 3계층 모두 EPSG:4326으로 재투영해 내려주고(§4.1: 재투영은 UI 출력 직전에만), `GET /search?q=...`가 도/시군구/읍면동 이름으로 검색해 지도 이동에 씀.
-- **노출자산(건축물·농경지)**: `data/vector/aoi_buildings_{sancheong,seoul}_5179.geojson`, `data/vector/aoi_farmland_sancheong_5179.geojson` — Module D의 `building_footprints_5179` / `farmland_parcels_5179` 입력. 지도 렌더링용이 아니라 **모듈 입력**이라 EPSG:5179로 저장한다. 전국 원본은 `.gitignore`라 배포 서버에 없으므로 AOI만 잘라 커밋했다(산청 = 경보지점 반경 12km, 건물 18,032동 + 농경지 23,288필지 / 서울 = 강남·서초구, 건물 41,814동; `scripts/build_aoi_exposure_layers.py`로 재생성). 산청 AOI를 행정경계가 아니라 반경으로 자른 이유는 경계 밖으로 새는 위험영역 때문이다 — 생비량면 기준 18%, 산청군 전체로 넓혀도 12%가 밖이었다. 속성 중 `bd_mgt_sn`(25자리 건물관리번호)이 `exposed_buildings[].building_id`이자 건축물대장 주용도 조인키(앞 19자리 = 필지키)다.
+- **노출자산(건축물·농경지)**: `data/vector/aoi_buildings_{sancheong,seoul}_5179.{ndjson,geojson}`, `data/vector/aoi_farmland_sancheong_5179.ndjson` — Module D의 `building_footprints_5179` / `farmland_parcels_5179` 입력. 지도 렌더링용이 아니라 **모듈 입력**이라 EPSG:5179로 저장한다. 전국 원본은 `.gitignore`라 배포 서버에 없으므로 AOI만 잘라 커밋했다(산청 = 산청군 ∪ 경보지점 반경 12km, 건물 51,040동 + 농경지 72,875필지 / 서울 = 강남·서초구, 건물 41,814동; `scripts/build_aoi_exposure_layers.py`로 재생성).
+
+  **산청을 행정경계 ∪ 반경으로 자르는 이유**(2026-09-21): 둘 중 하나만으로는 각각 다른 구멍이 난다. 행정경계만 쓰면 데모 좌표가 군 동쪽 경계에서 5.4km라 위험영역이 함양·진주 쪽으로 12% 새고(생비량면으로 자르면 18%), 반경만 쓰면 군의 24%(190/790km²)밖에 못 덮어 고립마을·대피소를 군 전체로 넓혔을 때 나머지가 "건물 없음"으로 계산된다.
+
+  **산청 파일이 `.ndjson`인 이유**: 한 줄에 feature 하나다. 군 전체로 넓히면서 농경지가 70.8MB가 됐는데 `json.load`로 올리면 파싱 피크가 +339MB이고, 배포 서버는 RAM 908MB에 기준선이 560MB라 그 자리에서 OOM이다. 한 줄씩 읽으며 위험영역에 닿는 것만 남기면 피크가 +0MB다(`module_o_orchestrator/exposure_layers.py`의 `_stream_clipped`). `.geojson`만 있는 환경은 종전 경로로 폴백한다.
+
+  속성 중 `bd_mgt_sn`(25자리 건물관리번호)이 `exposed_buildings[].building_id`이자 건축물대장 주용도 조인키(앞 19자리 = 필지키)다.
 - **지형**: `GET /terrain-tiles/{z}/{x}/{y}.png`가 AWS 공개 지형 타일을 프록시(CORS 우회).
 - **위성영상**: Esri World Imagery(무료, 키 불필요).
 - **건물·도로·교량**: OpenFreeMap 무료 벡터타일(OSM, OpenMapTiles 스키마) — 건물은 `render_height`로 실높이 압출, 교량은 `@turf/buffer`로 폭만큼 버퍼링해 지면에서 띄운 `fill-extrusion`.

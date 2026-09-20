@@ -10,13 +10,20 @@ farmland_parcels_5179는 어느 모듈의 출력도 아니다 — Module O가 �
 원본만 504MB다. 그래서 데모가 실제로 도는 AOI만 잘라 data/vector/에 커밋하고
 여기서는 그 클립본만 읽는다. 재생성은 scripts/build_aoi_exposure_layers.py.
 
-  aoi_buildings_sancheong_5179.geojson   경보지점 반경 12km  18,032건    7.9MB
+  aoi_buildings_sancheong_5179.ndjson    산청군 ∪ 반경12km   51,040건   22.6MB
   aoi_buildings_seoul_5179.geojson       강남·서초           41,814건   27.6MB
-  aoi_farmland_sancheong_5179.geojson    경보지점 반경 12km  23,288필지 21.9MB (2,587.5ha)
+  aoi_farmland_sancheong_5179.ndjson     산청군 ∪ 반경12km   72,875필지 70.9MB (7,267.2ha)
 
-산청은 행정경계가 아니라 경보지점 반경으로 자른다 — 행정경계로 자르면 경계 근처
-경보에서 위험영역이 밖으로 새고, 그만큼 노출자산이 조용히 빠지기 때문이다.
-자세한 근거는 scripts/build_aoi_exposure_layers.py의 AOI_DEFS 주석.
+산청은 **행정경계 ∪ 경보지점 반경**으로 자른다. 행정경계만 쓰면 경계 근처 경보에서
+위험영역이 밖으로 새고(데모 좌표 기준 12%), 반경만 쓰면 군의 24%밖에 못 덮어서
+고립마을·대피소를 군 전체로 넓혔을 때 나머지가 "건물 없음"이 된다. 자세한 근거는
+scripts/build_aoi_exposure_layers.py의 AOI_DEFS 주석.
+
+**산청 레이어는 .ndjson(한 줄에 feature 하나)이다.** 군 전체로 넓히면서 농경지가
+70.9MB가 됐는데 json.load로 올리면 파싱 피크가 +339MB고, 배포 서버는 RAM 908MB에
+기준선이 560MB라 그 자리에서 OOM이다(실제로 죽은 전력 있음). 한 줄씩 읽으며
+위험영역에 닿는 것만 남기면 피크가 +0MB로 내려간다 — _stream_clipped 참조.
+.geojson만 있는 환경은 종전 _load_clipped 경로로 폴백한다.
 
 농경지 원본은 트랙②의 팜맵(농정원) 산출물이다(scripts/build_farmland_geojson.py,
 산청군 73,040필지). 강남·서초는 팜맵 대상이 아니라 농경지 레이어가 없다.
@@ -42,11 +49,19 @@ PRECOMPUTED_DIR = REPO_ROOT / "data" / "precomputed"  # 원본(gitignore) — �
 # 행정경계(생비량면 / 서초구+강남구)에서 뽑았다.
 AOI_LAYERS = {
     "sancheong": {
-        "bbox_5179": (1_038_511.5, 1_694_245.2, 1_062_511.5, 1_718_245.2),
+        # 산청군 total_bounds ∪ 경보지점 반경 12km. resolve_aoi가 경보 좌표를
+        # 어느 AOI로 보낼지 고르는 데 쓴다.
+        "bbox_5179": (1_017_000.0, 1_691_000.0, 1_063_000.0, 1_732_000.0),
         "buildings": DATA_VECTOR_DIR / "aoi_buildings_sancheong_5179.geojson",
         "farmland": DATA_VECTOR_DIR / "aoi_farmland_sancheong_5179.geojson",
-        # 클립에 쓴 범위 — coverage_warning이 위험영역과 교차시킨다. 산청은 행정경계가
-        # 아니라 경보지점 반경으로 잘랐다(이유는 scripts/build_aoi_exposure_layers.py).
+        # 클립에 쓴 범위 — coverage_warning이 위험영역과 교차시킨다.
+        #
+        # 2026-09-21: 예선 범위가 산청군 전체로 바뀌면서(고립마을·대피소) 클립도
+        # **행정경계 ∪ 반경**으로 넓혔다. 반경만 쓰면 군의 24%밖에 못 덮고, 행정경계만
+        # 쓰면 데모 좌표가 군 동쪽 경계에서 5.4km라 위험영역이 함양·진주 쪽으로 새어
+        # 나간다. 둘 다 있어야 구멍이 안 생긴다 — 자세한 근거는 build_aoi_exposure_layers.py.
+        "boundary_level": "sigungu",
+        "boundary_codes": ("38570",),  # 경상남도 산청군
         "clip_center_5179": (1_050_511.5, 1_706_245.2),
         "clip_radius_m": 12_000,
         # Module B가 침수 폴리곤을 만들 때 쓰는 최대침수심 래스터(50m, EPSG:5179).
@@ -89,21 +104,28 @@ def _aoi_polygon(aoi: str):
     from shapely.ops import unary_union
 
     cfg = AOI_LAYERS[aoi]
+    parts = []
+
+    # 행정경계와 반경을 **둘 다** 반영한다. 클립본을 만들 때 합집합으로 잘랐으므로
+    # (scripts/build_aoi_exposure_layers.py의 AOI_DEFS), 여기서 한쪽만 보면 실제로는
+    # 자료가 있는 영역을 "클립본 밖"이라고 경고하게 된다.
+    if cfg.get("boundary_codes"):
+        path = DATA_VECTOR_DIR / f"adm_{cfg['boundary_level']}_5179.geojson"
+        if path.exists():
+            try:
+                with open(path, encoding="utf-8") as f:
+                    collection = json.load(f)
+                parts += [shape(f["geometry"]) for f in collection["features"]
+                          if f["properties"].get("code") in cfg["boundary_codes"]]
+            except (OSError, ValueError):
+                pass
+
     if "clip_center_5179" in cfg:
         from shapely.geometry import Point
 
         cx, cy = cfg["clip_center_5179"]
-        return Point(cx, cy).buffer(cfg["clip_radius_m"])
-    path = DATA_VECTOR_DIR / f"adm_{cfg['boundary_level']}_5179.geojson"
-    if not path.exists():
-        return None
-    try:
-        with open(path, encoding="utf-8") as f:
-            collection = json.load(f)
-    except (OSError, ValueError):
-        return None
-    parts = [shape(f["geometry"]) for f in collection["features"]
-             if f["properties"].get("code") in cfg["boundary_codes"]]
+        parts.append(Point(cx, cy).buffer(cfg["clip_radius_m"]))
+
     return unary_union(parts) if parts else None
 
 
@@ -326,14 +348,68 @@ def _touches_cells(box: tuple[float, float, float, float],
     return False
 
 
+def _stream_clipped(path: Path, label: str, regenerate_hint: str,
+                    bounds: tuple[float, float, float, float] | None,
+                    cells: set[tuple[int, int]] | None
+                    ) -> tuple[dict[str, Any], str | None]:
+    """.ndjson을 한 줄씩 읽으면서 위험영역에 닿는 것만 남긴다.
+
+    **왜 통째로 안 읽나**: 산청이 군 전체로 넓어지면서 농경지가 72,875필지 70.8MB가
+    됐는데, json.load로 올리면 파싱 피크가 +339MB다(2026-09-21 실측). 배포 서버는
+    RAM 908MB에 기준선이 이미 560MB라 그 자리에서 OOM이고, 실제로 죽은 전력이 있다.
+    한 줄이 feature 하나라서 읽는 즉시 판정하고 버리면, 피크가 파일 크기가 아니라
+    **남긴 것**의 크기로 내려간다.
+
+    한 줄이 깨져 있어도 그 줄만 버리고 계속한다 — 파일 하나 때문에 노출자산 전체를
+    "확인 불가"로 떨어뜨리는 것보다 낫다. 대신 몇 줄을 버렸는지 경고로 올린다.
+    """
+    if not path.exists():
+        return dict(EMPTY_COLLECTION), (
+            f"{label} 레이어 없음({path.name}) — 노출 0으로 계산되지만 이는 '없음'이 아니라 "
+            f"'확인 불가'다. 재생성: {regenerate_hint}"
+        )
+
+    min_x, min_y, max_x, max_y = bounds if bounds else (-1e18, -1e18, 1e18, 1e18)
+    kept: list[dict[str, Any]] = []
+    broken = 0
+    try:
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    feature = json.loads(line)
+                except ValueError:
+                    broken += 1
+                    continue
+                box = _feature_bounds((feature or {}).get("geometry"))
+                if box is None:
+                    kept.append(feature)  # 판단 불가면 버리지 않는다 — 누락보다 낫다
+                    continue
+                if box[2] < min_x or box[0] > max_x or box[3] < min_y or box[1] > max_y:
+                    continue
+                if cells is not None and not _touches_cells(box, cells):
+                    continue
+                kept.append(feature)
+    except OSError as exc:
+        return dict(EMPTY_COLLECTION), (
+            f"{label} 레이어 로드 실패({type(exc).__name__}) — 노출 0으로 진행(확인 불가)"
+        )
+
+    warning = None
+    if broken:
+        warning = f"{label} 레이어에서 깨진 줄 {broken}개를 건너뜀 — 그만큼 노출이 과소 계상됐을 수 있다"
+    return {"type": "FeatureCollection", "features": kept}, warning
+
+
 def _load_clipped(loader, aoi: str,
                   bounds: tuple[float, float, float, float] | None,
                   cells: set[tuple[int, int]] | None = None) -> tuple[dict[str, Any], str | None]:
-    """전체를 읽어 bbox로 자른 뒤 원본을 즉시 버린다.
+    """전체를 읽어 bbox로 자른 뒤 원본을 즉시 버린다(.geojson 폴백 경로).
 
-    전체 컬렉션을 lru_cache에 남기면 잘라낸 의미가 없어서(메모리가 그대로 남는다)
-    캐시하지 않는다. 파싱 순간의 피크는 그대로지만 — json.load가 통째로 만들고 나서
-    거르므로 — 상주 메모리가 크게 줄고, 그게 OOM을 만들던 쪽이다.
+    .ndjson이 있으면 위의 _stream_clipped가 쓰이고 여기는 안 온다. 옛 .geojson만
+    남은 환경을 위해 남겨 둔다 — 전체 컬렉션을 캐시하지 않는 이유는 그대로다.
     """
     collection, warning = loader(aoi)
     clipped = _clip_to_bounds(collection, bounds, cells)
@@ -361,6 +437,11 @@ def _read_farmland(aoi: str) -> tuple[dict[str, Any], str | None]:
     )
 
 
+def _ndjson_path(path: Path) -> Path:
+    """같은 이름의 .ndjson. 있으면 스트리밍으로 읽는다."""
+    return path.with_suffix(".ndjson")
+
+
 def building_footprints(aoi: str = DEFAULT_AOI,
                         bounds_5179: tuple[float, float, float, float] | None = None,
                         cells: set[tuple[int, int]] | None = None
@@ -370,6 +451,11 @@ def building_footprints(aoi: str = DEFAULT_AOI,
     bounds_5179/cells를 주면 위험영역에 닿지 않는 건물은 빼고 돌려준다
     (결과 동일, 메모리·시간 절감 — risk_cells 참고).
     """
+    path = AOI_LAYERS[aoi]["buildings"]
+    hint = f"python scripts/build_aoi_exposure_layers.py --aoi {aoi}"
+    ndjson = _ndjson_path(path)
+    if ndjson.exists():
+        return _stream_clipped(ndjson, f"{aoi} 건축물", hint, bounds_5179, cells)
     return _load_clipped(_read_buildings, aoi, bounds_5179, cells)
 
 
@@ -378,6 +464,15 @@ def farmland_parcels(aoi: str = DEFAULT_AOI,
                      cells: set[tuple[int, int]] | None = None
                      ) -> tuple[dict[str, Any], str | None]:
     """농경지 필지(EPSG:5179)와 문제가 있었다면 그 경고. 인자는 위와 같다."""
+    path = AOI_LAYERS[aoi]["farmland"]
+    if path is None:
+        return dict(EMPTY_COLLECTION), (
+            f"{aoi} 농경지 레이어 없음 — 노출 0으로 계산되지만 이는 '없음'이 아니라 '확인 불가'다"
+        )
+    hint = f"python scripts/build_aoi_exposure_layers.py --aoi {aoi}"
+    ndjson = _ndjson_path(path)
+    if ndjson.exists():
+        return _stream_clipped(ndjson, f"{aoi} 농경지", hint, bounds_5179, cells)
     return _load_clipped(_read_farmland, aoi, bounds_5179, cells)
 
 

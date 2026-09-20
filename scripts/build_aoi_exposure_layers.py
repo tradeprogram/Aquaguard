@@ -37,26 +37,52 @@ from shapely.ops import unary_union
 from shapely.prepared import prep
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+
+
+def write_ndjson(path: Path, features: list[dict]) -> None:
+    """FeatureCollection이 아니라 **한 줄에 feature 하나**로 쓴다(.ndjson).
+
+    읽는 쪽이 json.load로 통째로 올리지 않고 한 줄씩 훑으면서 필요한 것만 남길 수
+    있게 하려는 것이다. 산청을 군 전체로 넓히면서 농경지가 72,875필지 70.8MB가 됐는데,
+    그걸 json.load 하면 파싱 피크가 **+339MB**다(2026-09-21 실측). 배포 서버는 RAM이
+    908MB고 기준선이 이미 560MB라 그 자리에서 OOM이다 — 실제로 죽은 전력도 있다.
+    한 줄씩 읽으면 피크가 '남긴 것'의 크기로 내려간다.
+
+    첫 줄에 메타를 두지 않는다 — 모든 줄이 같은 모양이어야 읽는 쪽이 단순해진다.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        for feature in features:
+            f.write(json.dumps(feature, ensure_ascii=False, separators=(",", ":")))
+            f.write("\n")
 VECTOR_DIR = REPO_ROOT / "data" / "vector"
 PRECOMPUTED_DIR = REPO_ROOT / "data" / "precomputed"
 TILE_CACHE_DIR = PRECOMPUTED_DIR / "_tile_cache"
 
 _TO_5179 = Transformer.from_crs("EPSG:4326", "EPSG:5179", always_xy=True)
 
-# AOI별 경계 정의. level은 어느 행정경계 파일에서 코드를 찾을지, codes는 그 코드다.
-# 클립 범위는 행정경계가 아니라 경보 지점 기준 반경으로 잡는다.
+# AOI별 경계 정의. level/codes는 행정경계, center_5179/radius_m는 경보지점 반경이고,
+# **둘 다 주면 합집합**으로 자른다.
 #
-# 처음에는 생비량면(44km²)으로 잘랐는데 6km×6km 위험영역의 18%가 경계 밖이라
-# 노출자산이 그만큼 조용히 빠졌다. 산청군 전체(790km², 92MB)로 넓혀봤지만 12%가
-# 여전히 밖이었다 — 데모 좌표가 군 동쪽 경계에서 5.4km 지점이라 위험영역이 함양·진주
-# 쪽으로 넘어가기 때문이다. 행정경계로 자르는 한 경계 근처 경보에서는 누락이 남는다.
+# 왜 합집합인가 — 둘 중 하나만으로는 각각 다른 구멍이 난다.
 #
-# 우리가 답해야 할 질문은 "어디까지가 산청군인가"가 아니라 "위험영역을 담을 만큼
-# 넓은가"이므로, 경보 지점 반경으로 자른다. 반경 12km면 6km 위험영역을 100% 담고
-# 인접 시군 건물도 자연히 들어오며, 군 전체의 37%(18,033건) 크기다.
+#   행정경계만: 데모 좌표가 군 동쪽 경계에서 5.4km라 위험영역의 12%가 함양·진주 쪽으로
+#               넘어가고, 그만큼 노출자산이 조용히 빠진다(생비량면으로 잘랐을 땐 18%였다).
+#   반경만:     위험영역은 다 담기지만 군의 24%(190/790km²)밖에 못 덮는다. 고립마을·
+#               대피소를 군 전체로 넓히면 나머지 76%가 "건물 없음"으로 계산된다.
+#
+# 2026-09-21 예선 범위가 산청군 전체로 바뀌면서(고립마을 위험·대피소 찾기) 둘 다
+# 필요해졌다. 합집합이면 군 전역을 덮으면서 경계 밖 위험영역도 놓치지 않는다 —
+# 1,051km², 건물 51,040건(반경만일 때 18,032건).
 AOI_DEFS = {
-    "sancheong": {"center_5179": (1_050_511.5, 1_706_245.2), "radius_m": 12_000},
-    # 강남·서초는 두 구를 함께 보여주는 게 목적이라 행정경계 그대로 쓴다.
+    "sancheong": {
+        "level": "sigungu",
+        "codes": ("38570",),  # 경상남도 산청군
+        "center_5179": (1_050_511.5, 1_706_245.2),
+        "radius_m": 12_000,
+    },
+    # 강남·서초는 예선 범위에서 빠졌지만 정의는 남겨둔다 — 지우면 재생성 방법이
+    # 코드에서 사라진다. 필요해지면 --aoi seoul 로 다시 만들면 된다.
     "seoul": {"level": "sigungu", "codes": ("11220", "11230")},
 }
 
@@ -124,23 +150,33 @@ def load_aoi(region: str):
     center_5179+radius_m가 있으면 그 원, 없으면 행정경계 코드로 찾는다.
     """
     cfg = AOI_DEFS[region]
+    parts = []
+    labels = []
+
+    if "codes" in cfg:
+        path = VECTOR_DIR / f"adm_{cfg['level']}_5179.geojson"
+        with open(path, encoding="utf-8") as f:
+            collection = json.load(f)
+        matched = [f for f in collection["features"] if f["properties"].get("code") in cfg["codes"]]
+        if len(matched) != len(cfg["codes"]):
+            found = [f["properties"].get("code") for f in matched]
+            raise SystemExit(f"{region}: 코드 {cfg['codes']} 중 {found}만 {path.name}에서 찾음")
+        parts.append(unary_union([shape(f["geometry"]) for f in matched]))
+        labels.append(", ".join(
+            f["properties"].get("full_nm") or f["properties"].get("name", "") for f in matched
+        ))
+
     if "center_5179" in cfg:
         from shapely.geometry import Point
 
         cx, cy = cfg["center_5179"]
         radius = cfg["radius_m"]
-        return Point(cx, cy).buffer(radius), f"경보지점 반경 {radius / 1000:.0f}km"
+        parts.append(Point(cx, cy).buffer(radius))
+        labels.append(f"경보지점 반경 {radius / 1000:.0f}km")
 
-    path = VECTOR_DIR / f"adm_{cfg['level']}_5179.geojson"
-    with open(path, encoding="utf-8") as f:
-        collection = json.load(f)
-    matched = [f for f in collection["features"] if f["properties"].get("code") in cfg["codes"]]
-    if len(matched) != len(cfg["codes"]):
-        found = [f["properties"].get("code") for f in matched]
-        raise SystemExit(f"{region}: 코드 {cfg['codes']} 중 {found}만 {path.name}에서 찾음")
-    geom = unary_union([shape(f["geometry"]) for f in matched])
-    names = ", ".join(f["properties"].get("full_nm") or f["properties"].get("name", "") for f in matched)
-    return geom, names
+    if not parts:
+        raise SystemExit(f"{region}: codes 또는 center_5179 중 하나는 있어야 한다")
+    return unary_union(parts), " ∪ ".join(labels)
 
 
 def iter_source_features(region: str):
@@ -208,10 +244,8 @@ def build(region: str) -> None:
     if not scanned:
         return
 
-    out_path = VECTOR_DIR / f"aoi_buildings_{region}_5179.geojson"
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(out_path, "w", encoding="utf-8") as f:
-        json.dump({"type": "FeatureCollection", "features": kept}, f, ensure_ascii=False, separators=(",", ":"))
+    out_path = VECTOR_DIR / f"aoi_buildings_{region}_5179.ndjson"
+    write_ndjson(out_path, kept)
 
     size_mb = out_path.stat().st_size / 1e6
     print(f"[{region}] 원본 {scanned:,}건 → AOI 내부 {len(kept):,}건"
@@ -260,13 +294,8 @@ def build_farmland(region: str) -> None:
         })
         area_m2 += geom.area
 
-    out_path = VECTOR_DIR / f"aoi_farmland_{region}_5179.geojson"
-    with open(out_path, "w", encoding="utf-8") as f:
-        json.dump({"type": "FeatureCollection", "features": kept}, f, ensure_ascii=False, separators=(",", ":"))
-    size_mb = out_path.stat().st_size / 1e6
-    print(f"[{region}] 농경지 원본 {len(features):,}필지 → AOI 내부 {len(kept):,}필지 "
-          f"({area_m2 / 10_000:.1f}ha)")
-    print(f"[{region}] 저장: {out_path.relative_to(REPO_ROOT)} ({size_mb:.1f}MB, EPSG:5179)")
+    out_path = VECTOR_DIR / f"aoi_farmland_{region}_5179.ndjson"
+    write_ndjson(out_path, kept)
 
 
 def main() -> None:
