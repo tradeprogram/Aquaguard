@@ -10,6 +10,8 @@ python-dotenv==1.1.1
 google-genai==2.20.0
 networkx==3.6.1
 shapely==2.1.2
+scipy
+numpy
 # Module B가 SFINCS/ANUGA 최대침수심 래스터를 폴리곤화할 때 쓴다(module_b_flood/fim.py).
 # 지연 import라 없어도 서버는 뜨지만, 침수범위가 조용히 빈 FeatureCollection이 되어
 # 지도에 3D 침수가 안 그려진다 — 배포 서버에 반드시 있어야 한다.

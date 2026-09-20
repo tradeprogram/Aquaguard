@@ -1091,12 +1091,73 @@ def evacuation_route(req: EvacuationRouteRequest) -> dict:
             "time_budget_hours": req.time_budget_hours,
         }
     )
+    flood = _sancheong_flood_shape()
+    shelter_lonlat = {s.shelter_id: (s.lon, s.lat) for s in req.shelter_candidates}
     for r in results:
         r["route_lonlat"] = [
             list(module_e_routing.point_5179_to_lonlat(x, y)) for x, y in r["route_5179"]["coordinates"]
         ]
+        _apply_flood_to_route(r, flood, shelter_lonlat.get(r["shelter_id"]), warnings)
 
     return {"results": results, "warnings": warnings}
+
+
+_FLOOD_SHAPE_CACHE: dict = {}
+
+
+def _sancheong_flood_shape():
+    """Module B의 실제 침수범위(수심 0.3m 이상, lon/lat) — 대피 경로가 물에 잠기는 도로를
+    지나는지 판별하는 데 쓴다. 사전계산 스냅샷(data/precomputed/demo_snapshot.json)의 표시용
+    침수 폴리곤 중 최저 수심 구간(누적이라 가장 넓다)을 처음 한 번만 읽어 캐시한다.
+    스냅샷이 없거나 침수범위가 비어 있으면 None — 그러면 침수 반영은 조용히 꺼진다(경로 계산은 그대로)."""
+    if "shape" in _FLOOD_SHAPE_CACHE:
+        return _FLOOD_SHAPE_CACHE["shape"]
+    shape = None
+    try:
+        import json as _json
+        import shapely.geometry as _sg
+
+        with open(Path(__file__).parent / "data" / "precomputed" / "demo_snapshot.json", encoding="utf-8") as f:
+            feats = _json.load(f).get("flood_display", {}).get("features", [])
+        band0 = [ft for ft in feats if (ft.get("properties") or {}).get("band") == 0]
+        if band0:
+            shape = _sg.shape(band0[0]["geometry"]).buffer(0)
+    except Exception:  # noqa: BLE001 - 침수 반영은 부가 정보라 실패해도 경로 응답은 막지 않는다
+        shape = None
+    _FLOOD_SHAPE_CACHE["shape"] = shape
+    return shape
+
+
+def _apply_flood_to_route(result: dict, flood, shelter_lonlat, warnings: list) -> None:
+    """경로가 침수 구간을 지나거나 대피소가 침수범위 안이면 표시하고 도달 불가로 돌린다.
+
+    네이버 Directions는 "이 구역을 피해서"라는 조건을 못 받는다 — 그래서 경로를 우회시키지는
+    못하고, 받아온 경로가 침수 구간과 겹치는지만 검사해서 알린다(겹치면 그 대피소는 후보에서
+    내려 사용자가 다른 곳을 고르게 한다). 우회 경로 탐색은 아직 없다."""
+    result["route_flooded"] = False
+    result["flooded_route_m"] = 0
+    if flood is None:
+        return
+    import math
+
+    import shapely.geometry as sg
+
+    coords = result.get("route_lonlat") or []
+    flooded_m = 0.0
+    if len(coords) >= 2:
+        line = sg.LineString(coords)
+        hit = line.intersection(flood)
+        if not hit.is_empty:
+            mid_lat = coords[len(coords) // 2][1]
+            flooded_m = hit.length * 111320.0 * math.cos(math.radians(mid_lat))
+    shelter_flooded = bool(shelter_lonlat and flood.contains(sg.Point(*shelter_lonlat)))
+    if flooded_m > 1.0 or shelter_flooded:
+        result["route_flooded"] = True
+        result["flooded_route_m"] = round(flooded_m)
+        result["time_feasible"] = False
+        result["time_margin_min"] = None
+        why = "대피소가 침수범위 안" if shelter_flooded else f"경로 중 약 {round(flooded_m)}m가 침수 구간"
+        warnings.append(f"{result['shelter_id']} 통행 불가 — {why}")
 
 
 class IsolationCheckRequest(BaseModel):
