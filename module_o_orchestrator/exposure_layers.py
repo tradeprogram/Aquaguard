@@ -26,6 +26,7 @@ farmland_parcels_5179는 어느 모듈의 출력도 아니다 — Module O가 �
 """
 from __future__ import annotations
 
+import gc
 import json
 from functools import lru_cache
 from pathlib import Path
@@ -160,8 +161,68 @@ def _load_collection(path: Path, label: str, regenerate_hint: str) -> tuple[dict
     return collection, None
 
 
-@lru_cache(maxsize=len(AOI_LAYERS))
-def _load_buildings(aoi: str) -> tuple[dict[str, Any], str | None]:
+def _feature_bounds(geometry: Any) -> tuple[float, float, float, float] | None:
+    """지오메트리의 bbox. 좌표 중첩 깊이에 무관하게 [x, y] 쌍을 찾아 내려간다."""
+    if not isinstance(geometry, dict):
+        return None
+    xs: list[float] = []
+    ys: list[float] = []
+
+    def walk(node: Any) -> None:
+        if isinstance(node, (list, tuple)):
+            if len(node) >= 2 and all(isinstance(v, (int, float)) for v in node[:2]):
+                xs.append(float(node[0]))
+                ys.append(float(node[1]))
+                return
+            for item in node:
+                walk(item)
+
+    walk(geometry.get("coordinates"))
+    if not xs:
+        return None
+    return min(xs), min(ys), max(xs), max(ys)
+
+
+def _clip_to_bounds(collection: dict[str, Any],
+                    bounds: tuple[float, float, float, float] | None) -> dict[str, Any]:
+    """위험영역 bbox 밖의 feature를 버린다.
+
+    bbox가 안 겹치는 feature는 위험 폴리곤과도 절대 안 겹치므로 Module D의 결과는
+    그대로다. 목적은 메모리다 — 산청 농경지 23,288필지를 통째로 들고 있으면
+    105MB인데, 반경 2.5km 위험영역이면 17%만 남아 20MB 아래로 떨어진다.
+    배포 서버(RAM 908MB)가 OOM으로 uvicorn을 죽이던 주원인이었다.
+    """
+    if bounds is None:
+        return collection
+    min_x, min_y, max_x, max_y = bounds
+    kept = []
+    for feature in collection.get("features") or []:
+        box = _feature_bounds((feature or {}).get("geometry"))
+        if box is None:
+            kept.append(feature)  # 판단 불가면 버리지 않는다 — 누락보다 낫다
+            continue
+        if box[2] < min_x or box[0] > max_x or box[3] < min_y or box[1] > max_y:
+            continue
+        kept.append(feature)
+    return {**collection, "features": kept}
+
+
+def _load_clipped(loader, aoi: str,
+                  bounds: tuple[float, float, float, float] | None) -> tuple[dict[str, Any], str | None]:
+    """전체를 읽어 bbox로 자른 뒤 원본을 즉시 버린다.
+
+    전체 컬렉션을 lru_cache에 남기면 잘라낸 의미가 없어서(메모리가 그대로 남는다)
+    캐시하지 않는다. 파싱 순간의 피크는 그대로지만 — json.load가 통째로 만들고 나서
+    거르므로 — 상주 메모리가 크게 줄고, 그게 OOM을 만들던 쪽이다.
+    """
+    collection, warning = loader(aoi)
+    clipped = _clip_to_bounds(collection, bounds)
+    del collection
+    gc.collect()
+    return clipped, warning
+
+
+def _read_buildings(aoi: str) -> tuple[dict[str, Any], str | None]:
     return _load_collection(
         AOI_LAYERS[aoi]["buildings"],
         f"{aoi} 건축물",
@@ -169,8 +230,7 @@ def _load_buildings(aoi: str) -> tuple[dict[str, Any], str | None]:
     )
 
 
-@lru_cache(maxsize=len(AOI_LAYERS))
-def _load_farmland(aoi: str) -> tuple[dict[str, Any], str | None]:
+def _read_farmland(aoi: str) -> tuple[dict[str, Any], str | None]:
     path = AOI_LAYERS[aoi]["farmland"]
     if path is None:
         return dict(EMPTY_COLLECTION), (
@@ -181,14 +241,21 @@ def _load_farmland(aoi: str) -> tuple[dict[str, Any], str | None]:
     )
 
 
-def building_footprints(aoi: str = DEFAULT_AOI) -> tuple[dict[str, Any], str | None]:
-    """AOI 건축물 footprint(EPSG:5179)와 문제가 있었다면 그 경고."""
-    return _load_buildings(aoi)
+def building_footprints(aoi: str = DEFAULT_AOI,
+                        bounds_5179: tuple[float, float, float, float] | None = None
+                        ) -> tuple[dict[str, Any], str | None]:
+    """AOI 건축물 footprint(EPSG:5179)와 문제가 있었다면 그 경고.
+
+    bounds_5179를 주면 그 bbox 밖 건물은 빼고 돌려준다(결과 동일, 메모리 절감).
+    """
+    return _load_clipped(_read_buildings, aoi, bounds_5179)
 
 
-def farmland_parcels(aoi: str = DEFAULT_AOI) -> tuple[dict[str, Any], str | None]:
-    """농경지 필지(EPSG:5179)와 문제가 있었다면 그 경고."""
-    return _load_farmland(aoi)
+def farmland_parcels(aoi: str = DEFAULT_AOI,
+                     bounds_5179: tuple[float, float, float, float] | None = None
+                     ) -> tuple[dict[str, Any], str | None]:
+    """농경지 필지(EPSG:5179)와 문제가 있었다면 그 경고. bounds_5179는 위와 같다."""
+    return _load_clipped(_read_farmland, aoi, bounds_5179)
 
 
 def flood_depth_raster(aoi: str = DEFAULT_AOI) -> tuple[str | None, str | None]:

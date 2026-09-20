@@ -203,15 +203,20 @@ def run(input: dict[str, Any]) -> dict[str, Any]:  # noqa: A002 - §4.2 규약�
         # (§10 데이터 접근 계층). 레이어를 못 읽어도 파이프라인은 계속 돌고, 대신
         # 그 사실이 경고로 올라온다 — 특히 농경지는 "0ha"와 "확인 불가"가 다르다.
         aoi = trigger_aoi  # 위에서 이미 해석했다
-        buildings, buildings_warning = building_footprints(aoi)
-        farmland, farmland_warning = farmland_parcels(aoi)
+        # 위험영역 bbox를 함께 넘겨 그 밖의 건물·농경지는 읽어서 바로 버린다.
+        # D가 어차피 위험 폴리곤과 교차시키므로 결과는 같고, 상주 메모리만 준다 —
+        # 산청 농경지 전체를 들고 있으면 105MB라 908MB짜리 배포 서버에서 uvicorn이
+        # OOM으로 죽었다(2026-09-20 dmesg 확인).
+        risk_bounds = _risk_bounds_5179(risk_polygons)
+        buildings, buildings_warning = building_footprints(aoi, risk_bounds)
+        farmland, farmland_warning = farmland_parcels(aoi, risk_bounds)
         # 단, 목업 D는 입력을 무시하고 example.json의 출력(농경지 4.2ha 등)을 그대로
         # 돌려준다 — 그때 "레이어 미확보" 경고를 같이 내보내면 화면에 뜬 숫자와 어긋난다.
         # 이 경고는 그 레이어로 실제 계산이 일어날 때만 의미가 있다.
         if resolve_source("d") == "real":
             warnings.extend(w for w in (buildings_warning, farmland_warning) if w)
             # 위험영역이 클립본 밖으로 나가면 그만큼 노출자산이 빠진다 — 하한임을 알린다.
-            coverage = coverage_warning(aoi, _risk_bounds_5179(risk_polygons))
+            coverage = coverage_warning(aoi, risk_bounds)
             if coverage:
                 warnings.append(coverage)
 
