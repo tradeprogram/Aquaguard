@@ -1,0 +1,10 @@
+{
+  "auc_dem_point": 0.5443,
+  "auc_dem_upslope": 0.5397,
+  "auc_slope_point_only": 0.5256,
+  "auc_slope_upslope_only": 0.5822,
+  "n_pos": 292,
+  "n_bg": 571,
+  "dem": "Copernicus GLO-30 (free, no-login)",
+  "note": "vs 04 soil-map-class: point 0.41 / upslope 0.60"
+}
