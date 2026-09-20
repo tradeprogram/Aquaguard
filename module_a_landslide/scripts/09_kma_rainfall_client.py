@@ -5,15 +5,14 @@
 산청 2025-07-19 산사태 사건 실데이터 재현. 가상값 없음(전부 실측).
 
 검증(2026-09-10): 산청(289) 2025-07-18~19 누적 416.9mm, 09시 피크 66.8mm/h.
-LDAPS/UM 예보는 아래 호출로 받는다 — sub 파라미터가 필수다(빠뜨리면 서버가 엉뚱한
-경로를 만들어 file not exist 가 뜬다).
-  nwp_vars_down.php?nwp=l015&sub=unis&vars=apcp&tmfc=YYYYMMDDHH(UTC)&ef=N&dataType=TEXT
-  ※ vars 는 apcp 만 유효(rain·prcp 등은 "해당 변수 없음"). 국지 보유 2012-05~,
-    UM 모델은 2026-03-31 생산종료(그 이후 조회 불가 메시지의 진짜 이유).
-현재 이 계정은 파일명만 돌아오고 내용이 안 온다 — 수치모델 API 활용신청 필요
-(nwp_file_list.php 가 403, ASOS 는 정상).
-주석 이력: '2025-07 보존 확인'(근거없음) → '보존 안 해 확보 불가'(오독) → 현재.
-상세 docs/handoff/TRACK1_REPLY.md §3 (2026-09-20).
+LDAPS/UM 예보는 접근 가능하다(권한·보존기간 문제 없음). sub 파라미터가 필수다.
+  nwp_vars_down.php?nwp=l015&sub=unis&vars=tmpr&tmfc=YYYYMMDDHH(UTC)&ef=N&dataType=TEXT
+  → 2025-07-19 기온 6.16MB 정상 수신 확인.
+다만 **강수(vars=apcp)만 파일명 40B 만 오고 내용이 안 온다**. 다른 강수 이름
+(ncpcp/acpcp/prcp/rain/prate/tp 등)은 "해당 변수 설정값이 없음"으로 거부된다.
+ef·dataType·연도를 바꿔도 동일 → API 쪽 강수 추출 문제로 보이며 기상청 문의 필요.
+주석 이력(4회): '2025-07 보존확인'(근거없음) → '보존안함'(오독) → '권한없음'(오판)
+→ 현재. 상세 docs/handoff/TRACK1_REPLY.md §3 (2026-09-20).
 """
 from __future__ import annotations
 import os, re, io
