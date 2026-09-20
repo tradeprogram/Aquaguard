@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { checkIsolation, type IsolationCheckResult } from "@/lib/api";
 import { diagnoseFailure } from "@/lib/backendDiagnosis";
 import { DEMO_REGIONS, DEFAULT_REGION, type RegionKey } from "@/lib/demoShelters";
@@ -33,42 +33,90 @@ function buildDemoHazard(bbox: [number, number, number, number]): GeoJSON.Polygo
   };
 }
 
+// 계산 결과 캐시 — 지역·시나리오 조합 하나가 키다.
+// 패널을 닫으면 컴포넌트가 언마운트되면서 결과가 통째로 날아가고, 다시 열면
+// VWorld 도로·건물을 처음부터 다시 받아야 해서 한참 걸렸다. 캐시를 page.tsx가
+// 들고 있으면 패널을 닫았다 열어도, 두 시나리오를 오가도 즉시 나온다.
+export type IsolationCacheKey = `${RegionKey}:${"base" | "hazard"}`;
+export type IsolationCache = Partial<Record<IsolationCacheKey, IsolationCheckResult>>;
+
+export function isolationCacheKey(region: RegionKey, applyHazard: boolean): IsolationCacheKey {
+  return `${region}:${applyHazard ? "hazard" : "base"}`;
+}
+
 export default function IsolationPanel({
   region = DEFAULT_REGION,
+  cache,
+  onCache,
+  shown,
+  onShownChange,
   onResult,
   onFocusCluster,
 }: {
   region?: RegionKey;
+  // 계산 결과 보관소(page.tsx 소유) — 패널 언마운트를 견딘다.
+  cache?: IsolationCache;
+  onCache?: (key: IsolationCacheKey, result: IsolationCheckResult) => void;
+  // 지금 화면에 띄워둔 조합. 닫았다 열어도 보던 걸 그대로 다시 보여준다.
+  shown?: IsolationCacheKey | null;
+  onShownChange?: (key: IsolationCacheKey | null) => void;
   onResult?: (result: IsolationCheckResult | null) => void;
   // 목록에서 구역을 클릭하면 그 구역의 bbox로 지도를 이동시켜달라는 요청.
   onFocusCluster?: (bbox: [number, number, number, number]) => void;
 }) {
   const { shelters, isolationBbox } = DEMO_REGIONS[region];
   const shelterLonLat = shelters.map(({ lon, lat }) => ({ lon, lat }));
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState<null | boolean>(null); // null=대기, boolean=계산중인 시나리오
   const [error, setError] = useState<string | null>(null);
-  const [result, setResult] = useState<IsolationCheckResult | null>(null);
-  const [scenarioApplied, setScenarioApplied] = useState(false);
+
+  // 지역을 바꾸면 이전 지역 결과는 더 보여주지 않는다 — 캐시에는 남아 있어서
+  // 그 지역으로 돌아오면 다시 즉시 뜬다.
+  const activeKey = shown && shown.startsWith(`${region}:`) ? shown : null;
+  const result = activeKey ? cache?.[activeKey] ?? null : null;
+  const scenarioApplied = activeKey?.endsWith(":hazard") ?? false;
 
   const run = async (applyHazard: boolean) => {
-    setLoading(true);
+    const key = isolationCacheKey(region, applyHazard);
+    const hit = cache?.[key];
+    if (hit) {
+      // 이미 계산해둔 조합 — 다시 부르지 않는다.
+      onShownChange?.(key);
+      onResult?.(hit);
+      setError(null);
+      return;
+    }
+
+    setLoading(applyHazard);
     setError(null);
     try {
       const r = await checkIsolation(isolationBbox, shelterLonLat, applyHazard ? buildDemoHazard(isolationBbox) : undefined);
-      setResult(r);
-      setScenarioApplied(applyHazard);
+      onCache?.(key, r);
+      onShownChange?.(key);
       onResult?.(r);
     } catch {
       // 고정 문구 대신 /health를 찔러 원인을 구분한다 — 서버 미기동인지, 배포가
       // 뒤처져 엔드포인트가 없는 건지, 요청 자체의 문제인지(lib/backendDiagnosis.ts).
       setError(await diagnoseFailure("고립 분석", "/isolation-check"));
+      onShownChange?.(null);
       onResult?.(null);
     } finally {
-      setLoading(false);
+      setLoading(null);
     }
   };
 
+  // 패널을 다시 열면 목록은 캐시에서 바로 복원되지만 지도 레이어는 그렇지 않다 —
+  // onResult 는 run() 안에서만 불리기 때문이다. 그사이 슬라이더가 같은 레이어를
+  // 덮어썼을 수도 있어서, 보여주는 조합이 바뀔 때마다 지도에 한 번 다시 밀어준다.
+  const pushedRef = useRef<IsolationCacheKey | null>(null);
+  useEffect(() => {
+    if (!activeKey || !result) return;
+    if (pushedRef.current === activeKey) return;
+    pushedRef.current = activeKey;
+    onResult?.(result);
+  }, [activeKey, result, onResult]);
+
   const clusters = result?.isolated_areas.features ?? [];
+  const cached = (applyHazard: boolean) => Boolean(cache?.[isolationCacheKey(region, applyHazard)]);
 
   return (
     <div className="space-y-4 text-sm">
@@ -81,23 +129,33 @@ export default function IsolationPanel({
       <div className="flex gap-2">
         <button
           onClick={() => run(false)}
-          disabled={loading}
-          className="flex-1 rounded-lg border border-sky-700 bg-sky-950/30 py-2 text-xs font-medium text-sky-300 hover:bg-sky-950/60 disabled:opacity-50"
+          disabled={loading !== null}
+          className={`flex-1 rounded-lg border py-2 text-xs font-medium disabled:opacity-50 ${
+            activeKey && !scenarioApplied
+              ? "border-sky-500 bg-sky-900/50 text-sky-200"
+              : "border-sky-700 bg-sky-950/30 text-sky-300 hover:bg-sky-950/60"
+          }`}
         >
-          {loading && !scenarioApplied ? "계산 중…" : "현재 상태 확인"}
+          {loading === false ? "계산 중…" : "현재 상태 확인"}
+          {cached(false) && loading === null && <span className="ml-1 text-[10px] opacity-60">저장됨</span>}
         </button>
         <button
           onClick={() => run(true)}
-          disabled={loading}
-          className="flex-1 rounded-lg border border-fuchsia-700 bg-fuchsia-950/30 py-2 text-xs font-medium text-fuchsia-300 hover:bg-fuchsia-950/60 disabled:opacity-50"
+          disabled={loading !== null}
+          className={`flex-1 rounded-lg border py-2 text-xs font-medium disabled:opacity-50 ${
+            scenarioApplied
+              ? "border-fuchsia-500 bg-fuchsia-900/50 text-fuchsia-200"
+              : "border-fuchsia-700 bg-fuchsia-950/30 text-fuchsia-300 hover:bg-fuchsia-950/60"
+          }`}
         >
-          {loading && scenarioApplied ? "계산 중…" : "위험 시나리오 적용"}
+          {loading === true ? "계산 중…" : "위험 시나리오 적용"}
+          {cached(true) && loading === null && <span className="ml-1 text-[10px] opacity-60">저장됨</span>}
         </button>
       </div>
 
       {error && <p className="text-xs text-red-300">{error}</p>}
 
-      {!result && !loading && !error && (
+      {!result && loading === null && !error && (
         <div className="rounded-lg border border-dashed border-fuchsia-800/40 bg-fuchsia-950/10 p-3 text-[11px] text-fuchsia-300/80">
           버튼을 눌러 {DEMO_REGIONS[region].label} 대피소 {shelters.length}곳 기준으로 실제 도로망 연결성을 계산한다.
           &ldquo;현재 상태&rdquo;는 위험지역 없이 도로가 원래 얼마나 끊겨있는지(데이터
@@ -162,6 +220,8 @@ export default function IsolationPanel({
         지역·고정 대피소 {shelters.length}곳 기준. 지도 오른쪽 위 침수·토사 슬라이더를
         움직이면 그 값 기준으로 자동으로도 재계산된다 — 이 버튼은 슬라이더 없이 이
         화면만으로 빠르게 테스트해볼 수 있는 별도 데모 시나리오다.
+        한 번 계산한 조합은 저장해두므로, 패널을 닫았다 열거나 두 시나리오를 오가도
+        다시 기다리지 않는다(지역을 바꾸면 그 지역 것을 따로 계산한다).
       </div>
     </div>
   );

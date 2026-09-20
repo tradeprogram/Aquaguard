@@ -437,10 +437,18 @@ export default function MapExplorer({
   const [floodedBuildingCount, setFloodedBuildingCount] = useState<number | null>(null);
   const [hazardIsolatedCount, setHazardIsolatedCount] = useState<number | null>(null);
 
+  // WebGL을 못 쓰는 환경(원격 데스크톱, 일부 가상머신, GPU 차단 정책, 헤드리스
+  // 브라우저)에서는 MapLibre 생성자가 그대로 throw한다. 그게 잡히지 않으면 React가
+  // 트리를 통째로 버려서 지도뿐 아니라 패널·메뉴까지 빈 화면이 된다 — 지도를 못
+  // 그리는 것과 대시보드를 못 쓰는 것은 다르므로 여기서 끊고 안내를 띄운다.
+  const [mapFailed, setMapFailed] = useState(false);
+
   // 지도 초기화 (1회)
   useEffect(() => {
     if (!mapContainer.current || mapRef.current) return;
-    const map = new MapLibreMap({
+    let map: MapLibreMap;
+    try {
+      map = new MapLibreMap({
       container: mapContainer.current,
       style: MAP_STYLE,
       center: INITIAL_CENTER,
@@ -472,7 +480,12 @@ export default function MapExplorer({
       // 커서 위치 기준 줌은 지형 고도가 아직 로드 중일 때 그 지점의 고도값이 계속
       // 바뀌면서 카메라가 재계산돼 튕기는 원인이 된다 — 화면 중심 기준으로 고정
       scrollZoom: { around: "center" },
-    });
+      });
+    } catch (err) {
+      console.error("[maplibre] 지도 초기화 실패 — 패널은 그대로 쓸 수 있다", err);
+      setMapFailed(true);
+      return;
+    }
     map.addControl(new NavigationControl({ visualizePitch: true }), "top-right");
     // fitBounds는 bearing을 명시하지 않으면 0으로 되돌린다(공식 문서에 명시된 동작) —
     // 생성자에서 준 -20을 유지하려면 여기서도 다시 넘겨야 한다.
@@ -1550,6 +1563,19 @@ export default function MapExplorer({
   return (
     <div className="relative h-full min-h-[600px] w-full">
       <div ref={mapContainer} className="h-full w-full" />
+
+      {mapFailed && (
+        <div className="absolute inset-0 flex items-center justify-center bg-slate-950 p-8 text-center">
+          <div className="max-w-md space-y-2">
+            <p className="text-sm font-semibold text-slate-200">3D 지도를 표시할 수 없습니다</p>
+            <p className="text-xs text-slate-400">
+              이 브라우저·기기에서 WebGL을 쓸 수 없어 지도만 꺼졌습니다. 원격 데스크톱,
+              GPU 가속이 꺼진 환경, 일부 가상머신에서 발생합니다. 위·오른쪽 메뉴의
+              분석 패널은 그대로 사용할 수 있습니다.
+            </p>
+          </div>
+        </div>
+      )}
 
       <div className="pointer-events-none absolute inset-x-0 top-0 flex items-start justify-between p-4 pt-20">
         <div className="pointer-events-auto flex flex-col items-start gap-2">

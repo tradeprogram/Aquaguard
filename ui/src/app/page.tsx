@@ -5,7 +5,11 @@ import MapExplorer, { type EvacuationRoute } from "@/components/MapExplorer";
 import GlassPanel from "@/components/GlassPanel";
 import DashboardPanel from "@/components/panels/DashboardPanel";
 import EvacuationPanel from "@/components/panels/EvacuationPanel";
-import IsolationPanel from "@/components/panels/IsolationPanel";
+import IsolationPanel, {
+  isolationCacheKey,
+  type IsolationCache,
+  type IsolationCacheKey,
+} from "@/components/panels/IsolationPanel";
 import WhatifPanel from "@/components/panels/WhatifPanel";
 import ModelPerformancePanel from "@/components/panels/ModelPerformancePanel";
 import ApprovePanel from "@/components/panels/ApprovePanel";
@@ -64,6 +68,10 @@ export default function HomePage() {
   // §7 IsolationPanel↔MapExplorer도 형제 컴포넌트라 같은 방식으로 상태를 끌어올린다.
   const [isolatedAreas, setIsolatedAreas] = useState<GeoJSON.FeatureCollection | null>(null);
   const [blockedRoads, setBlockedRoads] = useState<GeoJSON.FeatureCollection | null>(null);
+  // 고립분석 결과는 여기 둔다 — 패널이 닫히면 언마운트돼서 패널 안에 두면 날아가고,
+  // 다시 열 때마다 VWorld 도로·건물을 처음부터 받느라 한참 걸렸다.
+  const [isolationCache, setIsolationCache] = useState<IsolationCache>({});
+  const [isolationShown, setIsolationShown] = useState<IsolationCacheKey | null>(null);
   const [focusBbox, setFocusBbox] = useState<{ bbox: [number, number, number, number]; nonce: number } | null>(null);
   // 지도의 "산청 상능마을"/"서울 강남" 버튼이 바꾸는 현재 데모 지역 — EvacuationPanel/
   // IsolationPanel이 이 값 기준으로 대피소 목록을 고른다(lib/demoShelters.ts).
@@ -165,6 +173,10 @@ export default function HomePage() {
               {active === "isolation" && (
                 <IsolationPanel
                   region={region}
+                  cache={isolationCache}
+                  onCache={(key, r) => setIsolationCache((prev) => ({ ...prev, [key]: r }))}
+                  shown={isolationShown}
+                  onShownChange={setIsolationShown}
                   onResult={(r) => {
                     setIsolatedAreas(r?.isolated_areas ?? null);
                     setBlockedRoads(r?.blocked_roads ?? null);
