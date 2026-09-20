@@ -6,6 +6,7 @@ MODULE_PACKAGES를 통해 그대로 실제 모듈로 교체된다.
 """
 from __future__ import annotations
 
+import gzip
 import json
 import math
 import os
@@ -18,8 +19,9 @@ from typing import Any, Literal
 import geopandas as gpd
 import requests
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Response
+from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from google import genai
 from google.genai import types as genai_types
 from pydantic import BaseModel
@@ -50,6 +52,11 @@ app = FastAPI(title="AquaGuard AI — api_server")
 # Vercel 배포 도메인(프로덕션 URL은 매번 같지만 프리뷰 배포마다 서브도메인이 바뀌므로
 # 정규식으로 *.vercel.app 전체를 허용 — 이 백엔드는 인증이 없어 오리진 제한이
 # 유일한 방어선은 아니지만, 최소한 임의 사이트의 크로스오리진 호출은 막아둔다).
+# GeoJSON은 좌표 숫자가 대부분이라 gzip이 아주 잘 먹는다 — /boundaries 0.84MB,
+# /alerts/{id}/geojson 0.65MB를 매 요청 그대로 내보내고 있었다. 회선이 느린 시연장에서
+# 이게 그대로 대기 시간이 된다. CORS보다 **뒤에** 추가해야 CORS 헤더가 압축 응답에도
+# 제대로 붙는다(Starlette은 나중에 추가한 미들웨어가 바깥쪽에 온다).
+app.add_middleware(GZipMiddleware, minimum_size=1024)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:3000"],
@@ -485,7 +492,7 @@ def _get_adm_search_index() -> list[dict]:
 
 
 @app.get("/boundaries")
-def get_boundaries(bbox: str) -> dict:
+def get_boundaries(bbox: str, request: Request) -> Response:
     """현재 지도 뷰포트에 걸리는 행정경계를 시도/시군구/읍면동 3계층 모두 반환한다
     (EPSG:4326, {"sido": FeatureCollection, "sigungu": ..., "dong": ...}).
 
@@ -498,13 +505,28 @@ def get_boundaries(bbox: str) -> dict:
     except ValueError:
         raise HTTPException(status_code=400, detail="bbox must be 'minLon,minLat,maxLon,maxLat'")
 
-    result: dict[str, dict] = {}
-    for level in ADM_LEVELS:
-        clipped = _get_adm_gdf(level).cx[minx:maxx, miny:maxy]
-        if len(clipped) > MAX_BOUNDARY_FEATURES_PER_LEVEL:
-            clipped = clipped.iloc[:MAX_BOUNDARY_FEATURES_PER_LEVEL]
-        result[level] = json.loads(clipped.to_json())
-    return result
+    def build() -> bytes:
+        # dict가 아니라 **직렬화된 바이트**를 캐시한다. dict를 돌려주면 FastAPI가
+        # 요청마다 0.84MB를 다시 JSON으로 만든다 — 캐시로 아낀 만큼을 거기서 도로 쓴다.
+        # GeoDataFrame.to_json()이 이미 JSON 문자열을 주므로 파싱했다 다시 찍을 이유도 없다.
+        parts = []
+        for level in ADM_LEVELS:
+            clipped = _get_adm_gdf(level).cx[minx:maxx, miny:maxy]
+            if len(clipped) > MAX_BOUNDARY_FEATURES_PER_LEVEL:
+                clipped = clipped.iloc[:MAX_BOUNDARY_FEATURES_PER_LEVEL]
+            parts.append(f'"{level}":{clipped.to_json()}')
+        raw = ("{" + ",".join(parts) + "}").encode("utf-8")
+        # 압축본까지 같이 캐시한다. GZipMiddleware에 맡기면 요청마다 0.88MB를 새로
+        # 압축하는데 그게 96ms다(2026-09-20 실측) — 캐시로 3ms까지 줄여 놓고 그 30배를
+        # 압축에 도로 쓰는 셈이고, 2코어 서버에서는 그 시간이 다른 요청을 막는다.
+        # 여기서 한 번만 압축해 두면 이후 요청은 압축 비용이 0이면서 0.28MB만 나간다.
+        return raw, gzip.compress(raw, 6)
+
+    raw, packed = _viewport_cached(_viewport_key("boundaries", (minx, miny, maxx, maxy)), build)
+    if "gzip" in request.headers.get("accept-encoding", ""):
+        return Response(content=packed, media_type="application/json",
+                        headers={"Content-Encoding": "gzip"})
+    return Response(content=raw, media_type="application/json")
 
 
 @app.get("/search")
@@ -615,11 +637,50 @@ def _clamp_bbox_to_area(bbox: tuple[float, float, float, float]) -> tuple[float,
     return (center_lon - half_lon, center_lat - half_lat, center_lon + half_lon, center_lat + half_lat)
 
 
+# 뷰포트 응답 캐시.
+#
+# 지도를 움직일 때마다 /boundaries + /vworld/{rivers,buildings,roads} 네 개가 한꺼번에
+# 나간다(moveend 200ms 디바운스 뒤). /boundaries 하나가 0.84MB를 매번 새로 잘라
+# 만들고, vworld 셋은 외부 API를 매번 다시 부른다. 2코어짜리 배포 서버에서는 이게
+# 줄을 서서 CPU를 94%까지 올리고, 그 뒤에 들어온 경보 요청이 몇십 초를 기다린다
+# (2026-09-20 배포본 실측 — 사전계산으로 계산은 0.03초가 됐는데도 화면은 여전히 느렸다).
+#
+# bbox를 0.005°(약 500m) 격자로 반올림해 키를 만든다. 조금씩 움직이는 동안은 대부분
+# 같은 키로 떨어져 재사용되고(격자선을 넘는 순간만 새로 계산), 크게 움직이면 키가
+# 달라지므로 새로 받는다 — 화면에 엉뚱한 지역이 남는 일은 없다.
+_VIEWPORT_CACHE: dict[tuple, Any] = {}
+_VIEWPORT_CACHE_MAX = 24
+
+
+def _viewport_key(tag: str, bbox: tuple[float, float, float, float]) -> tuple:
+    return (tag, *(round(v / 0.005) for v in bbox))
+
+
+def _viewport_cached(key: tuple, build):
+    """캐시에 있으면 그대로, 없으면 만들어 넣는다(FIFO로 오래된 것부터 버림).
+
+    배포 서버 RAM이 908MB라 무한정 쌓으면 OOM으로 죽는다 — 실제로 죽은 적 있다.
+    /boundaries 응답이 0.84MB이므로 24칸이면 최악 20MB 남짓이다.
+    """
+    hit = _VIEWPORT_CACHE.get(key)
+    if hit is not None:
+        return hit
+    value = build()
+    if len(_VIEWPORT_CACHE) >= _VIEWPORT_CACHE_MAX:
+        _VIEWPORT_CACHE.pop(next(iter(_VIEWPORT_CACHE)), None)
+    _VIEWPORT_CACHE[key] = value
+    return value
+
+
 def _vworld_get_feature(data_layer: str, bbox: tuple[float, float, float, float]) -> dict:
     """VWorld Data API 2.0 GetFeature 공통 호출. bbox=(minx,miny,maxx,maxy)."""
     if not VWORLD_API_KEY:
         raise HTTPException(status_code=503, detail="VWORLD_API_KEY not configured (.env)")
     minx, miny, maxx, maxy = _clamp_bbox_to_area(bbox)
+    cache_key = _viewport_key(f"vworld:{data_layer}", (minx, miny, maxx, maxy))
+    cached = _VIEWPORT_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
     try:
         resp = requests.get(
             "http://api.vworld.kr/req/data",
