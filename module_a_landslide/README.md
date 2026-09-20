@@ -235,10 +235,11 @@ module_a_landslide/
   fos.py            무한사면 FoS + 산불계수 + 확률 + 몬테카를로 CI
   forecast.py       예보 시간강우 → hours_to_critical 전진적분 (a-htc)
   risk_layers.py    사전계산 위험 폴리곤 로더 → 계약 risk_polygon_5179
-  soil_sampler.py   좌표 → 부지 지반정수 (a-1, numpy만 사용)
+  soil_sampler.py   좌표 → 부지 지반정수 + slope_at() 경사 (numpy만 사용)
   parameters.py     정밀토양도 → 지반정수 룩업 로더
   data/             문헌 출처 지반정수(가상값 없음) + 토양 코드사전
     sancheong_soil_grid_5m.npz  산청 지반정수 격자 5m (2.1MB, 33조합 인덱스+룩업)
+    sancheong_slope_5m.npz      산청 경사 격자 5m (26.4MB, uint8×0.3° 행차분)
     risk_polygons/    위험 폴리곤 시계열 GeoJSON(EPSG:5179) + index
     validation_andong/  안동 사전검증 산출물(방법론 검증 — 산청 참값 확보 전 단계)
   scripts/          데이터 준비·검증 파이프라인 01~15 (아래 §5-1)
@@ -274,3 +275,22 @@ Sentinel 원본)는 저장소에 없으므로 각 스크립트 상단의 경로�
 `data/validation_andong/`은 **안동** 사전검증 산출물이다. 산청 발생부 참값을 못 구한
 상태에서 방법론 자체(토양 샘플링 → FoS → AUC)가 도는지 먼저 확인한 단계이며,
 산청 결과와 섞어 읽으면 안 된다.
+
+---
+
+## 6. 임계값과 경사 격자 (작업지시서 회신, 2026-09-20)
+
+**`CRITICAL_PROB = 0.5`** — `FoS = 1` 이면 시그모이드 계수 k 와 무관하게 `P = 0.5` 이므로,
+0.5 는 확률축에서 유일하게 미보정 k 에 불변인 점이고 그 의미는 무한사면 파괴조건
+`FoS < 1` 자체다. Module O 의 `LANDSLIDE_THRESHOLD` 와 같은 값이다. 근거 전문은
+`envelope.py` 주석과 [docs/handoff/TRACK1_REPLY.md](../docs/handoff/TRACK1_REPLY.md) §2.
+
+**경사 격자** — `soil_sampler.slope_at(x, y) -> float | None`. 계약상 `slope_deg` 는
+호출자가 주는 필수 입력이라 `run()` 이 격자로 덮어쓰지 않는다(dNBR 을 격자에서 뺀 것과
+같은 이유). Module O 가 이 함수로 읽어 `static.slope_deg` 에 넣는다.
+
+**`hours_to_critical` 이 0 이 되는 조건** — htc 가 양수가 되려면 평가시점에 임계 *아래*
+였다가 나중에 넘어야 한다. 데모 좌표처럼 "가장 위험한 지점"을 고르면 사건 시작부터
+임계를 넘어 있어 htc 는 필연적으로 0 이다. 리드타임 서사는 점의 htc 가 아니라
+`data/risk_polygons/` 의 **면적별 `arrival_hour`** 로 보는 게 맞다(§3-4).
+

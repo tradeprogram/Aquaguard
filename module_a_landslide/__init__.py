@@ -178,7 +178,7 @@ def run(input: dict) -> dict:  # noqa: A002 - §4.2 규약이 지정한 이름
                 # None 을 넣어 뒀는데(ba59c3d4), 이제 실제 폴리곤을 채운다 —
                 # risk_layers 가 사전계산 레이어에서 질의 지점 주변을 잘라 준다.
                 # 위험영역이 없으면 여전히 None 이고, 그때 Module O 가 location(점)
-                # 으로 폴백한다(orchestrator.py). 근거: 작업지시서 P1-2.
+                # 으로 폴백한다(orchestrator.py). 근거: 1차 작업지시서 P1-2.
                 "risk_polygon_5179": risk_poly,
             },
             warnings=warnings,

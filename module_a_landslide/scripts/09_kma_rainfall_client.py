@@ -5,7 +5,9 @@
 산청 2025-07-19 산사태 사건 실데이터 재현. 가상값 없음(전부 실측).
 
 검증(2026-09-10): 산청(289) 2025-07-18~19 누적 416.9mm, 09시 피크 66.8mm/h.
-LDAPS/UM 예보는 nwp_vars_down.php nwp=l015 vars=apcp (2025-07 보존 확인).
+LDAPS/UM 예보(nwp_vars_down.php nwp=l015 vars=apcp)는 2025-07 을 **보존하지 않는다**
+— API 응답: "2026-03-31 12 자료까지만 검색 가능합니다", 사건일은 file not exist.
+종전 주석의 '2025-07 보존 확인'은 오류였다(2026-09-20 정정, docs/handoff/TRACK1_REPLY.md §3).
 """
 from __future__ import annotations
 import os, re, io
