@@ -1510,8 +1510,10 @@ export default function MapExplorer({
   // '점차 증가한다'를 숫자로도 보여 준다.
   // 시간 스크러버를 띄울 조건 — 프레임과 위험영역이 있고, 그 데이터의 AOI(산청)를
   // 보고 있을 때만. 다른 지역에서 산청 시간축을 띄우면 그 지역 수치처럼 읽힌다.
+  // 산청군 전체는 재해 모형(산청 AOI, 경호강 일대)을 그 안에 품고 있어 같은 위험영역이 그려진다.
+  const hasHazardAoi = shelterRegion === "sancheong" || shelterRegion === "sancheong_all";
   const showScrubber =
-    shelterRegion === "sancheong" && (timeline?.available ?? false) && frames.length > 0;
+    hasHazardAoi && (timeline?.available ?? false) && frames.length > 0;
   // 침수 폴리곤이 없으면 카운트 자체가 의미 없으므로 파생값에서 null로 눌러 준다.
   const floodedInRange = floodFeatures.length === 0 ? null : floodedBuildingCount;
   // 현재 시각까지 도달한 위험영역. 지도에 올리는 것도, 화면에 쓰는 숫자도 전부
@@ -1963,7 +1965,7 @@ export default function MapExplorer({
           <p className="font-semibold text-slate-200">지금 지도에 올라와 있는 것</p>
           <p className="mt-1 text-slate-400">{DEMO_REGIONS[shelterRegion].label}</p>
 
-          {shelterRegion === "sancheong" ? (
+          {hasHazardAoi ? (
             <div className="mt-3 space-y-2">
               <div className="flex items-start gap-2">
                 <span className="mt-0.5 flex shrink-0 flex-col gap-0.5">
@@ -2262,7 +2264,7 @@ export default function MapExplorer({
       {!showScrubber && (
         <div className="pointer-events-none absolute inset-x-0 bottom-0 flex justify-center p-4">
           <p className="pointer-events-auto rounded-lg border border-white/10 bg-slate-950/75 px-3 py-2 text-xs text-slate-400 backdrop-blur-xl">
-            {shelterRegion !== "sancheong"
+            {!hasHazardAoi
               ? "시간축 없음 — 시각별 위험영역은 산청 AOI만 사전계산돼 있습니다"
               : (timelineError ?? `시간축 없음 — ${timeline?.reason ?? "시계열 위험영역 레이어가 없습니다"}`)}
           </p>

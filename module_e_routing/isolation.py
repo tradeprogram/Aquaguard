@@ -393,6 +393,14 @@ def check_isolation(
                 "blocked_roads": {"type": "FeatureCollection", "features": []},
                 "warnings": ["해당 영역에 도로 데이터 없음"]}
 
+    # 위험영역 안에 있는 대피소는 후보에서 뺀다 — 물에 잠기는 곳으로 대피시킬 수 없다.
+    hazard_shape = _hazard_shape(hazard_polygon)
+    if hazard_shape is not None:
+        usable = [s for s in shelter_candidates_lonlat if not hazard_shape.contains(shapely.geometry.Point(*s))]
+        if len(usable) != len(shelter_candidates_lonlat):
+            warnings.append(f"위험영역 안에 든 대피소 {len(shelter_candidates_lonlat) - len(usable)}곳은 후보에서 제외")
+        shelter_candidates_lonlat = usable
+
     graph = build_road_graph(road_features)
     baseline_reachable = reachable_from_shelters(graph, shelter_candidates_lonlat)
     removed_edges = remove_hazard_edges(graph, hazard_polygon)

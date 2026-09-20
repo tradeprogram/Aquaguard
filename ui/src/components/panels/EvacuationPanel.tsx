@@ -156,13 +156,19 @@ export default function EvacuationPanel({
         distanceKm: null as number | null,
         real: !backend.fallback_used,
         routeLonlat: backend.route_lonlat,
+        floodedM: backend.route_flooded ? (backend.flooded_route_m ?? 0) : null,
       };
     }
     const distanceKm = haversineKm(origin, [s.lon, s.lat]);
     const carMin = (distanceKm / CAR_KMH) * 60;
     const walkMin = (distanceKm / WALK_KMH) * 60;
     return { ...s, carMin, walkMin, feasible: carMin <= TIME_BUDGET_MIN, distanceKm, real: false as const };
-  }).sort((a, b) => a.carMin - b.carMin);
+  }).sort((a, b) => {
+    // 침수 구간을 지나는 대피소는 아무리 가까워도 뒤로 — 통행 불가 길을 1순위로 안내하면 안 된다.
+    const fa = "floodedM" in a && a.floodedM !== null ? 1 : 0;
+    const fb = "floodedM" in b && b.floodedM !== null ? 1 : 0;
+    return fa - fb || a.carMin - b.carMin;
+  });
 
   // 대피소가 지역마다 최대 20곳까지 있어 전부 보여주면 리스트가 너무 길다(2026-09-10
   // 사용자 피드백) — 계산은 전체를 대상으로 하되(가장 가까운 곳을 정확히 알아야 하니까),
@@ -288,7 +294,12 @@ export default function EvacuationPanel({
               </span>
               <span className="text-slate-500">수용인원 {s.capacity}명</span>
             </div>
-            {!s.feasible && (
+            {"floodedM" in s && s.floodedM !== null && (
+              <p className="mt-2 text-xs font-medium text-cyan-300">
+                🌊 통행 불가 — {s.floodedM > 0 ? `경로 중 약 ${s.floodedM}m가 침수 구간(수심 0.3m 이상)을 지납니다` : "이 대피소가 침수범위 안에 있습니다"}
+              </p>
+            )}
+            {!s.feasible && !("floodedM" in s && s.floodedM !== null) && (
               <p className="mt-2 text-xs font-medium text-red-300">
                 ⚠ 제한시간 내 도달 불가 — 더 가까운 대피소나 안전지대로 즉시 이동하세요
               </p>
