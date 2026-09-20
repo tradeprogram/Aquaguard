@@ -27,7 +27,7 @@ _TO_WGS84 = Transformer.from_crs("EPSG:5179", "EPSG:4326", always_xy=True)
 _TO_5179 = Transformer.from_crs("EPSG:4326", "EPSG:5179", always_xy=True)
 
 NAVER_DIRECTIONS_URL = "https://maps.apigw.ntruss.com/map-direction/v1/driving"
-WALK_KMH = 4.0  # §6.3 — 공개 API에 도보 경로가 없어 직선거리 근사에 쓰는 가정 속도
+WALK_KMH = 4.0  # §6.3 — 성인 평균 보행속도 가정. 공개 API에 도보 경로 탐색이 없다
 CAR_KMH_FALLBACK = 30.0  # 네이버 API 호출 실패 시 직선거리 근사에 쓰는 가정 속도(산간도로 보정 반영)
 NAVER_MAX_RETRIES = 2  # 첫 시도 실패 시 재시도 횟수 — 대피 안내라 일시적 타임아웃 한 번에 바로 포기하지 않는다
 NAVER_RETRY_BACKOFF_S = 0.5
@@ -41,6 +41,14 @@ def point_5179_to_lonlat(x_5179: float, y_5179: float) -> tuple[float, float]:
 def point_lonlat_to_5179(lon: float, lat: float) -> tuple[float, float]:
     x, y = _TO_5179.transform(lon, lat)
     return x, y
+
+
+def _path_length_km(path_lonlat: list) -> float:
+    """폴리라인의 실제 길이(km). 도보 시간을 직선이 아니라 이 값으로 낸다."""
+    total = 0.0
+    for (lon1, lat1), (lon2, lat2) in zip(path_lonlat, path_lonlat[1:]):
+        total += _haversine_km(lon1, lat1, lon2, lat2)
+    return total
 
 
 def _haversine_km(lon1: float, lat1: float, lon2: float, lat2: float) -> float:
@@ -167,7 +175,6 @@ def evaluate_candidates(input: dict[str, Any]) -> tuple[list[dict[str, Any]], li
     for shelter in candidates:
         dest_lonlat = point_5179_to_lonlat(shelter["x_5179"], shelter["y_5179"])
         distance_km = _haversine_km(*origin_lonlat, *dest_lonlat)
-        walk_min = (distance_km / WALK_KMH) * 60
 
         naver, fail_reason = _naver_driving_route(origin_lonlat, dest_lonlat)
         if naver is not None:
@@ -176,6 +183,15 @@ def evaluate_candidates(input: dict[str, Any]) -> tuple[list[dict[str, Any]], li
             route_confidence = "high"
             fallback_used = False
             route_coords_5179 = [list(point_lonlat_to_5179(lon, lat)) for lon, lat in naver["path_lonlat"]]
+            # 도보 시간은 **실제 경로 길이**로 낸다.
+            #
+            # 예전엔 차량이 실도로로 나와도 도보만 직선거리로 계산했다. 직선은 강을
+            # 건너고 능선을 넘는 선이라 늘 짧게 나오고, 대피 가능 시간을 실제보다
+            # 낙관적으로 보이게 한다 — 대피 안내에서 가장 위험한 방향의 오차다.
+            # 이제 도로를 따라간 길이를 쓰고, 가정으로 남는 건 보행속도뿐이다.
+            walk_km = _path_length_km(naver["path_lonlat"])
+            walk_min = (walk_km / WALK_KMH) * 60
+            walk_source = "road_path@walk_speed"
         else:
             car_min = (distance_km / CAR_KMH_FALLBACK) * 60
             route_confidence = "low"
@@ -184,6 +200,9 @@ def evaluate_candidates(input: dict[str, Any]) -> tuple[list[dict[str, Any]], li
                 [origin["x_5179"], origin["y_5179"]],
                 [shelter["x_5179"], shelter["y_5179"]],
             ]
+            walk_km = distance_km
+            walk_min = (distance_km / WALK_KMH) * 60
+            walk_source = "straight_line_approx"
             warnings.append(f"{shelter['shelter_id']} 실도로 경로 조회 실패({fail_reason}) — 직선거리 근사로 대체")
 
         time_feasible = car_min <= time_budget_min if time_budget_min is not None else True
@@ -199,8 +218,21 @@ def evaluate_candidates(input: dict[str, Any]) -> tuple[list[dict[str, Any]], li
                 "time_margin_min": round(time_margin_min, 1) if time_margin_min is not None else None,
                 "fallback_used": fallback_used,
                 "modes": {
-                    "car": {"eta_min": round(car_min, 1), "source": "naver_directions" if not fallback_used else "straight_line_approx"},
-                    "walk": {"eta_min": round(walk_min, 1), "source": "straight_line_approx"},
+                    "car": {
+                        "eta_min": round(car_min, 1),
+                        "source": "naver_directions" if not fallback_used else "straight_line_approx",
+                    },
+                    "walk": {
+                        "eta_min": round(walk_min, 1),
+                        "distance_km": round(walk_km, 2),
+                        "source": walk_source,
+                        # 차량 경로를 그대로 걷는 것으로 본다. 보행 전용 길(농로·지름길)은
+                        # 반영되지 않고, 반대로 보행자가 다니면 안 되는 구간이 섞일 수
+                        # 있다 — 공개 도보 경로 탐색 API가 없어서 생기는 한계다.
+                        "assumption": f"차량 경로를 따라 {WALK_KMH}km/h로 보행"
+                        if walk_source == "road_path@walk_speed"
+                        else f"직선거리를 {WALK_KMH}km/h로 보행",
+                    },
                 },
             }
         )

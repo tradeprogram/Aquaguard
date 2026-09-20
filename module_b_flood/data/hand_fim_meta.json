@@ -1,0 +1,20 @@
+{
+  "method": "HAND-FIM: flood=HAND<stage(y), stage=WSE_obs-DEM_channel",
+  "gauges": {
+    "고읍교": {
+      "WSE": 113.68
+    },
+    "경호교": {
+      "WSE": 94.12
+    },
+    "수산교": {
+      "WSE": 59.69
+    }
+  },
+  "stages_m": [
+    4.76,
+    7.21,
+    4.34
+  ],
+  "flood_km2": 19.98
+}

@@ -1,0 +1,8 @@
+{
+  "auc_fos_upslope": 0.5974,
+  "auc_slope_upslope": 0.5524,
+  "n_pos": 299,
+  "n_bg": 599,
+  "buffer_m": 200.0,
+  "note": "upslope 200m max-slope + weakest texture as source-area proxy"
+}

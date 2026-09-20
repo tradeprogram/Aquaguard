@@ -1,0 +1,22 @@
+{
+  "engine": "SFINCS v2.4.0 (50m + subgrid, 국지관성)",
+  "runtime_note": "2.5일 시뮬 43초",
+  "extent_vs_S1_HAND": {
+    "IoU": 0.363,
+    "F1": 0.533,
+    "POD": 0.664,
+    "FAR": 0.555,
+    "precision": 0.445,
+    "TP": 1527,
+    "FP": 1903,
+    "FN": 772
+  },
+  "model_flood_km2": 8.57,
+  "obs_flood_km2": 5.75,
+  "gyeongho_WSE": {
+    "obs_peak": 94.12,
+    "sim_peak": 93.31,
+    "diff_m": -0.8,
+    "rmse_m": 1.42
+  }
+}

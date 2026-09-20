@@ -1,0 +1,19 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "aquaguard-ui",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev", "--prefix", "ui"],
+      "port": 3000,
+      "autoPort": true
+    },
+    {
+      "name": "aquaguard-ui-deployed-api",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["--yes", "cross-env", "NEXT_PUBLIC_API_BASE=https://15-164-210-176.sslip.io", "npm", "run", "dev", "--prefix", "ui"],
+      "port": 3000,
+      "autoPort": true
+    }
+  ]
+}

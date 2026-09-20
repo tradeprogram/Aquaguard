@@ -1,0 +1,12 @@
+{
+  "n_positive": 292,
+  "n_background": 571,
+  "auc_fos_prob": 0.4079,
+  "auc_slope_only": 0.3781,
+  "mean_prob_positive": 0.0649,
+  "mean_prob_background": 0.1127,
+  "frac_unstable_positive": 0.0719,
+  "frac_unstable_background": 0.1261,
+  "method": "Infinite Slope FoS (saturated m=1), slope from soil-map SL class (no DEM yet)",
+  "honesty": "positives = surveyed concern areas (not confirmed failures); presence-vs-background AUC"
+}

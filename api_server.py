@@ -6,18 +6,24 @@ MODULE_PACKAGES를 통해 그대로 실제 모듈로 교체된다.
 """
 from __future__ import annotations
 
+import gzip
 import json
 import math
 import os
 import re
+from contextlib import asynccontextmanager
+from datetime import datetime, timezone
+from functools import lru_cache
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 import geopandas as gpd
+import httpx
 import requests
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Response
+from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from google import genai
 from google.genai import types as genai_types
 from pydantic import BaseModel
@@ -26,7 +32,13 @@ import module_e_routing
 from module_e_routing import isolation as module_e_isolation
 from module_o_orchestrator import geo
 from module_o_orchestrator.modules_client import module_sources
-from module_o_orchestrator.orchestrator import DEFAULT_SHELTER_CANDIDATES, run as run_orchestrator
+from module_o_orchestrator import snapshot as snapshot_store
+from module_o_orchestrator.store import Alert
+from module_o_orchestrator.orchestrator import (
+    DEFAULT_SHELTER_CANDIDATES,
+    LANDSLIDE_THRESHOLD,
+    run as run_orchestrator,
+)
 from module_o_orchestrator.store import alert_store
 
 load_dotenv()  # .env(git-ignore됨)의 VWORLD_API_KEY 등을 os.environ으로 로드
@@ -36,12 +48,39 @@ VWORLD_API_KEY = os.environ.get("VWORLD_API_KEY")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-flash-latest")
 
-app = FastAPI(title="AquaGuard AI — api_server")
+@asynccontextmanager
+async def _lifespan(_app: FastAPI):
+    """종료할 때 타일 프록시용 HTTP 연결을 정리한다.
+
+    on_event("shutdown")은 FastAPI가 폐기 예정으로 표시해 둔 API라 lifespan을 쓴다.
+    """
+    yield
+    global _TILE_CLIENT
+    if _TILE_CLIENT is not None:
+        await _TILE_CLIENT.aclose()
+        _TILE_CLIENT = None
+
+
+app = FastAPI(title="AquaGuard AI — api_server", lifespan=_lifespan)
 
 # ui/(Next.js dev server, 기본 3000포트)에서 로컬 개발 중 호출할 수 있도록 허용 +
 # Vercel 배포 도메인(프로덕션 URL은 매번 같지만 프리뷰 배포마다 서브도메인이 바뀌므로
 # 정규식으로 *.vercel.app 전체를 허용 — 이 백엔드는 인증이 없어 오리진 제한이
 # 유일한 방어선은 아니지만, 최소한 임의 사이트의 크로스오리진 호출은 막아둔다).
+# GeoJSON은 좌표 숫자가 대부분이라 gzip이 아주 잘 먹는다 — /boundaries 0.84MB,
+# /alerts/{id}/geojson 0.65MB를 매 요청 그대로 내보내고 있었다. 회선이 느린 시연장에서
+# 이게 그대로 대기 시간이 된다. CORS보다 **뒤에** 추가해야 CORS 헤더가 압축 응답에도
+# 제대로 붙는다(Starlette은 나중에 추가한 미들웨어가 바깥쪽에 온다).
+#
+# 단, **이미 압축된 것은 건드리면 안 된다.** Starlette의 GZipMiddleware는
+# text/event-stream만 제외하므로 PNG 타일까지 압축하는데, 실측하면 40KB가 40KB로
+# 0.1% 커지면서 장당 0.5ms를 쓴다. 지도는 한 화면에 타일을 수십~수백 장 부르므로
+# 2코어 서버에서 그대로 지연이 되고, 지형 타일이 늦으면 고도를 못 읽어 건물이
+# 엉뚱한 높이에 뜨고 래스터가 흰 구멍으로 남는다. 그래서 이미지·압축 응답은
+# 이미지 응답은 _IMAGE_HEADERS로 Content-Encoding을 미리 박아 미들웨어를 건너뛴다
+# (미들웨어를 하나 더 끼워 넣는 방법도 되지만 추가 순서에 따라 안팎이 뒤집혀서
+#  조용히 무력화된다 — 실제로 그렇게 당했다. 응답에 직접 박는 쪽이 확실하다).
+app.add_middleware(GZipMiddleware, minimum_size=1024)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:3000"],
@@ -52,11 +91,33 @@ app.add_middleware(
 
 
 class TriggerRequest(BaseModel):
+    """Module O의 run() 입력.
+
+    실모듈이 붙은 뒤로 A/B는 좌표만으로는 아무것도 못 한다 — 관측 static/dynamic이
+    있어야 FoS와 수위를 계산한다. 그 값들은 module_a_extra/module_b_extra로 넘어가고,
+    여기에 선언하지 않으면 Pydantic이 조용히 버려서 HTTP 경로에서만 위험도가 0이 된다.
+    """
+
     alert_id: str
     trigger_location: dict[str, float]
     timestamp: str
     escalation_timeout_min: int = 15
     safety_margin_hours: float = 0.5
+    # Module A/B가 실제 계산에 쓰는 관측값 (contracts/module_a·b.example.json의 input 형태)
+    module_a_extra: dict[str, Any] | None = None
+    module_b_extra: dict[str, Any] | None = None
+    reach_id: str | None = None
+    # Module C는 지하차도 1건 단위 계약이라 O가 배열을 받아 순회한다
+    underpasses: list[dict[str, Any]] | None = None
+    # 골든타임 계산의 탐지·전파 지연 (기본 75/5분, 산청 백테스트 실측 T_agent는 60분)
+    detection_lag_min: int | None = None
+    dispatch_lag_min: int | None = None
+    shelter_candidates: list[dict[str, Any]] | None = None
+    timeline_actual_override: dict[str, str] | None = None
+
+    def to_orchestrator_input(self) -> dict[str, Any]:
+        """None인 선택 필드는 빼고 넘긴다 — orchestrator가 .get() 기본값을 쓰게 둔다."""
+        return {k: v for k, v in self.model_dump().items() if v is not None}
 
 
 class ApproveRequest(BaseModel):
@@ -64,12 +125,70 @@ class ApproveRequest(BaseModel):
     approver_id: str
 
 
+@lru_cache(maxsize=1)
+def _demo_snapshot() -> dict | None:
+    """사전계산된 데모 결과. 없으면 None이고 그러면 전부 실시간으로 돈다.
+
+    산청 데모는 입력이 고정이라 결과도 고정인데, 버튼을 누를 때마다 전 모듈을 다시
+    돌리고 노출자산 GeoJSON을 다시 읽고 침수 래스터를 다시 폴리곤화했다. 배포
+    서버(2코어·RAM 908MB)에서 수십 초가 걸려 시연 중에 멈춘 것처럼 보였다.
+
+    저장본은 scripts/build_demo_snapshot.py 가 `run()`을 불러 받아 적은 것이고,
+    tests/test_demo_snapshot.py 가 파이프라인을 다시 돌려 대조한다 — 모듈이 바뀌면
+    테스트가 깨지므로 이 값은 항상 '지금 코드가 내는 값'이다.
+    """
+    return snapshot_store.load()
+
+
+def _snapshot_for(payload: dict) -> dict | None:
+    """입력이 저장본과 **정확히 같을 때만** 저장본을 쓴다.
+
+    입력 지문이 다르면(좌표를 옮겼거나 강우를 바꿨거나) 다른 질문이므로 반드시
+    실시간으로 돌아야 한다 — 저장본을 내주면 화면이 질문과 다른 답을 보여준다.
+    """
+    return snapshot_store.matching(payload, _demo_snapshot())
+
+
 @app.post("/alerts/trigger")
-def trigger_alert(req: TriggerRequest) -> dict:
+def trigger_alert(req: TriggerRequest, fresh: bool = False) -> dict:
     """Module A/B 감시 결과 임계치를 넘었다고 가정하고 Module O 파이프라인을 실행한다.
     (실제 연동 시에는 Module A/B의 상시 감시 루프가 임계치 초과를 감지했을 때 이 함수를 내부 호출하게 된다.)
+
+    입력이 사전계산된 데모와 같으면 저장본을 그대로 돌려준다 — 같은 입력에 같은 결과라
+    다시 계산할 이유가 없다. `?fresh=1`이면 저장본을 무시하고 전 모듈을 실제로 돌린다.
     """
-    return run_orchestrator(req.model_dump())
+    payload = req.to_orchestrator_input()
+    if not fresh:
+        snapshot = _snapshot_for(payload)
+        if snapshot is not None:
+            envelope = json.loads(json.dumps(snapshot["envelope"]))
+            # 경보 저장소에도 넣어야 승인/지도/시간축 엔드포인트가 그대로 동작한다.
+            # 등록 시각은 지금이다 — escalation 타임아웃은 저장본을 만든 날이 아니라
+            # 화면을 띄운 시각부터 흘러야 한다(orchestrator.run 과 같은 이유).
+            alert_store.add(Alert(
+                alert_id=payload["alert_id"],
+                created_at=datetime.now(timezone.utc).astimezone(),
+                escalation_timeout_min=int(payload.get("escalation_timeout_min") or 15),
+                envelope=envelope,
+                trigger_input=payload,
+                triggered=envelope["data"].get("approval_status") != "감시중",
+            ))
+            stored = alert_store.get(payload["alert_id"])
+            envelope["data"]["approval_status"] = stored.resolve_status()
+            envelope["data"]["escalation_level"] = stored.escalation_level
+            envelope["meta"] = {
+                **envelope.get("meta", {}),
+                # 화면이 "이건 사전계산본"이라고 말할 수 있어야 한다. 값이 실시간과
+                # 같다는 것과, 사용자가 그 사실을 아는 것은 별개다.
+                "served_from": "snapshot",
+                "snapshot_built_at": snapshot.get("built_at"),
+                "snapshot_commit": snapshot.get("built_commit"),
+                "snapshot_pipeline_seconds": snapshot.get("pipeline_seconds"),
+            }
+            return envelope
+    envelope = run_orchestrator(payload)
+    envelope["meta"] = {**envelope.get("meta", {}), "served_from": "live"}
+    return envelope
 
 
 @app.get("/alerts/{alert_id}")
@@ -107,20 +226,155 @@ def approve_alert(alert_id: str, req: ApproveRequest) -> dict:
     }
 
 
+@app.get("/alerts/{alert_id}/timeline")
+def get_alert_timeline(alert_id: str) -> dict:
+    """§5 UI-3D 시간축 — 경보가 어느 시각의 예측인지와, 위험이 번져간 순서.
+
+    화면에 시각이 안 보이면 지금 보는 게 언제의 예측인지 알 수가 없다. 트랙①의
+    scripts/45 가 산청 전역 격자를 실측 강우로 시간마다 구동해 프레임과 폴리곤별
+    도달시각(arrival_hour)을 남겨 뒀으므로 그대로 내보낸다.
+
+    프레임 수가 39개, 위험 폴리곤이 한 자릿수라 통째로 한 번에 보낸다 — 스크럽할
+    때마다 서버를 부르면 끊긴다. 시간 필터링은 UI가 arrival_hour로 한다.
+
+    침수(Module B)는 시간축이 없다. SFINCS 산출물이 '최대' 침수심 래스터 하나라
+    시간에 따라 번지는 과정이 없으므로, 있는 척하지 않고 flood_is_max=true로
+    알린다 — UI는 그걸 최대 범위로 표기한다.
+    """
+    # 경보가 아직 없어도(데모 실행 전) 프레임과 위험영역은 사전계산물이라 그대로
+    # 돌려준다 — 지도가 뜨자마자 시간축이 보여야 "지금 뭘 보고 있는지"를 읽을 수 있다.
+    # 탐지/발송/공식경보 시각만 경보에서 오므로, 없으면 그 부분만 빈다.
+    alert = alert_store.get(alert_id)
+
+    try:
+        from module_a_landslide import risk_layers
+    except ImportError:
+        return {"available": False, "reason": "Module A 미설치 — 시간축 데이터 없음"}
+
+    index_path = (
+        Path(risk_layers.__file__).resolve().parent
+        / "data" / "risk_polygons" / "risk_landslide_index.json"
+    )
+    if not index_path.exists():
+        return {"available": False,
+                "reason": "위험영역 시계열 레이어 없음 — python module_a_landslide/scripts/"
+                          "45_risk_polygons_timeseries.py 로 생성"}
+
+    with open(index_path, encoding="utf-8") as f:
+        index = json.load(f)
+
+    scenario = risk_layers.DEFAULT_SCENARIO
+    layers = index.get("layers") or {}
+
+    # 두 임계를 다 보낸다.
+    #
+    # 여기서 critical(P>=0.7)만 보내고 있었는데, 그건 Module O가 실제로 판단하는
+    # 기준이 아니다 — LANDSLIDE_THRESHOLD는 0.5(FoS=1, 시그모이드 k에 불변인 점)로
+    # 내려가 있다. 그래서 화면에는 "대응을 시작한 근거"보다 22배 작은 영역만 떠 있었고
+    # (0.0103km² vs 0.2377km²), 그마저 마지막 두 시각에만 나타나 시간축을 움직여도
+    # 변하는 게 없었다.
+    #
+    # 시나리오는 섞지 않는다 — risk_landslide_index.json의 '한계'가 A_soilmap(토양도)과
+    # B_weathered(풍화화강토 가정)를 섞지 말라고 못 박고 있고, Module A의 soil_sampler가
+    # 쓰는 값과 정합하는 건 A_soilmap 쪽이다.
+    LEVELS = ("warning", "critical")
+    features = []
+    level_summary = []
+    # 사전계산본의 표시용 위험영역(모서리를 다듬은 것). 없으면 아래에서 원본을 만든다.
+    snapshot = _demo_snapshot()
+    display_risk = (snapshot or {}).get("risk_display") if (
+        snapshot and snapshot.get("alert_id") == alert_id
+    ) else None
+    for lvl in LEVELS:
+        meta = layers.get(f"{scenario}_{lvl}") or {}
+        count = 0
+        if display_risk:
+            source = [f for f in display_risk["features"] if f["properties"].get("level") == lvl]
+        else:
+            source = [
+                {"type": "Feature", "geometry": f["geometry"],
+                 "properties": {"kind": "landslide_risk", "level": lvl, **f["properties"]}}
+                for f in geo.featurecollection_5179_to_lonlat(risk_layers.load(scenario, lvl))
+            ]
+        for feature in source:
+            props = feature["properties"]
+            count += 1
+            features.append({
+                "type": "Feature",
+                "geometry": feature["geometry"],
+                "properties": {
+                    "kind": "landslide_risk",
+                    "level": lvl,
+                    "prob_threshold": meta.get("prob_threshold"),
+                    "arrival_hour": props.get("arrival_hour"),
+                    "arrival_time": props.get("arrival_time"),
+                    "area_m2": props.get("area_m2"),
+                },
+            })
+        level_summary.append({
+            "level": lvl,
+            "prob_threshold": meta.get("prob_threshold"),
+            "count": count,
+            "area_km2": meta.get("area_km2"),
+        })
+    level = "warning+critical"
+
+    timeline = alert.envelope["data"]["timeline_actual"] if alert else {}
+    agent = alert.envelope["data"]["timeline_agent"] if alert else {}
+    return {
+        "available": True,
+        "scenario": scenario,
+        "level": level,
+        "levels": level_summary,
+        # Module O가 대응을 시작하는 확률. 화면이 "왜 이 영역인가"를 설명할 때 쓴다.
+        "trigger_threshold": LANDSLIDE_THRESHOLD,
+        "frames": index.get("frames") or [],
+        "risk": {"type": "FeatureCollection", "features": features},
+        # 화면에 시각과 함께 표시할 기준점들 — "지금 보는 게 언제인가"의 맥락
+        "markers": {
+            "detected": agent.get("detected"),
+            "alert_sent": agent.get("alert_sent"),
+            "official_warning": timeline.get("warning_escalated"),
+            "report_start": timeline.get("report_start"),
+        },
+        # 침수 시간축. 있으면 UI가 프레임마다 등고선을 골라 그린다(없으면 최대 범위 고정).
+        "flood_series": (snapshot or {}).get("flood_series") or {"available": False},
+        "flood_is_max": not ((snapshot or {}).get("flood_series") or {}).get("available"),
+        "limits": index.get("한계") or [],
+    }
+
+
 @app.get("/alerts/{alert_id}/geojson")
 def get_alert_geojson(alert_id: str) -> dict:
     """§5 Module UI-3D 입력 — 여기서만 EPSG:5179 → EPSG:4326 재투영을 수행한다(§4.1).
 
-    Module B의 inundation_extent_5179, Module E의 route_5179는 아직 목업 단계라
-    좌표가 비어있으므로(contracts/module_b·e.example.json 참조), 산사태 지점 반경
-    버퍼 원과 출발지→대피소 직선을 시각적 placeholder로 대신 그린다.
+    Module B가 최대침수심 래스터를 받으면 inundation_extent_5179에 깊이 구간별
+    폴리곤이 들어온다(module_b_flood/fim.py). 그 경우 kind="inundation"으로 그대로
+    내보내며, UI는 properties.depth_min_m로 색을 칠한다.
+
+    아직 지오메트리가 없는 출력은 placeholder로 대신 그린다 — Module A의
+    risk_polygon_5179는 지점 FoS만 계산하므로 null이고(반경 버퍼 원으로 대체),
+    Module E의 route_5179는 키가 없으면 직선 근사로 내려간다.
+
+    경보가 아직 없으면(서버를 막 재시작했거나 데모를 안 눌렀을 때) 사전계산된 침수만
+    내보낸다. 경보 저장소는 메모리에 있어서 재시작하면 비는데, 침수 폴리곤은 경보와
+    무관한 사전계산물이라 그때 지도만 비워 둘 이유가 없다 — 시간축(/timeline)도 같은
+    이유로 경보 없이 응답한다. 대피 경로·대피소처럼 경보에서 나오는 것만 빠진다.
     """
     alert = alert_store.get(alert_id)
     if alert is None:
+        snapshot = _demo_snapshot()
+        if snapshot and snapshot.get("alert_id") == alert_id:
+            return {
+                "type": "FeatureCollection",
+                "features": json.loads(json.dumps(snapshot["flood_display"]["features"])),
+            }
         raise HTTPException(status_code=404, detail="alert not found")
 
-    landslide = alert.envelope["data"]["alert_package"]["landslide"]
-    shelter_route = alert.envelope["data"]["alert_package"].get("shelter_route") or {}
+    package = alert.envelope["data"]["alert_package"]
+    landslide = package["landslide"]
+    flood = package.get("flood") or {}
+    shelter_route = package.get("shelter_route") or {}
     # landslide["location"]이 아니라 원래 요청의 trigger_location을 쓴다 — 목업 모드에서는
     # Module A가 입력을 무시하고 contracts/module_a.example.json의 고정 location을 돌려주므로
     # (문서가 명시한 "예시 값"), 지도에는 실제 질의 위치(AOI 내부)를 그리는 게 맞다.
@@ -153,6 +407,29 @@ def get_alert_geojson(alert_id: str) -> dict:
                 },
             }
         )
+
+    # Module B 실산출 — SFINCS/ANUGA 최대침수심을 깊이 구간별로 폴리곤화한 것이다.
+    # placeholder가 아니라 물리모형 결과이므로 kind로 구분해 내보낸다(UI가 배지를
+    # MODEL로 달고, 슬라이더 what-if 볼륨과 섞이지 않게 별도 레이어로 그린다).
+    #
+    # 사전계산본이 있으면 **표시용** 침수를 쓴다. 50m 격자를 그대로 폴리곤화하면 셀
+    # 모서리가 그대로 계단이 되어 확대할수록 각져 보이는데, 그 계단은 지형이 아니라
+    # 격자 해상도의 흔적이다(module_o_orchestrator/display_geometry.py). 표시용은
+    # 등수심선을 따라 다듬은 것이고 침수 범위는 원본 대비 IoU 0.929·면적 −0.2%다.
+    # 노출자산·고립 판정은 여전히 envelope 안의 원본 기하로 계산돼 있다.
+    snapshot = _snapshot_for(alert.trigger_input)
+    display_flood = (snapshot or {}).get("flood_display")
+    if display_flood and display_flood.get("features"):
+        for feature in display_flood["features"]:
+            feature = json.loads(json.dumps(feature))
+            feature["properties"]["flood_prob"] = flood.get("flood_prob")
+            feature["properties"]["smoothed"] = True
+            features.append(feature)
+    else:
+        for feature in geo.featurecollection_5179_to_lonlat(flood.get("inundation_extent_5179")):
+            feature["properties"]["kind"] = "inundation"
+            feature["properties"]["flood_prob"] = flood.get("flood_prob")
+            features.append(feature)
 
     shelter = (alert.trigger_input.get("shelter_candidates") or DEFAULT_SHELTER_CANDIDATES)[0]
     features.append(
@@ -252,7 +529,7 @@ def _get_adm_search_index() -> list[dict]:
 
 
 @app.get("/boundaries")
-def get_boundaries(bbox: str) -> dict:
+def get_boundaries(bbox: str, request: Request) -> Response:
     """현재 지도 뷰포트에 걸리는 행정경계를 시도/시군구/읍면동 3계층 모두 반환한다
     (EPSG:4326, {"sido": FeatureCollection, "sigungu": ..., "dong": ...}).
 
@@ -265,13 +542,28 @@ def get_boundaries(bbox: str) -> dict:
     except ValueError:
         raise HTTPException(status_code=400, detail="bbox must be 'minLon,minLat,maxLon,maxLat'")
 
-    result: dict[str, dict] = {}
-    for level in ADM_LEVELS:
-        clipped = _get_adm_gdf(level).cx[minx:maxx, miny:maxy]
-        if len(clipped) > MAX_BOUNDARY_FEATURES_PER_LEVEL:
-            clipped = clipped.iloc[:MAX_BOUNDARY_FEATURES_PER_LEVEL]
-        result[level] = json.loads(clipped.to_json())
-    return result
+    def build() -> bytes:
+        # dict가 아니라 **직렬화된 바이트**를 캐시한다. dict를 돌려주면 FastAPI가
+        # 요청마다 0.84MB를 다시 JSON으로 만든다 — 캐시로 아낀 만큼을 거기서 도로 쓴다.
+        # GeoDataFrame.to_json()이 이미 JSON 문자열을 주므로 파싱했다 다시 찍을 이유도 없다.
+        parts = []
+        for level in ADM_LEVELS:
+            clipped = _get_adm_gdf(level).cx[minx:maxx, miny:maxy]
+            if len(clipped) > MAX_BOUNDARY_FEATURES_PER_LEVEL:
+                clipped = clipped.iloc[:MAX_BOUNDARY_FEATURES_PER_LEVEL]
+            parts.append(f'"{level}":{clipped.to_json()}')
+        raw = ("{" + ",".join(parts) + "}").encode("utf-8")
+        # 압축본까지 같이 캐시한다. GZipMiddleware에 맡기면 요청마다 0.88MB를 새로
+        # 압축하는데 그게 96ms다(2026-09-20 실측) — 캐시로 3ms까지 줄여 놓고 그 30배를
+        # 압축에 도로 쓰는 셈이고, 2코어 서버에서는 그 시간이 다른 요청을 막는다.
+        # 여기서 한 번만 압축해 두면 이후 요청은 압축 비용이 0이면서 0.28MB만 나간다.
+        return raw, gzip.compress(raw, 6)
+
+    raw, packed = _viewport_cached(_viewport_key("boundaries", (minx, miny, maxx, maxy)), build)
+    if "gzip" in request.headers.get("accept-encoding", ""):
+        return Response(content=packed, media_type="application/json",
+                        headers={"Content-Encoding": "gzip"})
+    return Response(content=raw, media_type="application/json")
 
 
 @app.get("/search")
@@ -293,7 +585,7 @@ def search_admin(q: str) -> list[dict]:
 
 
 @app.get("/terrain-tiles/{z}/{x}/{y}.png")
-def get_terrain_tile(z: int, x: int, y: int) -> Response:
+async def get_terrain_tile(z: int, x: int, y: int) -> Response:
     """AWS 공개 지형 타일(elevation-tiles-prod, terrarium 인코딩) 프록시.
 
     브라우저가 직접 이 S3 버킷을 호출하면 Access-Control-Allow-Origin 헤더가
@@ -305,12 +597,12 @@ def get_terrain_tile(z: int, x: int, y: int) -> Response:
     cache_key = ("terrain", z, x, y)
     cached = _IMAGERY_CACHE.get(cache_key)
     if cached is not None:
-        return Response(content=cached, media_type="image/png", headers={"Cache-Control": "public, max-age=86400"})
+        return Response(content=cached, media_type="image/png", headers=_IMAGE_HEADERS)
 
     upstream = f"https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png"
     try:
-        resp = requests.get(upstream, timeout=5)
-    except requests.RequestException as e:
+        resp = await _tile_client().get(upstream)
+    except httpx.HTTPError as e:
         # 2026-08-28: 전에는 여기 예외 처리가 없어서 S3가 잠깐 끊기면 ConnectionError가
         # 그대로 위로 새서 500이 되던 것과 별개로, Render 무료 인스턴스에서 헬스체크가
         # 5초 타임아웃으로 반복 실패하는 원인 중 하나였다(느린/끊긴 업스트림 호출이
@@ -318,9 +610,8 @@ def get_terrain_tile(z: int, x: int, y: int) -> Response:
         raise HTTPException(status_code=502, detail=f"terrain tile upstream failed: {e}")
     if resp.status_code != 200:
         raise HTTPException(status_code=resp.status_code, detail="terrain tile fetch failed")
-    if len(_IMAGERY_CACHE) < _IMAGERY_CACHE_MAX_ENTRIES:
-        _IMAGERY_CACHE[cache_key] = resp.content
-    return Response(content=resp.content, media_type="image/png", headers={"Cache-Control": "public, max-age=86400"})
+    _remember_tile(cache_key, resp.content)
+    return Response(content=resp.content, media_type="image/png", headers=_IMAGE_HEADERS)
 
 
 ESRI_IMAGERY_TILE_URL = (
@@ -347,8 +638,53 @@ ESRI_FALLBACK_MAX_ZOOM_STEPS = 3
 # Render 엣지 자체가 요청 "개수"에 429를 걸어 소용없었음. 결론: 타일 트래픽을 우리
 # 백엔드에 태우는 구조 자체가 무료 인스턴스와 안 맞는다 — Esri 직결(아래 MapExplorer.tsx)
 # 이 더 빠르고 안정적이다. V-World 재도전은 우리 백엔드가 한국 리전에 있을 때만 재검토.
+# 타일 캐시. 40KB짜리 PNG라 칸수 × 40KB가 그대로 상주 메모리다.
+#
+# 예전 상한 4000은 최악 160MB인데, 이 서버는 RAM이 908MB고 이미 OOM으로 죽은 적이
+# 있다. 게다가 옛 코드는 가득 차면 **더 이상 캐시하지 않고** 오래된 것도 안 버려서,
+# 한 지역을 보고 나면 그 뒤로는 캐시가 사실상 꺼진 채로 돌았다. 1200칸(≈48MB)으로
+# 줄이고 오래된 것부터 버린다.
 _IMAGERY_CACHE: dict[tuple, bytes] = {}
-_IMAGERY_CACHE_MAX_ENTRIES = 4000
+_IMAGERY_CACHE_MAX_ENTRIES = 1200
+
+
+def _remember_tile(key: tuple, payload: bytes) -> None:
+    if key in _IMAGERY_CACHE:
+        return
+    if len(_IMAGERY_CACHE) >= _IMAGERY_CACHE_MAX_ENTRIES:
+        _IMAGERY_CACHE.pop(next(iter(_IMAGERY_CACHE)), None)
+    _IMAGERY_CACHE[key] = payload
+
+
+# 이미 압축된 본문임을 밝혀 GZipMiddleware를 건너뛰게 한다. identity는 "인코딩 없음"을
+# 뜻하는 정규 값이라 브라우저가 그대로 읽는다.
+_IMAGE_HEADERS = {"Cache-Control": "public, max-age=86400", "Content-Encoding": "identity"}
+
+# 타일 프록시용 공유 비동기 클라이언트.
+#
+# **왜 async인가**: FastAPI는 `def`(동기) 엔드포인트를 스레드풀에서 돌리는데 그 한도가
+# 40이다. 지도는 한 화면에 지형 타일을 수백 장 부르고, 각 요청이 업스트림 S3를
+# 기다리며(타임아웃 5초) 스레드를 붙잡는다. 40칸이 그걸로 차면 **그 뒤에 들어온
+# 모든 요청이 줄을 선다** — 경보 실행이 201초 걸린 실체가 이것이다(2026-09-20 화면
+# 실측). 흰 타일과 공중에 뜬 건물도 같은 원인이다: 지형 타일이 늦거나 실패하면
+# MapLibre가 고도를 못 읽는다.
+#
+# `async def`로 두면 대기 시간이 이벤트 루프로 가므로 스레드를 전혀 쓰지 않고,
+# 수백 개가 동시에 떠 있어도 다른 요청을 막지 않는다.
+_TILE_CLIENT: "httpx.AsyncClient | None" = None
+
+
+def _tile_client() -> "httpx.AsyncClient":
+    global _TILE_CLIENT
+    if _TILE_CLIENT is None:
+        # 연결을 재사용한다 — 타일마다 TLS 핸드셰이크를 새로 하면 그게 또 지연이다.
+        _TILE_CLIENT = httpx.AsyncClient(
+            timeout=httpx.Timeout(5.0),
+            limits=httpx.Limits(max_connections=64, max_keepalive_connections=32),
+        )
+    return _TILE_CLIENT
+
+
 
 
 VWORLD_BUILDING_LAYER = "LT_C_SPBD"  # 건물통합정보(국토교통부) — 브이월드 Data API 2.0
@@ -382,11 +718,50 @@ def _clamp_bbox_to_area(bbox: tuple[float, float, float, float]) -> tuple[float,
     return (center_lon - half_lon, center_lat - half_lat, center_lon + half_lon, center_lat + half_lat)
 
 
+# 뷰포트 응답 캐시.
+#
+# 지도를 움직일 때마다 /boundaries + /vworld/{rivers,buildings,roads} 네 개가 한꺼번에
+# 나간다(moveend 200ms 디바운스 뒤). /boundaries 하나가 0.84MB를 매번 새로 잘라
+# 만들고, vworld 셋은 외부 API를 매번 다시 부른다. 2코어짜리 배포 서버에서는 이게
+# 줄을 서서 CPU를 94%까지 올리고, 그 뒤에 들어온 경보 요청이 몇십 초를 기다린다
+# (2026-09-20 배포본 실측 — 사전계산으로 계산은 0.03초가 됐는데도 화면은 여전히 느렸다).
+#
+# bbox를 0.005°(약 500m) 격자로 반올림해 키를 만든다. 조금씩 움직이는 동안은 대부분
+# 같은 키로 떨어져 재사용되고(격자선을 넘는 순간만 새로 계산), 크게 움직이면 키가
+# 달라지므로 새로 받는다 — 화면에 엉뚱한 지역이 남는 일은 없다.
+_VIEWPORT_CACHE: dict[tuple, Any] = {}
+_VIEWPORT_CACHE_MAX = 24
+
+
+def _viewport_key(tag: str, bbox: tuple[float, float, float, float]) -> tuple:
+    return (tag, *(round(v / 0.005) for v in bbox))
+
+
+def _viewport_cached(key: tuple, build):
+    """캐시에 있으면 그대로, 없으면 만들어 넣는다(FIFO로 오래된 것부터 버림).
+
+    배포 서버 RAM이 908MB라 무한정 쌓으면 OOM으로 죽는다 — 실제로 죽은 적 있다.
+    /boundaries 응답이 0.84MB이므로 24칸이면 최악 20MB 남짓이다.
+    """
+    hit = _VIEWPORT_CACHE.get(key)
+    if hit is not None:
+        return hit
+    value = build()
+    if len(_VIEWPORT_CACHE) >= _VIEWPORT_CACHE_MAX:
+        _VIEWPORT_CACHE.pop(next(iter(_VIEWPORT_CACHE)), None)
+    _VIEWPORT_CACHE[key] = value
+    return value
+
+
 def _vworld_get_feature(data_layer: str, bbox: tuple[float, float, float, float]) -> dict:
     """VWorld Data API 2.0 GetFeature 공통 호출. bbox=(minx,miny,maxx,maxy)."""
     if not VWORLD_API_KEY:
         raise HTTPException(status_code=503, detail="VWORLD_API_KEY not configured (.env)")
     minx, miny, maxx, maxy = _clamp_bbox_to_area(bbox)
+    cache_key = _viewport_key(f"vworld:{data_layer}", (minx, miny, maxx, maxy))
+    cached = _VIEWPORT_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
     try:
         resp = requests.get(
             "http://api.vworld.kr/req/data",

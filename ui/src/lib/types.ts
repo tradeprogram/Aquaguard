@@ -121,6 +121,13 @@ export interface AlertMeta {
   // (lib/provenance.ts). 목업 모듈은 explain()이 없어 빠진다.
   module_sources?: Record<string, "real" | "example">;
   explains?: ModuleExplains;
+  // 이 결과가 사전계산본인지 실시간 계산인지. 값이 같다는 것과 사용자가 그 사실을
+  // 아는 것은 별개라, 화면이 "사전계산 결과입니다"를 띄울 근거로 쓴다.
+  served_from?: "snapshot" | "live";
+  snapshot_built_at?: string;
+  snapshot_built_commit?: string;
+  snapshot_pipeline_seconds?: number;
+  snapshot_input_sha?: string;
 }
 
 export type ModuleOEnvelope = Envelope<ModuleOData> & { meta?: AlertMeta };

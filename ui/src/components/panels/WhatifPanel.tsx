@@ -22,14 +22,27 @@ export default function WhatifPanel() {
 
   async function runScenario(rainfallMm: number) {
     // §5 Module UI-3D: 새 모델을 만들지 않고 Module A/B의 run()을 가상 강수값으로 재호출.
-    // module_a_extra/module_b_extra는 orchestrator가 A/B 입력에 그대로 병합해 전달한다 —
-    // 실제 모델이 붙으면 이 슬라이더가 바로 반영된다 (지금은 목업이라 값이 고정 출력됨).
+    // 트랙①의 실모듈이 붙은 뒤로 이 슬라이더는 실제로 FoS와 수위를 다시 계산시킨다.
+    //
+    // 강우만 갈아끼우고 나머지는 데모 입력 그대로 둔다 — module_a_extra를 통째로
+    // 교체하면 경사·dNBR 같은 static이 사라져서 실모듈이 지형 없이 계산하게 된다
+    // (목업 시절에는 입력을 무시했으니 드러나지 않던 문제다).
+    const baseA = SANGCHEONG_DEMO_INPUT.module_a_extra ?? {};
+    const baseB = SANGCHEONG_DEMO_INPUT.module_b_extra ?? {};
+    const baseADynamic = (baseA.dynamic ?? {}) as Record<string, unknown>;
+    const baseBDynamic = (baseB.dynamic ?? {}) as Record<string, unknown>;
+
     return triggerAlert({
       ...SANGCHEONG_DEMO_INPUT,
       alert_id: `${SANGCHEONG_DEMO_INPUT.alert_id}-whatif`,
-      // @ts-expect-error module_a_extra/module_b_extra는 계약 외 확장 필드 (orchestrator.py 참조)
-      module_a_extra: { dynamic: { rainfall_cumulative_24h_mm: rainfallMm } },
-      module_b_extra: { dynamic: { rainfall_cumulative_24h_mm: [rainfallMm] } },
+      module_a_extra: {
+        ...baseA,
+        dynamic: { ...baseADynamic, rainfall_cumulative_24h_mm: rainfallMm },
+      },
+      module_b_extra: {
+        ...baseB,
+        dynamic: { ...baseBDynamic, rainfall_cumulative_24h_mm: [rainfallMm] },
+      },
     });
   }
 

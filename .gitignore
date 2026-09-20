@@ -33,3 +33,7 @@ data/precomputed/farmmap/
 
 # 고립분석 VWorld 응답 캐시
 data/cache/
+# 제안서 렌더 산출물 — 스크립트로 재생성된다
+docs/_preview/
+docs/아쿠아가드_제안서.pdf
+docs/handoff/_preview/

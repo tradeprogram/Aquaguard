@@ -5,7 +5,11 @@ import MapExplorer, { type EvacuationRoute } from "@/components/MapExplorer";
 import GlassPanel from "@/components/GlassPanel";
 import DashboardPanel from "@/components/panels/DashboardPanel";
 import EvacuationPanel from "@/components/panels/EvacuationPanel";
-import IsolationPanel from "@/components/panels/IsolationPanel";
+import IsolationPanel, {
+  isolationCacheKey,
+  type IsolationCache,
+  type IsolationCacheKey,
+} from "@/components/panels/IsolationPanel";
 import WhatifPanel from "@/components/panels/WhatifPanel";
 import ModelPerformancePanel from "@/components/panels/ModelPerformancePanel";
 import ApprovePanel from "@/components/panels/ApprovePanel";
@@ -41,7 +45,7 @@ const PANEL_TITLE: Record<Mode, Partial<Record<PanelKey, string>>> = {
   citizen: {
     dashboard: "우리 동네 위험 현황",
     evacuation: "대피소 찾기",
-    isolation: "고립마을 위험 (독창성 축 4)",
+    isolation: "고립마을 위험",
   },
   gov: {
     dashboard: "아쿠아가드 골든타임 대시보드",
@@ -63,14 +67,22 @@ export default function HomePage() {
   const [pickedOrigin, setPickedOrigin] = useState<[number, number] | null>(null);
   // §7 IsolationPanel↔MapExplorer도 형제 컴포넌트라 같은 방식으로 상태를 끌어올린다.
   const [isolatedAreas, setIsolatedAreas] = useState<GeoJSON.FeatureCollection | null>(null);
+  const [blockedRoads, setBlockedRoads] = useState<GeoJSON.FeatureCollection | null>(null);
+  // 고립분석 결과는 여기 둔다 — 패널이 닫히면 언마운트돼서 패널 안에 두면 날아가고,
+  // 다시 열 때마다 VWorld 도로·건물을 처음부터 받느라 한참 걸렸다.
+  const [isolationCache, setIsolationCache] = useState<IsolationCache>({});
+  const [isolationShown, setIsolationShown] = useState<IsolationCacheKey | null>(null);
   const [focusBbox, setFocusBbox] = useState<{ bbox: [number, number, number, number]; nonce: number } | null>(null);
   // 지도의 "산청 상능마을"/"서울 강남" 버튼이 바꾸는 현재 데모 지역 — EvacuationPanel/
   // IsolationPanel이 이 값 기준으로 대피소 목록을 고른다(lib/demoShelters.ts).
   const [region, setRegion] = useState<RegionKey>(DEFAULT_REGION);
+  // 데모를 돌리면 경보가 새로 생기므로 지도의 침수 폴리곤·시간축을 다시 받게 한다.
+  const [alertNonce, setAlertNonce] = useState(0);
 
   return (
     <div className="relative h-full w-full">
       <MapExplorer
+        alertNonce={alertNonce}
         route={evacuationRoute}
         pickOrigin={pickingOrigin}
         onOriginPicked={(coord) => {
@@ -80,6 +92,7 @@ export default function HomePage() {
           setActive("evacuation");
         }}
         isolatedAreas={isolatedAreas}
+        blockedRoads={blockedRoads}
         focusBbox={focusBbox}
         onRegionSelect={(r) => {
           setRegion(r);
@@ -88,6 +101,7 @@ export default function HomePage() {
           // 것처럼 보일 수 있음.
           setEvacuationRoute(null);
           setIsolatedAreas(null);
+          setBlockedRoads(null);
         }}
       />
 
@@ -141,7 +155,7 @@ export default function HomePage() {
         <div className="pointer-events-none absolute inset-0 z-20 flex items-start justify-center pt-24">
           <div className="pointer-events-auto">
             <GlassPanel title={PANEL_TITLE[mode][active] ?? ""} onClose={() => setActive(null)}>
-              {active === "dashboard" && <DashboardPanel mode={mode} />}
+              {active === "dashboard" && <DashboardPanel mode={mode} onAlertUpdated={() => setAlertNonce((n) => n + 1)} />}
               {active === "performance" && <ModelPerformancePanel />}
               {active === "validation" && <ValidationPanel />}
               {active === "evacuation" && (
@@ -162,7 +176,14 @@ export default function HomePage() {
               {active === "isolation" && (
                 <IsolationPanel
                   region={region}
-                  onResult={(r) => setIsolatedAreas(r?.isolated_areas ?? null)}
+                  cache={isolationCache}
+                  onCache={(key, r) => setIsolationCache((prev) => ({ ...prev, [key]: r }))}
+                  shown={isolationShown}
+                  onShownChange={setIsolationShown}
+                  onResult={(r) => {
+                    setIsolatedAreas(r?.isolated_areas ?? null);
+                    setBlockedRoads(r?.blocked_roads ?? null);
+                  }}
                   onFocusCluster={(bbox) => {
                     // 패널이 화면을 넓게 덮고 있으면 지도가 이동해도 가려서 안 보이므로
                     // (2026-09-03 사용자 피드백 — "눌러도 아무 반응 없음"), 클릭 즉시

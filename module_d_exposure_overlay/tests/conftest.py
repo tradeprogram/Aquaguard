@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from module_d_exposure_overlay import use_types
+from module_d_exposure_overlay import policy, use_types
 
 CONTRACTS_DIR = Path(__file__).resolve().parent.parent.parent / "contracts"
 
@@ -104,8 +104,13 @@ def isolated_repo_root(tmp_path, monkeypatch):
 
 
 def write_parcel_mapping(root, mapping: dict) -> None:
-    """임시 루트에 소형 픽스처 매핑을 심는다 (실제 산출물과 같은 경로·형식)."""
-    path = root / "data" / "precomputed" / "building_use_types.json"
+    """임시 루트에 소형 픽스처 매핑을 심는다 (실제 산출물과 같은 경로·형식).
+
+    경로를 여기에 또 적으면 정책과 어긋난 채로 테스트만 통과하게 된다 — 실제로
+    source_file을 AOI 클립본으로 옮겼을 때 이 픽스처가 옛 경로에 써서 네 개가
+    깨졌다. policies/module_d.json이 가리키는 곳에 그대로 심는다.
+    """
+    path = root / policy.active_policy().use_type_join_source_file
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(mapping, ensure_ascii=False), encoding="utf-8")
     use_types.load.cache_clear()

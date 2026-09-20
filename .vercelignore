@@ -1,0 +1,17 @@
+# Vercel 배포 용량(2026-09-19) — 배포 한 번마다 정적 파일 전체가 새로 저장되므로,
+# 아래 두 디렉터리(합계 744MB)를 포함하면 배포 수십 번만에 Hobby 한도 10GB를 넘는다.
+# 실제로 32.95GB까지 올라갔다(= 744MB x 배포 44회). 대신 백엔드(EC2 Caddy)가 서빙하고,
+# UI는 NEXT_PUBLIC_TILE_BASE로 그쪽을 가리킨다 — ui/src/lib/api.ts의 tileBase() 참조.
+#
+# 주의: 이 파일을 지우거나 NEXT_PUBLIC_TILE_BASE를 비우면 배포 용량이 도로 불어난다.
+ui/public/tiles
+ui/public/satellite
+
+# 백엔드 전용 — Vercel은 ui/만 빌드하므로 올릴 이유가 없다(용량만 차지).
+data/
+docs/
+scripts/
+module_*/
+contracts/
+policies/
+*.pem

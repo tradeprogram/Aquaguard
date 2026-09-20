@@ -1,0 +1,11 @@
+{
+  "iou": 0.0004,
+  "f1": 0.0008,
+  "pod": 0.0008,
+  "far": 0.9991,
+  "precision": 0.0009,
+  "auprc": 0.009,
+  "base_rate": 0.0071,
+  "method": "optical NDVI change",
+  "dndvi_thr": 0.3
+}

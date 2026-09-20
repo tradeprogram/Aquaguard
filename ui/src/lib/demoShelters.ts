@@ -14,7 +14,7 @@
 // HANDOFF §6.2: "손으로 넣은 대피소 후보 2~3곳...으로 파이프라인을 먼저 완성"은
 // 실데이터 없을 때의 임시 단계일 뿐, 실데이터가 있으면 개수를 제한할 이유가 없다
 // (§6.4 GET /shelters?bbox=... 자체가 "그 범위 안 전부"를 전제한 설계). 그래서 각
-// 지역에서 검색된 대피소 전부(산청 8·강남 15·서초 20)를 그대로 담았다.
+// 지역에서 검색된 대피소 전부(산청 8·강남 15)를 그대로 담았다.
 export interface DemoShelter {
   id: string;
   name: string;
@@ -23,7 +23,7 @@ export interface DemoShelter {
   capacity: number;
 }
 
-export type RegionKey = "sancheong" | "sancheong_all" | "gangnam" | "seocho";
+export type RegionKey = "sancheong" | "sancheong_all" | "gangnam";
 
 export interface DemoRegion {
   label: string;
@@ -185,33 +185,6 @@ export const DEMO_REGIONS: Record<RegionKey, DemoRegion> = {
       { id: "G015", name: "포이초등학교", lon: 127.05254, lat: 37.47569, capacity: 200 },
     ],
     isolationBbox: [127.0272, 37.4586, 127.117, 37.5066],
-  },
-  // searchAddress=서울특별시 서초구 → 20곳 전부.
-  seocho: {
-    label: "서울 서초",
-    shelters: [
-      { id: "C001", name: "내곡동주민센터", lon: 127.05835, lat: 37.44936, capacity: 200 },
-      { id: "C002", name: "내곡중학교", lon: 127.05445, lat: 37.45199, capacity: 200 },
-      { id: "C003", name: "다니엘학교", lon: 127.09229, lat: 37.46014, capacity: 200 },
-      { id: "C004", name: "동덕여자고등학교", lon: 126.99281, lat: 37.47618, capacity: 200 },
-      { id: "C005", name: "방배2동주민센터", lon: 126.98555, lat: 37.47979, capacity: 200 },
-      { id: "C006", name: "방배3동주민센터", lon: 127.00002, lat: 37.47843, capacity: 200 },
-      { id: "C007", name: "방배중학교", lon: 126.9985, lat: 37.49422, capacity: 200 },
-      { id: "C008", name: "새쟁이마을경로당", lon: 127.06988, lat: 37.43505, capacity: 200 },
-      { id: "C009", name: "서울고등학교", lon: 127.00468, lat: 37.48339, capacity: 200 },
-      { id: "C010", name: "서울방일초등학교", lon: 126.99846, lat: 37.48538, capacity: 200 },
-      { id: "C011", name: "서울서일초등학교", lon: 127.02303, lat: 37.48488, capacity: 200 },
-      { id: "C012", name: "서울신중초등학교", lon: 127.01027, lat: 37.47984, capacity: 200 },
-      { id: "C013", name: "서울양재초등학교", lon: 127.03154, lat: 37.47337, capacity: 200 },
-      { id: "C014", name: "서울언남초등학교", lon: 127.06166, lat: 37.45389, capacity: 200 },
-      { id: "C015", name: "서울우면초등학교", lon: 127.02378, lat: 37.46474, capacity: 200 },
-      { id: "C016", name: "서울웹툰애니메이션고(서울전자고)", lon: 126.98871, lat: 37.46987, capacity: 200 },
-      { id: "C017", name: "서초구립느티나무쉼터", lon: 127.05079, lat: 37.46186, capacity: 200 },
-      { id: "C018", name: "서초구청", lon: 127.03241, lat: 37.48382, capacity: 200 },
-      { id: "C019", name: "서초종합체육관", lon: 127.04219, lat: 37.4589, capacity: 200 },
-      { id: "C020", name: "송동마을경로당", lon: 127.0171, lat: 37.46016, capacity: 200 },
-    ],
-    isolationBbox: [126.9755, 37.425, 127.1023, 37.5042],
   },
 };
 

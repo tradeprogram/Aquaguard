@@ -17,12 +17,37 @@ from .exposure_layers import (
     building_footprints,
     coverage_warning,
     farmland_parcels,
+    risk_cells,
+    flood_depth_raster,
     resolve_aoi,
 )
 from .modules_client import call_explain, call_module, module_sources, resolve_source
 from .store import Alert, alert_store
 
-LANDSLIDE_THRESHOLD = 0.7
+# 산사태 트리거 — landslide_prob >= 0.5.
+#
+# 0.7에서 내린 값이지만 "안 걸리니까 낮춘다"가 아니다. Module A의 확률은
+# P = 1/(1+exp(k·(FoS-1)))로 안전율을 변환한 값이고, k는 아직 미보정이다
+# (module_a_landslide/fos.py docstring, backtest RUN_LOG).
+#
+#   FoS = 1.0  ⟺  P = 0.5      k와 무관하게 항상 성립
+#   FoS = 0.859 ⟺ P = 0.7      k=6일 때만. k가 바뀌면 이 대응도 바뀐다
+#
+# FoS=1은 사면이 버티는 힘과 무너뜨리는 힘이 같아지는 물리적 파괴 한계다. 그
+# 지점이 시그모이드에서 유일하게 미보정 파라미터에 불변인 곳이므로, 지금 쓸 수
+# 있는 임계 중 근거가 가장 단단하다. 0.7은 k=6이라는 임의값에 딸려 있을 뿐이다.
+# (설계 실무는 보통 FoS 1.3~1.5를 요구하므로 FoS=1 발동은 이르기는커녕 늦다.)
+#
+# 과다 발동도 아니다 — 트랙①이 사전계산한 위험영역에서 P>=0.5는 산청 AOI 452km²
+# 중 0.238km²(0.053%)뿐이다. 트랙① 자신도 이 값을 'warning' 레이어 기준으로 쓴다.
+#
+# k가 보정되면 이 값을 다시 유도할 것. 그때는 0.7이 맞을 수도 있다.
+LANDSLIDE_THRESHOLD = 0.5
+
+# 하천범람은 0.7 그대로다 — Module B의 flood_prob은 산사태와 달리 실측 수위·강우를
+# 홍수특보 기준과 실측 사례(경호강 2025-07-19)로 보정한 값이라(module_b_flood 참조)
+# 척도가 이미 의미를 갖는다. 두 숫자가 달라 보이는 이유는 두 확률이 다른 것이기
+# 때문이며, 같은 값으로 맞추면 오히려 근거가 사라진다.
 FLOOD_THRESHOLD = 0.7
 
 # Module G가 실제로 참조하는 단가표 ID(policies/module_g.json의 policy_version).
@@ -122,6 +147,17 @@ def run(input: dict[str, Any]) -> dict[str, Any]:  # noqa: A002 - §4.2 규약�
     }
     module_b_input = {"reach_id": input.get("reach_id"), **input.get("module_b_extra", {})}
 
+    # 침수심 래스터는 어느 모듈의 출력도 아니라 O가 §10 데이터 접근 계층에서 경로를
+    # 찾아 넘긴다(건물·농경지와 같은 원칙). 이게 없으면 Module B는 확률만 내고
+    # 침수 폴리곤은 빈 FC가 되어 지도에 3D 침수 볼륨이 안 그려진다.
+    trigger_aoi = resolve_aoi(trigger_location.get("x_5179"), trigger_location.get("y_5179"))
+    if resolve_source("b") == "real" and "_terrain" not in module_b_input:
+        depth_raster, depth_warning = flood_depth_raster(trigger_aoi)
+        if depth_raster:
+            module_b_input["_terrain"] = {"depth_raster": depth_raster}
+        elif depth_warning:
+            warnings.append(depth_warning)
+
     # 1. 관측 → 예측: Module A/B/C
     landslide = _merge_module_result("a", call_module("a", module_a_input), warnings, fallback_tier)
     flood = _merge_module_result("b", call_module("b", module_b_input), warnings, fallback_tier)
@@ -167,16 +203,27 @@ def run(input: dict[str, Any]) -> dict[str, Any]:  # noqa: A002 - §4.2 규약�
         # 건물·농경지는 어느 모듈의 출력도 아니라 O가 데이터에서 직접 읽어 넘긴다
         # (§10 데이터 접근 계층). 레이어를 못 읽어도 파이프라인은 계속 돌고, 대신
         # 그 사실이 경고로 올라온다 — 특히 농경지는 "0ha"와 "확인 불가"가 다르다.
-        aoi = resolve_aoi(trigger_location.get("x_5179"), trigger_location.get("y_5179"))
-        buildings, buildings_warning = building_footprints(aoi)
-        farmland, farmland_warning = farmland_parcels(aoi)
+        aoi = trigger_aoi  # 위에서 이미 해석했다
+        # 위험영역 bbox를 함께 넘겨 그 밖의 건물·농경지는 읽어서 바로 버린다.
+        # D가 어차피 위험 폴리곤과 교차시키므로 결과는 같고, 상주 메모리만 준다 —
+        # 산청 농경지 전체를 들고 있으면 105MB라 908MB짜리 배포 서버에서 uvicorn이
+        # OOM으로 죽었다(2026-09-20 dmesg 확인).
+        risk_bounds = _risk_bounds_5179(risk_polygons)
+        # bbox 하나로는 거의 안 걸러진다 — 침수범위는 하천을 따라 길게, 산사태는
+        # 그 반대편 비탈에 있어서 둘을 감싸면 363km²(AOI 전체)가 된다. 실제 위험영역은
+        # 58km²뿐이라 격자로 걸러 Module D에 넘길 양을 6%로 줄인다(결과는 동일).
+        cells = risk_cells([
+            g for g in (p.get("geometry_5179") for p in risk_polygons) if isinstance(g, dict)
+        ])
+        buildings, buildings_warning = building_footprints(aoi, risk_bounds, cells)
+        farmland, farmland_warning = farmland_parcels(aoi, risk_bounds, cells)
         # 단, 목업 D는 입력을 무시하고 example.json의 출력(농경지 4.2ha 등)을 그대로
         # 돌려준다 — 그때 "레이어 미확보" 경고를 같이 내보내면 화면에 뜬 숫자와 어긋난다.
         # 이 경고는 그 레이어로 실제 계산이 일어날 때만 의미가 있다.
         if resolve_source("d") == "real":
             warnings.extend(w for w in (buildings_warning, farmland_warning) if w)
             # 위험영역이 클립본 밖으로 나가면 그만큼 노출자산이 빠진다 — 하한임을 알린다.
-            coverage = coverage_warning(aoi, _risk_bounds_5179(risk_polygons))
+            coverage = coverage_warning(aoi, risk_bounds)
             if coverage:
                 warnings.append(coverage)
 
@@ -289,19 +336,24 @@ def run(input: dict[str, Any]) -> dict[str, Any]:  # noqa: A002 - §4.2 규약�
         "explains": {k: v for k, v in explains.items() if v is not None},
     }
 
-    if triggered:
-        # 승인 대기 타임아웃은 재연 데모의 과거 이벤트 시각(timestamp)이 아니라
-        # 이 알림이 실제로 등록된 현재 시각을 기준으로 흘러야 한다.
-        alert_store.add(
-            Alert(
-                alert_id=alert_id,
-                created_at=datetime.now(timestamp.tzinfo),
-                escalation_timeout_min=escalation_timeout_min,
-                envelope=envelope,
-                trigger_input=input,
-            )
+    # 임계 미달이어도 등록한다. 예전에는 초과했을 때만 저장해서, 확률이 0.7을 못 넘으면
+    # /alerts/{id}/geojson이 404가 났다 — 그러면 화면은 "아직 대피 수준은 아니지만 Module B가
+    # 계산한 침수는 이만큼"을 보여줄 방법이 없다. 승인 대상이 아니라는 사실은 상태값으로
+    # 구분한다(감시중): escalation도 안 걸리고 approve()도 받지 않는다.
+    #
+    # 승인 대기 타임아웃은 재연 데모의 과거 이벤트 시각(timestamp)이 아니라
+    # 이 알림이 실제로 등록된 현재 시각을 기준으로 흘러야 한다.
+    alert_store.add(
+        Alert(
+            alert_id=alert_id,
+            created_at=datetime.now(timestamp.tzinfo),
+            escalation_timeout_min=escalation_timeout_min,
+            envelope=envelope,
+            trigger_input=input,
+            triggered=triggered,
         )
-        envelope["data"]["approval_status"] = alert_store.get(alert_id).resolve_status()
-        envelope["data"]["escalation_level"] = alert_store.get(alert_id).escalation_level
+    )
+    envelope["data"]["approval_status"] = alert_store.get(alert_id).resolve_status()
+    envelope["data"]["escalation_level"] = alert_store.get(alert_id).escalation_level
 
     return envelope

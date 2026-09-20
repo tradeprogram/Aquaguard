@@ -29,6 +29,7 @@ import requests
 import shapely
 from scipy.spatial import cKDTree
 import shapely.geometry
+import shapely.prepared
 from pyproj import Transformer
 from shapely.ops import unary_union
 
@@ -195,23 +196,66 @@ def build_road_graph(road_features: list[dict[str, Any]]) -> nx.Graph:
     return graph
 
 
-def remove_hazard_edges(graph: nx.Graph, hazard_polygon: dict[str, Any] | None) -> int:
-    """위험폴리곤(GeoJSON Polygon, lon/lat)과 교차하는 도로 엣지를 그래프에서 제거한다.
-    반환값은 제거된 엣지 수(호출측 warnings/디버깅용)."""
-    if not hazard_polygon or not hazard_polygon.get("type"):
-        return 0
-    try:
-        hazard_shape = shapely.geometry.shape(hazard_polygon)
-    except Exception:
-        return 0
+def remove_hazard_edges(graph: nx.Graph, hazard_polygon: dict[str, Any] | None) -> list[tuple]:
+    """위험폴리곤(GeoJSON, lon/lat)과 교차하는 도로 엣지를 그래프에서 제거한다.
+
+    제거된 엣지를 그대로 돌려준다 — 예전에는 개수만 반환했는데, 그러면 "어느 도로가
+    끊겼는지"를 지도에 빨간색으로 칠할 방법이 없다. 고립 판정에 이미 쓴 계산이라
+    추가 비용도 없다.
+
+    Polygon 하나만이 아니라 MultiPolygon·FeatureCollection도 받는다 — Module B의
+    실제 침수범위는 깊이 구간별로 쪼개진 폴리곤 수백 개로 오기 때문이다. 교차 검사는
+    엣지 전체를 STRtree(공간 인덱스)에 넣고 위험 도형으로 한 번에 질의한다 — 군 전체
+    (엣지 약 10만 개)에서도 엣지마다 교차 검사를 반복하지 않는다.
+    """
+    hazard_shape = _hazard_shape(hazard_polygon)
+    if hazard_shape is None:
+        return []
     edges = list(graph.edges())
     if not edges:
-        return 0
+        return []
     segments = shapely.linestrings([[u, v] for u, v in edges])
     hit = shapely.STRtree(segments).query(hazard_shape, predicate="intersects")
     to_remove = [edges[k] for k in hit]
     graph.remove_edges_from(to_remove)
-    return len(to_remove)
+    return to_remove
+
+
+def _hazard_shape(hazard_polygon: dict[str, Any] | None):
+    """GeoJSON(Geometry | Feature | FeatureCollection) → 단일 shapely 도형. 실패하면 None."""
+    if not isinstance(hazard_polygon, dict) or not hazard_polygon.get("type"):
+        return None
+    try:
+        kind = hazard_polygon["type"]
+        if kind == "FeatureCollection":
+            parts = [
+                shapely.geometry.shape(f["geometry"])
+                for f in hazard_polygon.get("features") or []
+                if isinstance(f, dict) and f.get("geometry")
+            ]
+            if not parts:
+                return None
+            return unary_union(parts)
+        if kind == "Feature":
+            return shapely.geometry.shape(hazard_polygon["geometry"])
+        return shapely.geometry.shape(hazard_polygon)
+    except Exception:
+        return None
+
+
+def blocked_road_features(removed_edges: list[tuple]) -> dict[str, Any]:
+    """제거된 엣지 → GeoJSON FeatureCollection(lon/lat). 지도에서 빨간 도로로 그린다."""
+    return {
+        "type": "FeatureCollection",
+        "features": [
+            {
+                "type": "Feature",
+                "geometry": {"type": "LineString", "coordinates": [list(u), list(v)]},
+                "properties": {"kind": "blocked_road"},
+            }
+            for u, v in removed_edges
+        ],
+    }
 
 
 class _NodeIndex:
@@ -335,17 +379,26 @@ def check_isolation(
     shelter_candidates_lonlat: list[tuple[float, float]],
     hazard_polygon: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """§7 /isolation-check의 핵심 로직. 반환: {isolated_areas, isolated_building_count, warnings}."""
+    """§7 /isolation-check의 핵심 로직.
+
+    반환: {isolated_areas, isolated_buildings, isolated_building_count,
+           blocked_roads, warnings}
+    """
     warnings: list[str] = []
     road_features = fetch_roads(bbox)
     if not road_features:
-        return {"isolated_areas": {"type": "FeatureCollection", "features": []}, "isolated_building_count": 0, "warnings": ["해당 영역에 도로 데이터 없음"]}
+        return {"isolated_areas": {"type": "FeatureCollection", "features": []},
+                "isolated_buildings": {"type": "FeatureCollection", "features": []},
+                "isolated_building_count": 0,
+                "blocked_roads": {"type": "FeatureCollection", "features": []},
+                "warnings": ["해당 영역에 도로 데이터 없음"]}
 
     graph = build_road_graph(road_features)
     baseline_reachable = reachable_from_shelters(graph, shelter_candidates_lonlat)
-    removed = remove_hazard_edges(graph, hazard_polygon)
-    if removed:
-        warnings.append(f"위험지역과 겹치는 도로 {removed}개 구간 제거")
+    removed_edges = remove_hazard_edges(graph, hazard_polygon)
+    blocked_roads = blocked_road_features(removed_edges)
+    if removed_edges:
+        warnings.append(f"위험지역과 겹치는 도로 {len(removed_edges)}개 구간 제거")
 
     reachable = reachable_from_shelters(graph, shelter_candidates_lonlat)
     if not reachable:
@@ -387,5 +440,8 @@ def check_isolation(
         "isolated_areas": {"type": "FeatureCollection", "features": features},
         "isolated_buildings": {"type": "FeatureCollection", "features": building_point_features},
         "isolated_building_count": len(isolated_points),
+        # 위험영역과 겹쳐 그래프에서 제거된 도로 구간. 고립 판정의 부산물이지만
+        # "어느 도로가 끊기는가"는 그 자체로 대피 의사결정 정보라 함께 내보낸다.
+        "blocked_roads": blocked_roads,
         "warnings": warnings,
     }

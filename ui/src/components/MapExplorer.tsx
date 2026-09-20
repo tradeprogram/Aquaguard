@@ -14,19 +14,25 @@ import "maplibre-gl/dist/maplibre-gl.css";
 import buffer from "@turf/buffer";
 import centroid from "@turf/centroid";
 import booleanPointInPolygon from "@turf/boolean-point-in-polygon";
-import { lineString as turfLineString } from "@turf/helpers";
 import type { Feature, FeatureCollection, LineString, MultiLineString, Polygon, MultiPolygon } from "geojson";
 import {
   API_BASE,
+  SANGCHEONG_DEMO_INPUT,
   checkIsolation,
+  getAlertGeojson,
+  getAlertTimeline,
   getBoundaries,
   getVWorldBuildings,
   getVWorldRivers,
   getVWorldRoads,
   searchAdmin,
+  tileBase,
+  TIMELINE_ROUTE,
   type AdminLevel,
   type AdminSearchResult,
+  type AlertTimeline,
 } from "@/lib/api";
+import { diagnoseFailure } from "@/lib/backendDiagnosis";
 import { DEFAULT_REGION, DEMO_REGIONS, type RegionKey } from "@/lib/demoShelters";
 import { useSlowLoading } from "@/lib/useSlowLoading";
 
@@ -73,14 +79,22 @@ const SOUTH_KOREA_BOUNDS: [[number, number], [number, number]] = [
 // 어림한 게 아니라 실제 행정경계(data/vector/adm_sigungu_5179.geojson·
 // adm_sido_5179.geojson)를 4326으로 재투영한 total_bounds.
 // 2026-09-05: 서울 AOI를 시 전역(605km², 43개 시군구가 bbox에 걸림)에서 강남구·서초구
-// (84km², 건물 42,381건)로 좁혔다. 전역 bbox는 데모가 실제로 다루는 범위보다 훨씬 넓어
-// 노출자산·경로 같은 파이프라인을 붙이기에 무거웠다. 기존 서울 정적 타일은 이 범위의
-// 상위집합이라 그대로 동작한다(범위 밖 타일은 이제 서빙되지 않는다).
+// (84km²)로 좁혔다. 전역 bbox는 데모가 실제로 다루는 범위보다 훨씬 넓어 노출자산·경로
+// 같은 파이프라인을 붙이기에 무거웠다.
+// 2026-09-20: 다시 강남구만으로 좁혔다(39km²). 서초는 산청·강남과 똑같은 "모형 없는
+// 지역"이라 화면에 새로 보여주는 게 없는데 정적 타일만 그만큼 더 들고 있었다.
+//
+// 이 bbox는 소스의 `bounds`로 그대로 들어가므로 MapLibre는 범위 밖 타일을 아예
+// 요청하지 않는다 — 좁히면 그 바깥 타일은 디스크에만 남는 죽은 파일이 된다.
+// 실제로 그래서 시 전역 시절 타일 411MB가 서빙되지 않은 채 남아 있었고, 이번에
+// 강남 범위 밖 444MB를 전부 지웠다(범위를 다시 넓히려면 scripts/fetch_aoi_satellite.py와
+// ui/scripts/build_vector_tiles.mjs로 재생성해야 한다).
 const AOI_KEYS = ["sancheong", "seoul"] as const;
 type AOIKey = (typeof AOI_KEYS)[number];
 const AOI_BOUNDS: Record<AOIKey, [number, number, number, number]> = {
   sancheong: [127.688782, 35.219031, 128.114735, 35.576211],
-  seoul: [126.979849, 37.428340, 127.124207, 37.535823],
+  // 강남구 total_bounds(data/vector/adm_sigungu_5179.geojson을 4326으로 재투영)
+  seoul: [127.008577, 37.456219, 127.124207, 37.535823],
 };
 
 function getActiveAOI(lng: number, lat: number): AOIKey | null {
@@ -273,84 +287,103 @@ const BRIDGE_DECK_BASE_M = 3;
 const BRIDGE_HALF_WIDTH_M = { motorway: 12, trunk: 10, primary: 8, secondary: 7 } as Record<string, number>;
 const DEFAULT_BRIDGE_HALF_WIDTH_M = 4;
 
-// --- 토사 유실 / 침수 볼륨 시뮬레이터 ---
-// Module A/B가 아직 목업이라 risk_polygons/inundation_extent_5179 지오메트리가 없다
-// (contracts/module_a·b.example.json 참조) — 실제 예측값이 아니라 산청 상능마을
-// 지형에 맞춰 손으로 배치한 흐름 경로이고, 깊이는 슬라이더로 사용자가 직접 조작하는
-// what-if 값이다. 실제 물리모델이 아님을 항상 명시할 것(문서 §6 불확실성 표기 원칙).
+// --- 시간축 위험영역(§5 UI-3D) ---
+// 예전에는 여기에 손으로 그린 흐름 경로 + 깊이 슬라이더가 있었다. 실제 예측이 아니라
+// what-if 볼륨이었고, 화면에서는 모형 산출물과 구분이 안 돼 오해를 부르기 쉬웠다.
+// 2026-09-20에 걷어내고, 트랙①이 실측 강우로 시간마다 구동해 남긴 위험영역
+// (risk_landslide_index.json, 폴리곤마다 arrival_hour) 자체를 시간축으로 세운다.
 //
-// 지역 미터 오프셋 → 위경도 근사 변환(적도 기준 111.32km/1°, 이 위도대에서 수백m~1km
-// 규모 흐름 시각화에는 충분한 정밀도).
-function metersToLonLat(origin: [number, number], dxM: number, dyM: number): [number, number] {
-  const [lon, lat] = origin;
-  const dLon = dxM / (111320 * Math.cos((lat * Math.PI) / 180));
-  const dLat = dyM / 110540;
-  return [lon + dLon, lat + dLat];
+// 높이는 "퇴적 깊이"가 아니다 — 토석류 runout 모형이 아직 없다(4차 지시서 P1).
+// 위험영역을 지형 위에서 보이게 하는 표시용 고정 높이이고, 화면에도 그렇게 쓴다.
+// 침수 쪽은 반대로 SFINCS 실측 수심이 있으므로 그 값을 그대로 높이로 쓴다
+// (flood-model-3d). 둘을 색·범례·높이 근거로 확실히 갈라 둔다.
+// 폴리곤 묶음의 lon/lat 경계. "위험영역으로 이동" 버튼이 카메라를 거기로 보낼 때 쓴다.
+// 좌표가 Polygon/MultiPolygon 어느 쪽이든 끝까지 내려가서 숫자 쌍만 줍는다.
+function featuresBounds(
+  features: Feature<Polygon | MultiPolygon>[]
+): [[number, number], [number, number]] | null {
+  let minLon = Infinity, minLat = Infinity, maxLon = -Infinity, maxLat = -Infinity;
+  const walk = (c: unknown): void => {
+    if (Array.isArray(c) && typeof c[0] === "number" && typeof c[1] === "number") {
+      const [lon, lat] = c as [number, number];
+      if (lon < minLon) minLon = lon;
+      if (lat < minLat) minLat = lat;
+      if (lon > maxLon) maxLon = lon;
+      if (lat > maxLat) maxLat = lat;
+      return;
+    }
+    if (Array.isArray(c)) for (const q of c) walk(q);
+  };
+  for (const f of features) walk(f.geometry.coordinates);
+  return Number.isFinite(minLon) ? [[minLon, minLat], [maxLon, maxLat]] : null;
 }
 
-// 산청 상능마을(산사태 트리거 지점)에서 남동쪽 사면 아래로 흐르는 짧고 가파른 경로
-const DEBRIS_CENTERLINE_M: [number, number][] = [
-  [0, 0],
-  [140, -90],
-  [300, -160],
-  [420, -280],
-];
-// 같은 계곡을 따라 더 길게 흘러가는 하천범람 경로(Module B 트리거 방향)
-const FLOOD_CENTERLINE_M: [number, number][] = [
-  [50, -250],
-  [180, -420],
-  [420, -560],
-  [700, -650],
-  [980, -700],
-];
-
-interface FlowBandSpec {
-  fractionOfWidth: number; // 바깥쪽부터 안쪽 순서
-  depthFactor: number; // 슬라이더 깊이값에 곱해지는 비율
-  color: [number, number, number, number];
-}
-// 바깥(옅은 노랑) → 안(진한 빨강): 토사, 바깥(옅은 하늘) → 안(진한 파랑): 침수
-const DEBRIS_BANDS: FlowBandSpec[] = [
-  { fractionOfWidth: 1.0, depthFactor: 0.3, color: [253, 224, 71, 200] },
-  { fractionOfWidth: 0.66, depthFactor: 0.6, color: [249, 115, 22, 220] },
-  { fractionOfWidth: 0.35, depthFactor: 1.0, color: [220, 38, 38, 235] },
-];
-const FLOOD_BANDS: FlowBandSpec[] = [
-  { fractionOfWidth: 1.0, depthFactor: 0.35, color: [125, 211, 252, 170] },
-  { fractionOfWidth: 0.66, depthFactor: 0.65, color: [56, 189, 248, 195] },
-  { fractionOfWidth: 0.35, depthFactor: 1.0, color: [29, 78, 216, 220] },
-];
-
-function buildFlowBands(
-  origin: [number, number],
-  centerlineM: [number, number][],
-  baseWidthM: number,
-  depthM: number,
-  bands: FlowBandSpec[]
-): Feature<Polygon | MultiPolygon>[] {
-  const linePts = centerlineM.map(([dx, dy]) => metersToLonLat(origin, dx, dy));
-  const line = turfLineString(linePts);
-  const out: Feature<Polygon | MultiPolygon>[] = [];
-  for (const band of bands) {
-    const width = (baseWidthM * band.fractionOfWidth) / 2;
-    try {
-      const poly = buffer(line, width, { units: "meters", steps: 8 });
-      if (poly) {
-        // MapLibre의 fill-extrusion-color는 CSS 색상 문자열이 필요하다 — [r,g,b,a] 배열을
-        // GeoJSON 속성에 그대로 넣으면(deck.gl 스타일) 색상 평가가 실패해 색이 안 먹는다.
-        const [r, g, b, a] = band.color;
-        poly.properties = {
-          depth: Math.max(depthM * band.depthFactor, 0.15),
-          color: `rgba(${r}, ${g}, ${b}, ${a / 255})`,
-        };
-        out.push(poly);
+// 위험영역 폴리곤 하나하나의 중심점.
+//
+// **왜 필요한가**: 위험영역은 한 덩어리가 아니라 20~75m짜리 조각 390개가 35km에
+// 흩어진 형태다(2026-09-20 실측). 조각 하나가 z14에서 2.6~9.6픽셀, 데모 초기 뷰인
+// z12.5에서는 1픽셀도 안 된다 — 3D로 세워도 화면에 아무것도 안 보인다. 그래서
+// 지형에 붙는 폴리곤과 별개로, **화면 픽셀 크기로 그려지는 점**을 같이 찍는다.
+// 점은 위치를 가리키는 표시이고 크기에 뜻이 없다(범례에 명시).
+function riskMarkerPoints(
+  features: Feature<Polygon | MultiPolygon>[]
+): Feature<GeoJSON.Point>[] {
+  const out: Feature<GeoJSON.Point>[] = [];
+  for (const f of features) {
+    const parts =
+      f.geometry.type === "MultiPolygon" ? f.geometry.coordinates : [f.geometry.coordinates];
+    for (const part of parts) {
+      const ring = part[0];
+      if (!ring || ring.length === 0) continue;
+      let sx = 0;
+      let sy = 0;
+      for (const c of ring) {
+        sx += c[0];
+        sy += c[1];
       }
-    } catch {
-      // 극단적인 슬라이더 값(0에 가까움) 등으로 버퍼링이 실패하면 그 밴드는 건너뜀
+      out.push({
+        type: "Feature",
+        geometry: { type: "Point", coordinates: [sx / ring.length, sy / ring.length] },
+        properties: { ...f.properties },
+      });
     }
   }
   return out;
 }
+
+const RISK_WALL_HEIGHT_M = 14;
+// 0.7 영역은 0.5 영역 안에 들어가 있다(P>=0.7 ⊂ P>=0.5). 같은 높이로 세우면 겹쳐서
+// 아예 안 보이므로 더 높게 세운다 — 깊이를 뜻하는 값이 아니라 순전히 가림 방지다.
+const RISK_WALL_HEIGHT_CRITICAL_M = 34;
+
+// 방금 도달한 영역은 밝게, 이전 시각에 이미 넘어간 영역은 어둡게 — "번져가는" 것이
+// 색으로도 읽히게 한다(age = 현재 프레임 − arrival_hour).
+// 0.5(경고)는 주황, 0.7(위험)은 빨강 — 임계가 다르면 색도 달라야 한다.
+const RISK_COLOR_NEW = "#fb923c";
+const RISK_COLOR_RECENT = "#ea580c";
+const RISK_COLOR_OLD = "#7c2d12";
+const RISK_CRIT_NEW = "#f87171";
+const RISK_CRIT_RECENT = "#dc2626";
+const RISK_CRIT_OLD = "#7f1d1d";
+
+function hhmm(iso: string | null | undefined): string {
+  if (!iso) return "—";
+  const m = /T(\d{2}):(\d{2})/.exec(iso);
+  return m ? `${m[1]}:${m[2]}` : "—";
+}
+
+// "2025. 7. 19(토) 09:00" — 연도까지 다 보여야 한다. 2025년 산청 재연이라는 걸
+// 화면만 보고 알 수 있어야 하고, 연도가 없으면 올해 일처럼 읽힌다.
+const WEEKDAY = ["일", "월", "화", "수", "목", "금", "토"];
+function frameLabel(iso: string | null | undefined): string {
+  if (!iso) return "—";
+  const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/.exec(iso);
+  if (!m) return iso;
+  const [, y, mo, d, hh, mm] = m;
+  const w = WEEKDAY[new Date(Number(y), Number(mo) - 1, Number(d)).getDay()];
+  return `${y}. ${Number(mo)}. ${Number(d)}(${w}) ${hh}:${mm}`;
+}
+
 
 // 데모 AOI(산청·서울) 빠른 이동 버튼 — 이 두 지역만 정적 벡터타일로 완전히
 // 캐싱돼 있다(§AOI_BOUNDS). 부산 등 다른 지역도 라이브 V-World 폴백으로 여전히
@@ -359,7 +392,6 @@ const TEST_LOCATIONS: { label: string; center: [number, number]; zoom: number; r
   { label: "산청 상능마을", center: INITIAL_CENTER, zoom: 12.5, regionKey: "sancheong" },
   { label: "산청군 전체", center: [127.91, 35.37], zoom: 9.6, regionKey: "sancheong_all" },
   { label: "서울 강남", center: [127.0276, 37.4979], zoom: 16, regionKey: "gangnam" },
-  { label: "서울 서초", center: [127.0044, 37.4907], zoom: 14, regionKey: "seocho" },
 ];
 
 // EvacuationPanel(§6)에서 선택한 대피 경로 — 카카오/네이버 실경로 API 붙기 전까지는
@@ -381,6 +413,9 @@ interface MapExplorerProps {
   onOriginPicked?: (lonLat: [number, number]) => void;
   // §7 IsolationPanel에서 계산한 고립 건물 클러스터(hull, 단독 건물은 Point) — 마젠타로 표시.
   isolatedAreas?: GeoJSON.FeatureCollection | null;
+  // 위험영역과 겹쳐 통행 불가로 판정된 도로 구간 — 빨간 굵은 선으로 표시한다.
+  // 고립 구역(마젠타)·대피경로(시안)와 색으로 구분된다.
+  blockedRoads?: GeoJSON.FeatureCollection | null;
   // 패널에서 "고립 구역 N"을 클릭하면 그 구역으로 지도를 이동시키는 용도. nonce를
   // 넣는 이유는 같은 구역을 연달아 두 번 눌러도(같은 bbox) 매번 다시 이동해야 하는데
   // React effect는 값이 안 바뀌면 재실행을 안 하기 때문 — 클릭마다 nonce를 올려 강제한다.
@@ -388,6 +423,8 @@ interface MapExplorerProps {
   // "산청 상능마을"/"서울 강남" 버튼으로 지도가 이동할 때 부모에 어느 지역인지 알려준다
   // — EvacuationPanel/IsolationPanel이 그 지역의 대피소 목록을 쓰도록 상태를 끌어올림.
   onRegionSelect?: (region: RegionKey) => void;
+  // 데모 트리거로 경보가 새로 생기면 올라가는 값 — 침수 폴리곤과 시간축을 다시 받는다.
+  alertNonce?: number;
 }
 
 export default function MapExplorer({
@@ -395,22 +432,26 @@ export default function MapExplorer({
   pickOrigin = false,
   onOriginPicked,
   isolatedAreas = null,
+  blockedRoads = null,
   focusBbox = null,
   onRegionSelect,
+  alertNonce = 0,
 }: MapExplorerProps = {}) {
   const mapContainer = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
-  const simUpdateRef = useRef<((debrisM: number, floodM: number) => void) | null>(null);
   const highlightUpdateRef = useRef<((code: string | null) => void) | null>(null);
   // 현재 카메라 중심이 산청·서울 AOI 안인지 — 안이면 정적 타일을 보여주고 실시간
   // V-World fetch는 건너뛴다(아래 syncAOILayers/updateVWorld* 참조).
   const aoiRef = useRef<AOIKey | null>(null);
-  // §7 슬라이더 연동이 "지금 어느 지역이 선택돼있는지"를 알아야 그 지역 대피소/bbox로
-  // /isolation-check를 부를 수 있다 — mount 시 한 번만 만들어지는 클로저 안에서 최신
-  // 값을 읽어야 하므로 state가 아니라 ref로 들고 있는다(TEST_LOCATIONS 버튼이 갱신).
+  // §7 고립 판정이 "지금 어느 지역이 선택돼있는지"를 알아야 그 지역 대피소/bbox로
+  // /isolation-check를 부를 수 있다 — 렌더마다 다시 만들어지지 않아야 하므로 state가
+  // 아니라 ref로 들고 있는다(TEST_LOCATIONS 버튼이 갱신).
   const isolationRegionRef = useRef<RegionKey>(DEFAULT_REGION);
-  // §7 슬라이더 연동 — 침수/토사 볼륨이 바뀔 때마다 /isolation-check를 다시 부르는데,
-  // 드래그 중 매 프레임 호출하면 과하므로 디바운스 타이머를 여기 들고 있는다.
+  // 대피소 레이어는 지역이 바뀌면 다시 그려야 해서 ref가 아니라 state로도 들고 있다
+  // (ref 변경은 렌더를 유발하지 않아 useEffect가 안 돈다).
+  const [shelterRegion, setShelterRegion] = useState<RegionKey>(DEFAULT_REGION);
+  // §7 — 시간 스크러버를 드래그하면 위험영역이 프레임마다 바뀌는데 매 프레임
+  // /isolation-check를 부르면 과하므로 디바운스 타이머를 여기 들고 있는다.
   const isolationDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const [mapReady, setMapReady] = useState(false);
@@ -420,15 +461,42 @@ export default function MapExplorer({
   const [searching, setSearching] = useState(false);
   const searchSlow = useSlowLoading();
   const [selectedRegion, setSelectedRegion] = useState<AdminSearchResult | null>(null);
-  const [debrisDepth, setDebrisDepth] = useState(0);
-  const [floodDepth, setFloodDepth] = useState(0);
+  // Module B(SFINCS)가 실제로 계산한 최대 침수심(m). null이면 미산출.
+  const [modelFloodDepth, setModelFloodDepth] = useState<number | null>(null);
+  // Module B 침수 폴리곤 원본 — 지도 소스에도 넣지만, 고립 판정의 hazard로도 써야
+  // 해서 여기 들고 있는다(소스에서 되읽는 건 MapLibre 내부 API라 쓰지 않는다).
+  const [floodFeatures, setFloodFeatures] = useState<Feature<Polygon | MultiPolygon>[]>([]);
+  // 침수 폴리곤 안에 들어오는 렌더링된 건물 수(보조 지표). null이면 미산출.
   const [floodedBuildingCount, setFloodedBuildingCount] = useState<number | null>(null);
   const [hazardIsolatedCount, setHazardIsolatedCount] = useState<number | null>(null);
+
+  // --- 시간축(§5 UI-3D) ---
+  // "지금 보는 게 몇 월 며칠 몇 시의 예측인가"가 화면에 없으면 3D를 아무리 잘 그려도
+  // 읽을 수가 없다. 트랙①의 프레임(39시간)과 폴리곤별 도달시각을 받아서, 스크러버가
+  // 가리키는 시각까지 도달한 영역만 누적해 세운다.
+  const [timeline, setTimeline] = useState<AlertTimeline | null>(null);
+  // 시간축을 못 받았을 때 화면에 띄울 진단 문구. 상태코드가 아니라 /health를 찔러
+  // 만든 문장이라 "재시작하면 되는 건지"까지 바로 읽힌다.
+  const [timelineError, setTimelineError] = useState<string | null>(null);
+  // 지금 화면에 세워진 위험영역의 경계. 폴리곤이 카메라에서 5~20km 떨어진 곳에
+  // 있어서(대표지점이 생비량면이 아니다) 시각을 넘겨도 "아무 변화 없음"으로 보였다 —
+  // 버튼 하나로 거기로 갈 수 있어야 한다.
+
+  const [frameIdx, setFrameIdx] = useState(0);
+  const [playing, setPlaying] = useState(false);
+
+  // WebGL을 못 쓰는 환경(원격 데스크톱, 일부 가상머신, GPU 차단 정책, 헤드리스
+  // 브라우저)에서는 MapLibre 생성자가 그대로 throw한다. 그게 잡히지 않으면 React가
+  // 트리를 통째로 버려서 지도뿐 아니라 패널·메뉴까지 빈 화면이 된다 — 지도를 못
+  // 그리는 것과 대시보드를 못 쓰는 것은 다르므로 여기서 끊고 안내를 띄운다.
+  const [mapFailed, setMapFailed] = useState(false);
 
   // 지도 초기화 (1회)
   useEffect(() => {
     if (!mapContainer.current || mapRef.current) return;
-    const map = new MapLibreMap({
+    let map: MapLibreMap;
+    try {
+      map = new MapLibreMap({
       container: mapContainer.current,
       style: MAP_STYLE,
       center: INITIAL_CENTER,
@@ -460,7 +528,12 @@ export default function MapExplorer({
       // 커서 위치 기준 줌은 지형 고도가 아직 로드 중일 때 그 지점의 고도값이 계속
       // 바뀌면서 카메라가 재계산돼 튕기는 원인이 된다 — 화면 중심 기준으로 고정
       scrollZoom: { around: "center" },
-    });
+      });
+    } catch (err) {
+      console.error("[maplibre] 지도 초기화 실패 — 패널은 그대로 쓸 수 있다", err);
+      setMapFailed(true);
+      return;
+    }
     map.addControl(new NavigationControl({ visualizePitch: true }), "top-right");
     // fitBounds는 bearing을 명시하지 않으면 0으로 되돌린다(공식 문서에 명시된 동작) —
     // 생성자에서 준 -20을 유지하려면 여기서도 다시 넘겨야 한다.
@@ -579,7 +652,11 @@ export default function MapExplorer({
       // MapLibre의 타일/geojson-url 요청 내부 경로는 상대경로("/tiles/...")를 바로
       // Request()에 넘겨서 파싱 실패한다(브라우저 fetch와 달리 base URL을 안 붙여줌) —
       // 반드시 origin을 붙인 절대 URL이어야 한다(2026-08-28 실측 확인).
+      // 타일(위성·벡터)만 tileBase()로 분리한다 — 744MB라 Vercel 배포 용량을 먹어서
+      // 백엔드(EC2 Caddy)가 서빙한다(2026-09-19, api.ts의 tileBase() 주석 참조).
+      // 하천 geojson(/aoi/, 5.6MB)은 작아서 그대로 Vercel에 둔다.
       const origin = window.location.origin;
+      const tiles = tileBase();
       for (const region of AOI_KEYS) {
         // 위성사진(2026-08-29, scripts/fetch_aoi_satellite.py) — pitch·zoom이 겹치면
         // 라이브 Esri 요청이 한 번에 수백 개까지 튀는 게 원인이었던 확대 랙(§DEFAULT_PITCH
@@ -588,7 +665,7 @@ export default function MapExplorer({
         // 기본 동작대로 현재 스택 맨 위에 쌓여도 무방(§순서 코멘트 위 참고).
         map.addSource(`${region}-satellite-src`, {
           type: "raster",
-          tiles: [`${origin}/satellite/${region}/{z}/{x}/{y}.jpg`],
+          tiles: [`${tiles}/satellite/${region}/{z}/{x}/{y}.jpg`],
           tileSize: 256,
           bounds: AOI_BOUNDS[region],
           ...AOI_SATELLITE_ZOOM,
@@ -605,7 +682,7 @@ export default function MapExplorer({
 
         map.addSource(`${region}-landcover-src`, {
           type: "vector",
-          tiles: [`${origin}/tiles/${region}-landcover/{z}/{x}/{y}.pbf`],
+          tiles: [`${tiles}/tiles/${region}-landcover/{z}/{x}/{y}.pbf`],
           bounds: AOI_BOUNDS[region],
           ...AOI_TILE_ZOOM.landcover,
         });
@@ -636,7 +713,7 @@ export default function MapExplorer({
 
         map.addSource(`${region}-roads-src`, {
           type: "vector",
-          tiles: [`${origin}/tiles/${region}-roads/{z}/{x}/{y}.pbf`],
+          tiles: [`${tiles}/tiles/${region}-roads/{z}/{x}/{y}.pbf`],
           bounds: AOI_BOUNDS[region],
           ...AOI_TILE_ZOOM.roads,
         });
@@ -675,7 +752,7 @@ export default function MapExplorer({
 
         map.addSource(`${region}-buildings-src`, {
           type: "vector",
-          tiles: [`${origin}/tiles/${region}-buildings/{z}/{x}/{y}.pbf`],
+          tiles: [`${tiles}/tiles/${region}-buildings/{z}/{x}/{y}.pbf`],
           bounds: AOI_BOUNDS[region],
           ...AOI_TILE_ZOOM.buildings,
         });
@@ -948,144 +1025,251 @@ export default function MapExplorer({
         }, 200);
       });
 
-      // 토사 유실 / 침수 볼륨 — bridges와 동일한 이유로 deck.gl이 아니라 MapLibre 네이티브
-      // fill-extrusion을 쓴다: 지형 위에 실제로 떠서/파묻혀서 렌더링되려면(건물·도로와
-      // 제대로 깊이 오클루전되려면) 이미 검증된 이 패턴이 맞다. depth를 슬라이더로 조절하면
-      // 밴드(바깥 옅은색~안쪽 진한색)가 다시 계산돼 실시간으로 갱신된다.
-      map.addSource("debris-flow", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
-      map.addLayer({
-        id: "debris-flow-3d",
-        type: "fill-extrusion",
-        source: "debris-flow",
-        paint: {
-          "fill-extrusion-color": ["get", "color"],
-          "fill-extrusion-height": ["get", "depth"],
-          "fill-extrusion-base": 0,
-          "fill-extrusion-opacity": 0.88,
-        },
-      });
-      map.addSource("flood-water", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
-      map.addLayer({
-        id: "flood-water-3d",
-        type: "fill-extrusion",
-        source: "flood-water",
-        paint: {
-          "fill-extrusion-color": ["get", "color"],
-          "fill-extrusion-height": ["get", "depth"],
-          "fill-extrusion-base": 0,
-          "fill-extrusion-opacity": 0.8,
-        },
-      });
-
-      // §7 — 토사/침수 슬라이더가 만드는 3D 볼륨의 가장 바깥 밴드를 그대로
-      // /isolation-check의 hazard_polygon으로 재사용한다. Module A/B의 실제 예측
-      // 폴리곤이 아니라 what-if 슬라이더값 기반이지만, 지오메트리 자체는 진짜라
-      // 도로망 그래프 연산에 그대로 쓸 수 있다 — 슬라이더가 0이면 위험지역 없음으로
-      // 취급(고립 레이어 비움).
+      // 시간축 위험영역 3D — bridges와 동일한 이유로 deck.gl이 아니라 MapLibre 네이티브
+      // fill-extrusion을 쓴다(지형·건물과 깊이 오클루전이 맞아야 함). 데이터는 트랙①의
+      // 사전계산 레이어이고, 시간 스크러버가 arrival_hour로 걸러서 setData 한다 —
+      // 시각을 넘길수록 폴리곤이 누적돼 "번져가는" 것이 보인다.
       //
-      // 알려진 한계(2026-09-03): buildFlowBands의 밴드 폭(width)은 depthM과 무관하게
-      // 고정이라(depthM은 fill-extrusion-height, 즉 3D로 "높게 보이는 정도"에만 영향)
-      // 슬라이더가 0보다 크기만 하면 폭·따라서 이 hazard_polygon도 항상 동일 —
-      // 0.4m든 3.4m든 고립 건물 수가 같게 나오는 게 정상(버그 아님, 설계상 한계).
-      // 심각도에 따라 고립 범위가 커지게 하려면 width를 depthM에 비례시켜야 함(TODO).
-      const scheduleIsolationCheck = (
-        debrisOuter: Feature<Polygon | MultiPolygon> | undefined,
-        floodOuter: Feature<Polygon | MultiPolygon> | undefined
-      ) => {
-        if (isolationDebounceRef.current) clearTimeout(isolationDebounceRef.current);
+      // 높이는 고정(RISK_WALL_HEIGHT_M)이다. 토사 퇴적깊이 모형이 없으므로 높이에
+      // 의미를 부여하지 않는다 — 있는 척하면 침수(실측 수심)와 구분이 안 된다.
+      map.addSource("landslide-risk", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
+      map.addLayer({
+        id: "landslide-risk-3d",
+        type: "fill-extrusion",
+        source: "landslide-risk",
+        paint: {
+          // age = 현재 프레임 − arrival_hour (스크러버가 속성으로 써 넣는다)
+          "fill-extrusion-color": [
+            "case",
+            ["==", ["get", "level"], "critical"],
+            ["step", ["number", ["get", "age"], 99], RISK_CRIT_NEW, 1, RISK_CRIT_RECENT, 6, RISK_CRIT_OLD],
+            ["step", ["number", ["get", "age"], 99], RISK_COLOR_NEW, 1, RISK_COLOR_RECENT, 6, RISK_COLOR_OLD],
+          ],
+          "fill-extrusion-height": [
+            "case",
+            ["==", ["get", "level"], "critical"],
+            RISK_WALL_HEIGHT_CRITICAL_M,
+            RISK_WALL_HEIGHT_M,
+          ],
+          "fill-extrusion-base": 0,
+          "fill-extrusion-opacity": 0.75,
+        },
+      });
 
-        const hazardPolys = [debrisOuter, floodOuter].filter(
-          (f): f is Feature<Polygon> => !!f && f.geometry.type === "Polygon"
-        );
-        if (hazardPolys.length === 0) {
-          const src = mapRef.current?.getSource("isolated-areas") as GeoJSONSource | undefined;
-          src?.setData({ type: "FeatureCollection", features: [] });
-          setHazardIsolatedCount(null);
-          return;
-        }
 
-        const hazardGeometry: GeoJSON.Polygon | GeoJSON.MultiPolygon =
-          hazardPolys.length === 1
-            ? hazardPolys[0].geometry
-            : { type: "MultiPolygon", coordinates: hazardPolys.map((p) => p.geometry.coordinates) };
+      // 위험영역 표시점 — 위 폴리곤이 화면에서 1픽셀도 안 되기 때문에 필요하다
+      // (riskMarkerPoints 주석 참고). 지형에 붙는 3D와 달리 항상 같은 화면 크기로
+      // 그려지므로, 줌을 어떻게 두든 "여기가 위험하다"가 보이고 시각을 넘기면
+      // 점이 늘어나는 것으로 확산이 읽힌다.
+      map.addSource("risk-markers", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
+      map.addLayer({
+        id: "risk-markers-halo",
+        type: "circle",
+        source: "risk-markers",
+        // 이번 시각에 새로 도달한 것만 큰 테를 두른다 — 어디가 새로 생겼는지 보이게
+        filter: ["==", ["number", ["get", "age"], 99], 0],
+        paint: {
+          "circle-radius": ["interpolate", ["linear"], ["zoom"], 9, 9, 13, 14, 17, 22],
+          "circle-color": "#fbbf24",
+          "circle-opacity": 0.25,
+        },
+      });
+      map.addLayer({
+        id: "risk-markers-dot",
+        type: "circle",
+        source: "risk-markers",
+        paint: {
+          "circle-radius": ["interpolate", ["linear"], ["zoom"], 9, 3.5, 13, 6, 17, 10],
+          "circle-color": [
+            "case",
+            ["==", ["get", "level"], "critical"],
+            ["step", ["number", ["get", "age"], 99], RISK_CRIT_NEW, 1, RISK_CRIT_RECENT, 6, RISK_CRIT_OLD],
+            ["step", ["number", ["get", "age"], 99], RISK_COLOR_NEW, 1, RISK_COLOR_RECENT, 6, RISK_COLOR_OLD],
+          ],
+          "circle-stroke-width": 1.2,
+          "circle-stroke-color": "rgba(255,255,255,0.85)",
+        },
+      });
 
-        isolationDebounceRef.current = setTimeout(() => {
-          const activeRegion = DEMO_REGIONS[isolationRegionRef.current];
-          checkIsolation(
-            activeRegion.isolationBbox,
-            activeRegion.shelters.map(({ lon, lat }) => ({ lon, lat })),
-            hazardGeometry
-          )
-            .then((result) => {
-              const src = mapRef.current?.getSource("isolated-areas") as GeoJSONSource | undefined;
-              src?.setData(result.isolated_areas);
-              setHazardIsolatedCount(result.isolated_building_count);
-            })
-            .catch(() => setHazardIsolatedCount(null));
-        }, 600);
-      };
-
-      simUpdateRef.current = (debrisM: number, floodM: number) => {
-        const currentMap = mapRef.current;
-        if (!currentMap) return;
-
-        const debrisFeatures = debrisM > 0 ? buildFlowBands(INITIAL_CENTER, DEBRIS_CENTERLINE_M, 90, debrisM, DEBRIS_BANDS) : [];
-        const floodFeatures = floodM > 0 ? buildFlowBands(INITIAL_CENTER, FLOOD_CENTERLINE_M, 130, floodM, FLOOD_BANDS) : [];
-
-        (currentMap.getSource("debris-flow") as GeoJSONSource | undefined)?.setData({
-          type: "FeatureCollection",
-          features: debrisFeatures,
-        } as FeatureCollection);
-        (currentMap.getSource("flood-water") as GeoJSONSource | undefined)?.setData({
-          type: "FeatureCollection",
-          features: floodFeatures,
-        } as FeatureCollection);
-
-        scheduleIsolationCheck(debrisFeatures[0], floodFeatures[0]);
-
-        // 침수 범위(가장 바깥 밴드) 안에 들어오는 렌더링된 건물 수를 세서 "몇 개 건물이
-        // 잠기는지"를 텍스트로도 보여준다 — 3D 볼륨 자체가 건물을 시각적으로 덮는 게
-        // 주된 증거이고, 이 카운트는 보조 지표(대략적인 수평 포함 여부 기준).
-        const outer = floodFeatures[0];
-        if (!outer) {
-          setFloodedBuildingCount(floodM > 0 ? 0 : null);
-          return;
-        }
-        try {
-          const coords = outer.geometry.type === "Polygon" ? outer.geometry.coordinates[0] : outer.geometry.coordinates[0][0];
-          const xs = coords.map((c) => currentMap.project(c as [number, number]).x);
-          const ys = coords.map((c) => currentMap.project(c as [number, number]).y);
-          const bbox: [[number, number], [number, number]] = [
-            [Math.min(...xs), Math.min(...ys)],
-            [Math.max(...xs), Math.max(...ys)],
-          ];
-          const rendered = currentMap.queryRenderedFeatures(bbox, { layers: ["vworld-buildings-3d", "buildings-3d-osm"] });
-          let count = 0;
-          const seen = new Set<string | number>();
-          for (const f of rendered) {
-            const key = f.id ?? JSON.stringify(f.properties);
-            if (seen.has(key)) continue;
-            seen.add(key);
-            const c = centroid(f as unknown as Feature<Polygon | MultiPolygon>);
-            if (booleanPointInPolygon(c, outer)) count++;
-          }
-          setFloodedBuildingCount(count);
-        } catch {
-          setFloodedBuildingCount(null);
-        }
-      };
+      // Module B 실산출 침수 — 위의 flood-water와 달리 슬라이더가 아니라 SFINCS/ANUGA
+      // 최대침수심 래스터에서 나온 값이다(module_b_flood/fim.py가 깊이 구간별로 폴리곤화,
+      // api_server의 /alerts/{id}/geojson이 4326으로 재투영). 높이는 그 구간의 실제
+      // 침수심 90분위(depth_p90_m)이고, 색은 구간(band)으로 정한다 — what-if 볼륨과
+      // 섞이면 안 되므로 소스·레이어를 따로 둔다.
+      map.addSource("flood-model", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
+      map.addLayer({
+        id: "flood-model-3d",
+        // 압출이 아니라 **평면**이다. 지형 위에 드레이프되어 등고선처럼 깔린다.
+        //
+        // 구간마다 다른 높이로 세워 봤더니(0.3m~14m) 층이 각각 떨어진 판으로 보여서
+        // 오히려 더 깨져 보였다("층이 너무 분리돼서 깨져 보임", 2026-09-20). 참고로
+        // 받은 레퍼런스(FLOW-3D 유속도, 산사태 해석 결과)도 전부 지형에 색을 입힌
+        // 평면이지 층층이 쌓은 볼륨이 아니다 — 깊이는 높이가 아니라 색으로 간다.
+        // 3D는 지형 자체가 담당한다.
+        type: "fill",
+        source: "flood-model",
+        layout: {
+          // 깊은 구간이 반드시 위에 와야 색이 맞는다(누적이라 아래를 덮는 구조).
+          // feature 순서에 기대면 타일 단위로 묶이면서 순서가 뒤집힐 수 있으므로
+          // 명시적으로 정렬한다 — band가 클수록 나중에(위에) 그려진다.
+          "fill-sort-key": ["get", "band"],
+        },
+        paint: {
+          // 침수심에 따라 색이 이어진다. 구간이 15단(0.3~14m)이고 그 사이를 보간해서
+          // 얕은 하늘색에서 깊은 남색까지 물처럼 번진다.
+          "fill-color": [
+            "interpolate",
+            ["linear"],
+            ["number", ["get", "depth_min_m"], 0.3],
+            0.3, "#bae6fd",
+            1.0, "#7dd3fc",
+            2.0, "#38bdf8",
+            3.0, "#0ea5e9",
+            4.0, "#0284c7",
+            5.0, "#0369a1",
+            6.0, "#075985",
+            8.0, "#1e40af",
+            10.0, "#1e3a8a",
+            14.0, "#172554",
+          ],
+          // 구간이 누적이라 깊은 쪽이 얕은 쪽 위에 겹친다. 불투명하게 두면 맨 위
+          // 색만 보여 정확하지만 아래 지형이 아예 안 보이고, 너무 투명하면 겹친
+          // 만큼 색이 진해져 범례와 어긋난다. 0.82면 맨 위 색이 사실상 그대로 보이면서
+          // 가장자리 얕은 구간으로 지형이 비친다.
+          "fill-opacity": 0.82,
+          "fill-antialias": true,
+        },
+      });
 
       // 대피 경로(§6.9) — 지금은 직선거리 근사라 "실제 도로 경로 아님"이 시각적으로도
       // 드러나게 점선으로 그린다. 실경로 API가 붙으면 LineString 좌표만 실제 폴리라인으로
       // 바뀌고 이 레이어 자체는 그대로 재사용된다.
+      // 대피경로 — 위성영상 위에서도 한눈에 잡히도록 네 겹으로 쌓는다.
+      // 예전에는 시안색 점선 한 겹(width 5)이라 지형·도로와 섞여 안 보였다.
+      //   glow   바깥 번짐 — 배경이 밝든 어둡든 선이 떠 보이게 한다
+      //   casing 짙은 테두리 — 밝은 위성영상 위에서 형태를 잡아준다
+      //   line   본선(solid) — 점선은 "잠정"처럼 읽혀서 실선으로 바꿨다
+      //   flow   그 위를 덮는 흰 파선 — 길의 방향감을 준다
+      // 폭은 줌에 따라 보간해 넓게 볼 때도 가늘어지지 않게 한다.
+      // zoom 보간은 최상위에만 올 수 있다 — ["*", ["interpolate", ...], 2] 처럼 감싸면
+      // MapLibre가 거부한다("zoom expression may only be used as input to a top-level
+      // step/interpolate"). 스타일 스펙 검증기로 확인했고, 그래서 배율을 stops에 미리
+      // 곱해 겹마다 따로 만든다.
+      const routeWidth = (scale: number): ExpressionSpecification => [
+        "interpolate", ["linear"], ["zoom"],
+        10, 4 * scale,
+        14, 8 * scale,
+        17, 14 * scale,
+      ];
       map.addSource("evacuation-route", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
+      map.addLayer({
+        id: "evacuation-route-glow",
+        type: "line",
+        source: "evacuation-route",
+        layout: { "line-cap": "round", "line-join": "round" },
+        paint: {
+          "line-color": "#22d3ee",
+          "line-width": routeWidth(3.2),
+          "line-opacity": 0.22,
+          "line-blur": 8,
+        },
+      });
+      map.addLayer({
+        id: "evacuation-route-casing",
+        type: "line",
+        source: "evacuation-route",
+        layout: { "line-cap": "round", "line-join": "round" },
+        paint: {
+          "line-color": "#083344",
+          "line-width": routeWidth(1.7),
+          "line-opacity": 0.95,
+        },
+      });
       map.addLayer({
         id: "evacuation-route-line",
         type: "line",
         source: "evacuation-route",
         layout: { "line-cap": "round", "line-join": "round" },
-        paint: { "line-color": "#22d3ee", "line-width": 5, "line-dasharray": [2, 1.5], "line-opacity": 0.9 },
+        paint: { "line-color": "#22d3ee", "line-width": routeWidth(1), "line-opacity": 1 },
       });
+      map.addLayer({
+        id: "evacuation-route-flow",
+        type: "line",
+        source: "evacuation-route",
+        layout: { "line-cap": "butt", "line-join": "round" },
+        paint: {
+          "line-color": "#ecfeff",
+          "line-width": routeWidth(0.34),
+          "line-opacity": 0.9,
+          "line-dasharray": [1.4, 2.2],
+        },
+      });
+      // 통행 불가 도로 — 위험영역과 겹쳐 도로망 그래프에서 제거된 구간이다.
+      // 대피경로(시안 점선)보다 아래, 고립 구역(마젠타)과는 색으로 구분한다.
+      // 케이싱을 먼저 깔아 배경 도로 위에서도 선이 끊겨 보이지 않게 한다.
+      map.addSource("blocked-roads", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
+      map.addLayer({
+        id: "blocked-roads-casing",
+        type: "line",
+        source: "blocked-roads",
+        layout: { "line-cap": "round", "line-join": "round" },
+        paint: { "line-color": "#450a0a", "line-width": 9, "line-opacity": 0.75 },
+      });
+      map.addLayer({
+        id: "blocked-roads-line",
+        type: "line",
+        source: "blocked-roads",
+        layout: { "line-cap": "round", "line-join": "round" },
+        paint: { "line-color": "#ef4444", "line-width": 5, "line-opacity": 0.95 },
+      });
+
+      // 대피소 — 경로를 고르기 전에도 "어디로 갈 수 있는지"가 먼저 보여야 해서
+      // 현재 지역 대피소를 전부 상시 표시한다. 글리프(텍스트) 없이 원만 겹쳐
+      // 핀처럼 보이게 만든다 — 스타일의 폰트 엔드포인트가 한글을 보장하지 않아
+      // 라벨을 심볼로 넣으면 지역에 따라 통째로 사라질 수 있다.
+      const shelterRadius = (scale: number): ExpressionSpecification => [
+        "interpolate", ["linear"], ["zoom"],
+        9, 4 * scale,
+        13, 8 * scale,
+        17, 13 * scale,
+      ];
+      map.addSource("shelters", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
+      map.addLayer({
+        id: "shelters-halo",
+        type: "circle",
+        source: "shelters",
+        paint: {
+          "circle-radius": shelterRadius(2.1),
+          "circle-color": "#22c55e",
+          "circle-opacity": 0.18,
+          "circle-blur": 0.5,
+        },
+      });
+      map.addLayer({
+        id: "shelters-dot",
+        type: "circle",
+        source: "shelters",
+        paint: {
+          "circle-radius": shelterRadius(1),
+          "circle-color": "#16a34a",
+          "circle-stroke-width": 2.5,
+          "circle-stroke-color": "#ecfdf5",
+          "circle-opacity": 0.95,
+        },
+      });
+      // 안쪽 흰 점 — 멀리서 보면 초록 원, 가까이서 보면 핀처럼 읽힌다
+      map.addLayer({
+        id: "shelters-core",
+        type: "circle",
+        source: "shelters",
+        minzoom: 12,
+        paint: {
+          "circle-radius": shelterRadius(0.34),
+          "circle-color": "#ffffff",
+          "circle-opacity": 0.95,
+        },
+      });
+
       map.addSource("evacuation-markers", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
       map.addLayer({
         id: "evacuation-markers-circle",
@@ -1146,6 +1330,32 @@ export default function MapExplorer({
       map.on("mouseleave", "isolated-areas-fill", hideIsolationPopup);
       map.on("mouseenter", "isolated-areas-points", showIsolationPopup);
       map.on("mouseleave", "isolated-areas-points", hideIsolationPopup);
+
+      // 대피소·통행 불가 도로 — 점만 찍어두면 뭔지 모르므로 올리면 이름·수용인원을
+      // 띄운다. 라벨을 심볼 레이어로 상시 노출하지 않는 이유는 스타일의 폰트
+      // 엔드포인트가 한글 글리프를 보장하지 않기 때문이다(레이어 통째로 사라질 위험).
+      const infoPopup = new Popup({ closeButton: false, closeOnClick: false, offset: 12 });
+      const showInfo = (html: string) =>
+        (e: { lngLat: { lng: number; lat: number }; features?: MapGeoJSONFeature[] }) => {
+          const p = e.features?.[0]?.properties;
+          if (!p) return;
+          map.getCanvas().style.cursor = "pointer";
+          infoPopup.setLngLat(e.lngLat).setHTML(html.replace(/\{(\w+)\}/g, (_, k) => String(p[k] ?? "—"))).addTo(map);
+        };
+      const hideInfo = () => {
+        map.getCanvas().style.cursor = "";
+        infoPopup.remove();
+      };
+      map.on("mouseenter", "shelters-dot", showInfo(
+        '<div style="font:12px sans-serif;color:#0f172a;">' +
+        '<b>{name}</b><br/>대피소 · 수용 {capacity}명</div>'
+      ));
+      map.on("mouseleave", "shelters-dot", hideInfo);
+      map.on("mouseenter", "blocked-roads-line", showInfo(
+        '<div style="font:12px sans-serif;color:#0f172a;">' +
+        '<b style="color:#b91c1c;">통행 불가</b><br/>위험영역과 겹치는 구간</div>'
+      ));
+      map.on("mouseleave", "blocked-roads-line", hideInfo);
 
       setMapReady(true);
     });
@@ -1213,11 +1423,257 @@ export default function MapExplorer({
     highlightUpdateRef.current?.(selectedRegion?.code ?? null);
   }, [mapReady, selectedRegion]);
 
-  // 토사/침수 깊이 슬라이더가 바뀔 때마다 3D 볼륨 재계산
+  // §7 고립 판정 — 이제 슬라이더가 만든 what-if 볼륨이 아니라 모형이 실제로 낸
+  // 위험영역(Module A 시간축 폴리곤 + Module B 침수 폴리곤)을 그대로 hazard로 넘긴다.
+  // 도로망에서 그 지오메트리와 겹치는 엣지를 끊고 대피소 도달 가능성을 다시 푼다.
+  // 스크러버를 드래그하면 프레임마다 바뀌므로 디바운스한다.
+  const scheduleIsolationCheck = useCallback((hazards: Feature<Polygon | MultiPolygon>[]) => {
+    if (isolationDebounceRef.current) clearTimeout(isolationDebounceRef.current);
+
+    const EMPTY: GeoJSON.FeatureCollection = { type: "FeatureCollection", features: [] };
+    const setLayer = (id: string, data: GeoJSON.FeatureCollection) =>
+      (mapRef.current?.getSource(id) as GeoJSONSource | undefined)?.setData(data);
+
+    // MultiPolygon 하나로 합쳐 보낸다 — 좌표 배열을 이어 붙이는 것이라 union 연산이
+    // 아니고, 겹쳐도 도로 교차 판정 결과는 같다(비용만 아낀다).
+    const rings: GeoJSON.Position[][][] = [];
+    for (const f of hazards) {
+      if (f.geometry.type === "Polygon") rings.push(f.geometry.coordinates);
+      else rings.push(...f.geometry.coordinates);
+    }
+    if (rings.length === 0) {
+      setLayer("isolated-areas", EMPTY);
+      setLayer("blocked-roads", EMPTY);
+      setHazardIsolatedCount(null);
+      return;
+    }
+    const hazardGeometry: GeoJSON.MultiPolygon = { type: "MultiPolygon", coordinates: rings };
+
+    isolationDebounceRef.current = setTimeout(() => {
+      const activeRegion = DEMO_REGIONS[isolationRegionRef.current];
+      checkIsolation(
+        activeRegion.isolationBbox,
+        activeRegion.shelters.map(({ lon, lat }) => ({ lon, lat })),
+        hazardGeometry
+      )
+        .then((result) => {
+          setLayer("isolated-areas", result.isolated_areas);
+          setLayer("blocked-roads", result.blocked_roads ?? EMPTY);
+          setHazardIsolatedCount(result.isolated_building_count);
+        })
+        .catch(() => {
+          setLayer("blocked-roads", EMPTY);
+          setHazardIsolatedCount(null);
+        });
+    }, 600);
+  }, []);
+
+  // 시간축 데이터는 경보 하나당 한 번만 받는다(프레임 39 + 폴리곤 한 자릿수).
+  // 스크럽할 때마다 서버를 부르면 끊기므로 통째로 들고 클라이언트에서 거른다.
+  useEffect(() => {
+    let cancelled = false;
+    getAlertTimeline(SANGCHEONG_DEMO_INPUT.alert_id)
+      .then((t) => {
+        if (cancelled) return;
+        setTimeline(t);
+        if (t.httpStatus !== undefined) {
+          // 서버가 200을 안 줬다 — 왜인지는 /health가 알고 있다.
+          diagnoseFailure("시간축 조회", TIMELINE_ROUTE).then((msg) => {
+            if (!cancelled) setTimelineError(msg);
+          });
+        } else {
+          setTimelineError(null);
+        }
+        // 처음 보이는 시각은 "탐지 시각"으로 맞춘다 — 빈 지도로 시작하면 무엇을
+        // 보고 있는지 알 수 없고, 마지막 프레임으로 시작하면 번져가는 과정이 안 보인다.
+        const detected = t.markers?.detected;
+        const idx = detected ? t.frames.findIndex((f) => f.time === detected) : -1;
+        setFrameIdx(idx >= 0 ? idx : Math.max(t.frames.length - 1, 0));
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setTimeline(null);
+        diagnoseFailure("시간축 조회", TIMELINE_ROUTE).then((msg) => {
+          if (!cancelled) setTimelineError(msg);
+        });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [alertNonce]);
+
+  const frames = timeline?.frames ?? [];
+  const currentFrame = frames[frameIdx] ?? null;
+  // 막대 높이 기준. 0으로 나누지 않도록 하한을 둔다(전 구간 무강우면 막대가 다 최소높이).
+  const maxFrameRain = Math.max(1, ...frames.map((f) => f.rn_mm));
+  // 현재 시각까지 도달한 위험영역 개수 — 스크럽하면 이 숫자가 올라가는 것이
+  // '점차 증가한다'를 숫자로도 보여 준다.
+  // 시간 스크러버를 띄울 조건 — 프레임과 위험영역이 있고, 그 데이터의 AOI(산청)를
+  // 보고 있을 때만. 다른 지역에서 산청 시간축을 띄우면 그 지역 수치처럼 읽힌다.
+  const showScrubber =
+    shelterRegion === "sancheong" && (timeline?.available ?? false) && frames.length > 0;
+  // 침수 폴리곤이 없으면 카운트 자체가 의미 없으므로 파생값에서 null로 눌러 준다.
+  const floodedInRange = floodFeatures.length === 0 ? null : floodedBuildingCount;
+  // 현재 시각까지 도달한 위험영역. 지도에 올리는 것도, 화면에 쓰는 숫자도 전부
+  // 여기서 나온다 — 예전에는 지도 effect 안에서 setState로 세었는데, 그러면 WebGL이
+  // 없는 환경에서 지도가 안 뜰 때 숫자까지 0으로 남는다. 숫자는 지도 상태와 무관하게
+  // 맞아야 하고, 렌더마다 다시 계산해도 폴리곤이 8개뿐이라 비용이 없다.
+  const reachedRisk = ((): Feature<Polygon | MultiPolygon>[] => {
+    const hour = currentFrame?.hour;
+    if (hour === undefined) return [];
+    return (timeline?.risk.features ?? [])
+      .filter((f) => {
+        const h = Number(f.properties?.arrival_hour);
+        return Number.isFinite(h) && h <= hour;
+      })
+      .map((f) => ({
+        ...f,
+        properties: { ...f.properties, age: hour - Number(f.properties?.arrival_hour) },
+      })) as Feature<Polygon | MultiPolygon>[];
+  })();
+  // 이 시각의 침수. 등고선은 최대침수심 기준이므로, 수위강하만큼 잠긴 것만 남기고
+  // 색은 그 시각의 실제 침수심(level_m − 강하)으로 다시 매긴다.
+  //
+  // 등고선을 한 벌만 받아 두고 여기서 고르는 구조라 프레임을 넘겨도 네트워크를
+  // 다시 타지 않는다 — 스크럽이 끊기지 않는 이유다.
+  const floodSeries = timeline?.flood_series;
+  const floodDrop =
+    currentFrame && floodSeries?.available
+      ? floodSeries.stage_drop_by_hour?.[String(currentFrame.hour)]
+      : undefined;
+  const floodAtFrame: Feature<Polygon | MultiPolygon>[] =
+    floodDrop === undefined
+      ? []
+      : ((floodSeries?.contours?.features ?? []) as Feature<Polygon | MultiPolygon>[])
+          .filter((f) => Number(f.properties?.level_m) >= floodDrop + 0.3)
+          .map((f) => ({
+            ...f,
+            properties: {
+              ...f.properties,
+              depth_min_m: Number((Number(f.properties?.level_m) - floodDrop).toFixed(2)),
+            },
+          }));
+  // 이 시각의 최심 — 화면에 쓰는 숫자도 프레임을 따라 움직여야 한다.
+  const frameMaxDepth = floodAtFrame.length
+    ? Math.max(...floodAtFrame.map((f) => Number(f.properties?.depth_min_m) || 0))
+    : null;
+  // 이 시각의 침수 면적. 등고선이 누적이라 **가장 바깥 레벨**의 합이 곧 전체 범위다
+  // (안쪽 레벨을 더하면 같은 땅을 여러 번 세게 된다). 면적은 5179에서 미리 재 둔 값이다.
+  const frameFloodM2 = (() => {
+    if (!floodAtFrame.length) return null;
+    const outer = Math.min(...floodAtFrame.map((f) => Number(f.properties?.level_m)));
+    return floodAtFrame
+      .filter((f) => Number(f.properties?.level_m) === outer)
+      .reduce((sum, f) => sum + (Number(f.properties?.area_m2) || 0), 0);
+  })();
+
+  // 화면 표시점. "8곳"은 feature 수라 눈에 보이는 것과 안 맞는다 — 한 feature가
+  // 조각 295개인 경우도 있어서, 조각 수와 누적 면적을 쓴다(둘 다 시각에 따라 는다).
+  const riskMarkers = riskMarkerPoints(reachedRisk);
+  const riskPatchCount = riskMarkers.length;
+  const riskAreaM2 = reachedRisk.reduce((sum, f) => sum + (Number(f.properties?.area_m2) || 0), 0);
+  const riskBounds = featuresBounds(reachedRisk);
+
+  // 위험영역이 새로 생기는 시각들 — 39프레임 중 6개뿐이라 표시가 없으면 어디를 봐야
+  // 할지 알 수 없다. 막대 아래에 점으로 찍는다.
+  // 범례에 쓸 한 줄 — 두 임계의 면적 차이가 크다는 걸 숫자로 보여 준다(0.0103 vs
+  // 0.2377km²). 서버가 준 값만 쓰고 화면에서 계산하지 않는다.
+  const riskLevelNote = (() => {
+    const w = timeline?.levels?.find((l) => l.level === "warning");
+    const c = timeline?.levels?.find((l) => l.level === "critical");
+    if (!w?.area_km2 || !c?.area_km2) return null;
+    return `(${w.area_km2}km² / ${c.area_km2}km²)`;
+  })();
+
+  // 탐지 시각 기준 상대 시간. "지금 보는 게 탐지 시점에서 몇 시간 뒤인가"를 못 쓰면
+  // 화면의 침수·위험영역이 **그 시각에 관측된 것**으로 읽힌다 — 전부 모형 산출물이다.
+  const detectedFrame = timeline?.markers?.detected
+    ? frames.find((f) => f.time === timeline.markers.detected)
+    : undefined;
+  const leadHours =
+    currentFrame && detectedFrame ? currentFrame.hour - detectedFrame.hour : null;
+  const leadLabel =
+    leadHours === null
+      ? null
+      : leadHours === 0
+        ? "탐지 시점"
+        : leadHours > 0
+          ? `탐지 +${leadHours}시간`
+          : `탐지 ${leadHours}시간`;
+
+  // 이 시점의 **예보 구간** — 지금 프레임에서 앞으로 무엇이 언제 오는가.
+  //
+  // 스크러버가 가리키는 시각은 "그때의 상태"인데, 그것만 보면 이 시스템이 몇 시간
+  // 앞을 내다보는 물건인지가 화면에 없다. 다음 위험영역이 언제 도달하는지, 하천이
+  // 언제 첨두에 닿는지를 함께 쓰면 그 시점에서의 예보 구간이 그대로 읽힌다.
+  const nextRiskArrival = (() => {
+    if (!currentFrame) return null;
+    const ahead = (timeline?.risk.features ?? [])
+      .map((f) => Number(f.properties?.arrival_hour))
+      .filter((h) => Number.isFinite(h) && h > currentFrame.hour);
+    if (!ahead.length) return null;
+    const hour = Math.min(...ahead);
+    return { inHours: hour - currentFrame.hour, count: ahead.filter((h) => h === hour).length };
+  })();
+
+  // 하천 첨두까지 남은 시간. **프레임 안에서 찾지 않는다** — 프레임은 7/19 14:00에서
+  // 끝나는데 실제 첨두는 16:00이라, 구간 안의 국소 최대를 첨두라고 부르면 틀린 말이 된다.
+  const floodPeakAhead = (() => {
+    const peakTime = floodSeries?.peak_time;
+    if (!peakTime || !currentFrame) return null;
+    const diffH = (Date.parse(peakTime) - Date.parse(currentFrame.time)) / 3_600_000;
+    return diffH > 0 ? Math.round(diffH) : null;
+  })();
+
+  const arrivalHours = new Set(
+    (timeline?.risk.features ?? []).map((f) => Number(f.properties?.arrival_hour))
+  );
+
+  // 재생 — 1초에 한 프레임씩. 마지막에 닿으면 자동으로 멈춘다(되감기 없음:
+  // 루프가 돌면 "지금이 언제인지"가 다시 흐려진다).
+  useEffect(() => {
+    if (!playing || frames.length === 0) return;
+    const id = setInterval(() => {
+      setFrameIdx((i) => {
+        if (i >= frames.length - 1) {
+          setPlaying(false);
+          return i;
+        }
+        return i + 1;
+      });
+    }, 900);
+    return () => clearInterval(id);
+  }, [playing, frames.length]);
+
+  // 위에서 고른 위험영역을 지도에 올린다. 계산은 이미 끝났고 여기서는 밀어넣기만 한다.
   useEffect(() => {
     if (!mapReady) return;
-    simUpdateRef.current?.(debrisDepth, floodDepth);
-  }, [mapReady, debrisDepth, floodDepth]);
+    const source = mapRef.current?.getSource("landslide-risk") as GeoJSONSource | undefined;
+    if (!source) return;
+    source.setData({ type: "FeatureCollection", features: reachedRisk } as FeatureCollection);
+    (mapRef.current?.getSource("risk-markers") as GeoJSONSource | undefined)?.setData({
+      type: "FeatureCollection",
+      features: riskMarkers,
+    } as FeatureCollection);
+
+    // 침수도 이 시각 것으로 갈아 끼운다. 시간축 자료가 없으면(floodSeries 미제공)
+    // 아래 getAlertGeojson 쪽이 채운 최대 범위를 그대로 둔다 — 여기서 비우면
+    // 시간축이 없는 지역에서 물이 통째로 사라진다.
+    if (floodSeries?.available) {
+      (mapRef.current?.getSource("flood-model") as GeoJSONSource | undefined)?.setData({
+        type: "FeatureCollection",
+        features: floodAtFrame,
+      } as FeatureCollection);
+    }
+
+    // 고립 판정은 산사태 위험영역 + 침수 범위를 함께 본다. 침수는 시간축이 없어
+    // (SFINCS 최대침수심) 프레임과 무관하게 항상 최대 범위로 들어간다.
+    // 고립 판정도 그 시각의 침수로 본다 — 시간축이 생겼으므로 "최대 범위로 고정"할
+    // 이유가 없어졌다. 자료가 없는 시각이면 최대 범위(floodFeatures)로 떨어진다.
+    const floodForIsolation = floodSeries?.available ? floodAtFrame : floodFeatures;
+    scheduleIsolationCheck([...reachedRisk, ...floodForIsolation]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 파생 배열은 매 렌더 새로 만들어지므로 currentFrame으로 건다
+  }, [mapReady, timeline, currentFrame, floodFeatures, scheduleIsolationCheck]);
 
   // 대피소 찾기 패널(EvacuationPanel)에서 고른 경로 — app/page.tsx가 상태를 끌어올려
   // route prop으로 내려주는 구조(§6.9)라, 여기서는 그 prop이 바뀔 때마다 그리기만 한다.
@@ -1265,6 +1721,103 @@ export default function MapExplorer({
   }, [mapReady, isolatedAreas]);
 
   useEffect(() => {
+    if (!mapReady) return;
+    const source = mapRef.current?.getSource("blocked-roads") as GeoJSONSource | undefined;
+    source?.setData(blockedRoads ?? { type: "FeatureCollection", features: [] });
+  }, [mapReady, blockedRoads]);
+
+  // 현재 지역 대피소 전체를 지도에 상시 표시한다(산청 8 / 강남 15).
+  useEffect(() => {
+    if (!mapReady) return;
+    const source = mapRef.current?.getSource("shelters") as GeoJSONSource | undefined;
+    if (!source) return;
+    source.setData({
+      type: "FeatureCollection",
+      features: DEMO_REGIONS[shelterRegion].shelters.map((s) => ({
+        type: "Feature",
+        geometry: { type: "Point", coordinates: [s.lon, s.lat] },
+        properties: { shelter_id: s.id, name: s.name, capacity: s.capacity },
+      })),
+    });
+  }, [mapReady, shelterRegion]);
+
+  // Module B의 실제 침수 폴리곤을 받아 3D로 세운다. 경보가 아직 등록되지 않았거나
+  // (트리거 전) 침수심 래스터가 없는 AOI면 404/빈 배열이 오는데, 그건 오류가 아니라
+  // "계산된 침수가 없음"이므로 조용히 비워 둔다 — 콘솔 에러로 올리지 않는다.
+  useEffect(() => {
+    if (!mapReady) return;
+    let cancelled = false;
+
+    getAlertGeojson(SANGCHEONG_DEMO_INPUT.alert_id)
+      .then((fc) => {
+        if (cancelled) return;
+        const source = mapRef.current?.getSource("flood-model") as GeoJSONSource | undefined;
+        if (!source) return;
+        const inundation = fc.features.filter(
+          (f) => f.properties?.kind === "inundation"
+        ) as Feature<Polygon | MultiPolygon>[];
+        source.setData({ type: "FeatureCollection", features: inundation });
+        setFloodFeatures(inundation);
+        const depths = inundation
+          .map((f) => Number(f.properties?.depth_p90_m))
+          .filter((v) => Number.isFinite(v));
+        setModelFloodDepth(depths.length ? Math.max(...depths) : null);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        const source = mapRef.current?.getSource("flood-model") as GeoJSONSource | undefined;
+        source?.setData({ type: "FeatureCollection", features: [] });
+        setFloodFeatures([]);
+        setModelFloodDepth(null);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [mapReady, alertNonce]);
+
+  // 침수 범위 안에 들어오는 건물 수 — 3D 볼륨이 건물을 덮는 게 주된 증거이고 이건
+  // 보조 지표다. 예전에는 슬라이더가 만든 what-if 폴리곤을 기준으로 셌는데, 이제는
+  // Module B가 실제로 낸 침수 폴리곤을 그대로 쓴다.
+  //
+  // 화면에 그려진 건물만 셀 수 있으므로(queryRenderedFeatures) 카메라가 멀면 과소
+  // 계수된다 — "약 N개"로 표기하는 이유다. 타일이 다 올라온 뒤에 세려고 idle을 기다린다.
+  useEffect(() => {
+    if (!mapReady) return;
+    const currentMap = mapRef.current;
+    if (!currentMap) return;
+    // 침수가 없으면 아예 세지 않는다 — 표시는 아래 floodedInRange가 null로 처리한다
+    // (effect 본문에서 setState 하면 렌더가 한 번 더 도는 것을 막기 위해 파생값으로 둠).
+    if (floodFeatures.length === 0) return;
+    let cancelled = false;
+    const count = () => {
+      if (cancelled) return;
+      try {
+        const rendered = currentMap.queryRenderedFeatures(undefined, {
+          layers: ["vworld-buildings-3d", "buildings-3d-osm"].filter((id) => currentMap.getLayer(id)),
+        });
+        const seen = new Set<string | number>();
+        let n = 0;
+        for (const f of rendered) {
+          const key = f.id ?? JSON.stringify(f.properties);
+          if (seen.has(key)) continue;
+          seen.add(key);
+          const c = centroid(f as unknown as Feature<Polygon | MultiPolygon>);
+          if (floodFeatures.some((poly) => booleanPointInPolygon(c, poly))) n++;
+        }
+        setFloodedBuildingCount(n);
+      } catch {
+        setFloodedBuildingCount(null);
+      }
+    };
+    currentMap.once("idle", count);
+    return () => {
+      cancelled = true;
+      currentMap.off("idle", count);
+    };
+  }, [mapReady, floodFeatures]);
+
+  useEffect(() => {
     if (!mapReady || !focusBbox) return;
     const currentMap = mapRef.current;
     if (!currentMap) return;
@@ -1299,6 +1852,19 @@ export default function MapExplorer({
   return (
     <div className="relative h-full min-h-[600px] w-full">
       <div ref={mapContainer} className="h-full w-full" />
+
+      {mapFailed && (
+        <div className="absolute inset-0 flex items-center justify-center bg-slate-950 p-8 text-center">
+          <div className="max-w-md space-y-2">
+            <p className="text-sm font-semibold text-slate-200">3D 지도를 표시할 수 없습니다</p>
+            <p className="text-xs text-slate-400">
+              이 브라우저·기기에서 WebGL을 쓸 수 없어 지도만 꺼졌습니다. 원격 데스크톱,
+              GPU 가속이 꺼진 환경, 일부 가상머신에서 발생합니다. 위·오른쪽 메뉴의
+              분석 패널은 그대로 사용할 수 있습니다.
+            </p>
+          </div>
+        </div>
+      )}
 
       <div className="pointer-events-none absolute inset-x-0 top-0 flex items-start justify-between p-4 pt-20">
         <div className="pointer-events-auto flex flex-col items-start gap-2">
@@ -1380,6 +1946,7 @@ export default function MapExplorer({
                     onClick={() => {
                       flyTo(loc.center, loc.zoom);
                       isolationRegionRef.current = loc.regionKey;
+                      setShelterRegion(loc.regionKey);
                       onRegionSelect?.(loc.regionKey);
                     }}
                     className="flex-1 rounded-md border border-slate-700 px-2 py-1 text-xs text-slate-300 hover:border-sky-600 hover:text-sky-300"
@@ -1392,47 +1959,106 @@ export default function MapExplorer({
           )}
         </div>
 
-        <div className="pointer-events-auto w-64 rounded-xl border border-white/15 bg-slate-950/60 p-4 text-xs shadow-lg backdrop-blur-xl">
-          <p className="font-semibold text-slate-200">토사 유실 · 침수 시뮬레이터</p>
-          <p className="mt-1 text-amber-300/70">
-            실제 예측값 아님 — Module A/B 실모델 연동 전 what-if 깊이 슬라이더 (§6 불확실성 표기 원칙, 산청 상능마을 기준).
-          </p>
+        <div className="pointer-events-auto w-72 rounded-xl border border-white/15 bg-slate-950/60 p-4 text-xs shadow-lg backdrop-blur-xl">
+          <p className="font-semibold text-slate-200">지금 지도에 올라와 있는 것</p>
+          <p className="mt-1 text-slate-400">{DEMO_REGIONS[shelterRegion].label}</p>
 
-          <div className="mt-3">
-            <div className="flex items-center justify-between">
-              <span className="text-red-300">🟥 토사 깊이</span>
-              <span className="font-mono text-slate-300">{debrisDepth.toFixed(1)}m</span>
+          {shelterRegion === "sancheong" ? (
+            <div className="mt-3 space-y-2">
+              <div className="flex items-start gap-2">
+                <span className="mt-0.5 flex shrink-0 flex-col gap-0.5">
+                  <span className="block h-3 w-3 rounded-sm" style={{ background: RISK_COLOR_RECENT }} />
+                  <span className="block h-3 w-3 rounded-sm" style={{ background: RISK_CRIT_RECENT }} />
+                </span>
+                <div>
+                  <p className="text-slate-200">산사태 위험영역 · Module A</p>
+                  <p className="text-slate-500">
+                    시각별 도달 영역. <span style={{ color: RISK_COLOR_NEW }}>주황 P≥0.5</span>(대응 시작 기준)
+                    안에 <span style={{ color: RISK_CRIT_NEW }}>빨강 P≥0.7</span>이 들어 있습니다.
+                    {riskLevelNote && <> {riskLevelNote}</>}
+                  </p>
+                  <p className="mt-0.5 text-slate-500">
+                    실제 위험영역은 <span className="text-slate-300">20~75m짜리 조각</span>이라 화면에서
+                    1픽셀도 안 됩니다 — <span className="text-slate-300">동그란 점</span>이 그 위치 표시이고,
+                    확대하면 아래에 실제 모양이 3D로 서 있습니다. 점 크기에는 뜻이 없습니다.
+                  </p>
+                  <p className="mt-0.5 text-slate-500">
+                    <span className="text-amber-300/80">높이도 표시용</span> — 토사 퇴적깊이 모형이
+                    없어 높이에 뜻이 없습니다. 0.7을 더 높게 세운 건 0.5에 가려지지 않게 하려는 것뿐입니다.
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-start gap-2">
+                <span className="mt-0.5 h-3 w-3 shrink-0 rounded-sm bg-sky-500" />
+                <div>
+                  <p className="text-slate-200">침수 범위 · Module B</p>
+                  <p className="text-slate-500">
+                    {floodSeries?.available ? (
+                      <>
+                        이 시각의 침수
+                        {frameMaxDepth !== null && <> (최심 {frameMaxDepth.toFixed(1)}m)</>}. 얕은 곳은
+                        하늘색, 깊을수록 남색입니다 — 깊이는{" "}
+                        <span className="text-slate-300">높이가 아니라 색</span>으로 표시합니다.
+                      </>
+                    ) : (
+                      <>
+                        SFINCS <span className="text-sky-300">최대</span> 침수심
+                        {modelFloodDepth !== null && <> (최심 {modelFloodDepth.toFixed(1)}m)</>} —
+                        시간축이 없어 프레임과 무관하게 항상 최대 범위입니다.
+                      </>
+                    )}
+                  </p>
+                  <p className="mt-0.5 text-slate-500">
+                    원본은 50m 격자라 그대로 그리면 셀 모서리가 계단으로 보입니다. 화면에는
+                    등수심선을 따라 다듬은 것을 올립니다 — <span className="text-slate-300">범위는
+                    원본과 IoU 0.929·면적 −0.2%</span>이고, 노출자산·고립 판정은 다듬지 않은
+                    원본으로 계산합니다.
+                  </p>
+                  {floodSeries?.available && (
+                    <p className="mt-0.5 text-amber-300/70">
+                      시각별 침수는 <span className="text-amber-200">준정적 근사</span>입니다 —
+                      SFINCS를 시각마다 다시 돌린 게 아니라, 최대침수심에서 같은 모의의{" "}
+                      {floodSeries.gauge ?? "하천"} 시간별 수위만큼 뺀 것입니다. 수면이 한 덩어리로
+                      오르내린다고 가정해 상·하류 시차가 없습니다.
+                    </p>
+                  )}
+                </div>
+              </div>
+              <div className="flex items-start gap-2">
+                <span className="mt-0.5 h-3 w-3 shrink-0 rounded-sm bg-red-600" />
+                <p className="text-slate-200">
+                  통행 불가 도로 <span className="text-slate-500">· 위험영역과 겹쳐 끊긴 구간</span>
+                </p>
+              </div>
+              <div className="flex items-start gap-2">
+                <span className="mt-0.5 h-3 w-3 shrink-0 rounded-full bg-emerald-400" />
+                <p className="text-slate-200">대피소 {DEMO_REGIONS[shelterRegion].shelters.length}곳</p>
+              </div>
             </div>
-            <input
-              type="range"
-              min={0}
-              max={4}
-              step={0.1}
-              value={debrisDepth}
-              onChange={(e) => setDebrisDepth(Number(e.target.value))}
-              className="mt-1 w-full accent-red-500"
-            />
-          </div>
-
-          <div className="mt-3">
-            <div className="flex items-center justify-between">
-              <span className="text-sky-300">🟦 침수 수위</span>
-              <span className="font-mono text-slate-300">{floodDepth.toFixed(1)}m</span>
+          ) : (
+            // 서울 강남은 건물·도로·대피소는 다 있는데 재해 모형이 없다. 빈 지도만
+            // 보여주면 "고장난 건가"로 읽히므로, 무엇이 있고 무엇이 없는지를 그 자리에 쓴다.
+            <div className="mt-3 space-y-2">
+              <p className="rounded-md bg-slate-800/60 px-2 py-1.5 text-slate-300">
+                이 지역은 <span className="text-amber-300">재해 모형 미구축</span>입니다.
+              </p>
+              <ul className="space-y-1 text-slate-400">
+                <li>○ 없음 — 산사태 위험영역(Module A 사전계산은 산청 AOI만), 침수심 래스터(SFINCS 격자 미구축)</li>
+                <li>
+                  ● 있음 — 건물·도로 3D(브이월드 실데이터), 대피소{" "}
+                  {DEMO_REGIONS[shelterRegion].shelters.length}곳, 경로 탐색, 고립 판정
+                </li>
+              </ul>
+              <p className="text-slate-500">
+                고립 분석 패널에서 위험영역을 직접 지정하면 이 지역에서도 끊긴 도로·고립 건물이 그대로
+                계산됩니다 — 없는 것은 입력이지 기능이 아닙니다.
+              </p>
             </div>
-            <input
-              type="range"
-              min={0}
-              max={5}
-              step={0.1}
-              value={floodDepth}
-              onChange={(e) => setFloodDepth(Number(e.target.value))}
-              className="mt-1 w-full accent-sky-500"
-            />
-          </div>
+          )}
 
-          {floodedBuildingCount !== null && (
+          {floodedInRange !== null && (
             <p className="mt-3 rounded-md bg-sky-950/50 px-2 py-1.5 text-sky-300">
-              침수 범위 안 건물 약 <span className="font-bold">{floodedBuildingCount}</span>개
+              침수 범위 안 건물 약 <span className="font-bold">{floodedInRange}</span>개
             </p>
           )}
           {hazardIsolatedCount !== null && (
@@ -1442,6 +2068,206 @@ export default function MapExplorer({
           )}
         </div>
       </div>
+
+      {/* 시간 스크러버 — "지금 보는 게 언제의 예측인가"를 화면에서 읽을 수 있게 하는 가장
+          중요한 요소라 가운데 아래에 넓게 깔았다. 날짜·요일·시각을 그대로 쓰고, 그 시각의
+          시간강우와 24시간 누적을 같이 보여 준다. 막대는 프레임별 시간강우이고, 우리 탐지 /
+          공식 경보 시각을 같은 줄에 적어 "언제 잡았고 공식은 언제였는지"가 한 화면에서 비교된다. */}
+      {/* 시간축은 산청 AOI의 사전계산 결과다. 서울로 옮겨 놓고 그대로 띄워 두면
+          '강남에 위험영역 2곳'처럼 읽히므로 지역이 바뀌면 내린다. */}
+      {showScrubber && timeline && currentFrame && (
+        <div className="pointer-events-none absolute inset-x-0 bottom-0 flex justify-center p-4">
+          <div className="pointer-events-auto w-full max-w-3xl rounded-xl border border-white/15 bg-slate-950/75 p-4 shadow-lg backdrop-blur-xl">
+            <div className="flex flex-wrap items-end justify-between gap-4">
+              <div>
+                <div className="flex items-center gap-2">
+                  <p className="text-[11px] uppercase tracking-wider text-slate-500">예측 시각</p>
+                  {leadLabel && (
+                    <span
+                      className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${
+                        (leadHours ?? 0) > 0
+                          ? "bg-amber-500/20 text-amber-300"
+                          : "bg-slate-700/60 text-slate-300"
+                      }`}
+                      title="에이전트가 위험을 탐지한 시각(2025-07-19 09:00) 기준"
+                    >
+                      {leadLabel}
+                    </span>
+                  )}
+                </div>
+                <p className="font-mono text-2xl font-bold text-slate-100">{frameLabel(currentFrame.time)}</p>
+                {/* 이 시점에서 앞으로 무엇이 언제 오는지 — "몇 시간 뒤를 내다보는가" */}
+                <p className="mt-0.5 text-[11px] text-slate-400">
+                  {nextRiskArrival || floodPeakAhead !== null ? (
+                    <>
+                      이 시점 예보 구간 ·{" "}
+                      {nextRiskArrival && (
+                        <span className="text-orange-300">
+                          +{nextRiskArrival.inHours}시간 뒤 위험영역 {nextRiskArrival.count}곳 추가
+                        </span>
+                      )}
+                      {nextRiskArrival && floodPeakAhead !== null && " · "}
+                      {floodPeakAhead !== null && (
+                        <span className="text-sky-300">+{floodPeakAhead}시간 뒤 하천 첨두</span>
+                      )}
+                    </>
+                  ) : (
+                    <span className="text-slate-500">이 시점 이후 추가 도달 없음 (첨두 지남)</span>
+                  )}
+                </p>
+              </div>
+              <div className="flex items-end gap-4 text-right">
+                <div>
+                  <p className="text-[11px] text-slate-500">시간강우 <span className="text-emerald-400/70">실측</span></p>
+                  <p className="font-mono text-lg text-sky-300">{currentFrame.rn_mm.toFixed(1)}mm</p>
+                </div>
+                <div>
+                  <p className="text-[11px] text-slate-500">24h 누적 <span className="text-emerald-400/70">실측</span></p>
+                  <p className="font-mono text-lg text-sky-200">{currentFrame.cum24_mm.toFixed(0)}mm</p>
+                </div>
+                {frameFloodM2 !== null && (
+                  <div>
+                    <p className="text-[11px] text-slate-500">침수 <span className="text-sky-400/70">모형</span></p>
+                    <p className="font-mono text-lg text-sky-400">
+                      {(frameFloodM2 / 10_000).toFixed(0)}ha
+                      {frameMaxDepth !== null && (
+                        <span className="ml-1 text-xs text-sky-300/70">최심 {frameMaxDepth.toFixed(1)}m</span>
+                      )}
+                    </p>
+                  </div>
+                )}
+                <div>
+                  <p className="text-[11px] text-slate-500">위험영역 <span className="text-sky-400/70">모형</span></p>
+                  <p className="font-mono text-lg text-orange-400">
+                    {riskPatchCount}곳
+                    <span className="ml-1 text-xs text-orange-300/70">
+                      {riskAreaM2 >= 10_000
+                        ? `${(riskAreaM2 / 10_000).toFixed(1)}ha`
+                        : `${Math.round(riskAreaM2)}m²`}
+                    </span>
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            {/* 시간강우 막대 — 클릭하면 그 시각으로 점프한다 */}
+            <div className="mt-3 flex h-12 items-end gap-[2px]">
+              {frames.map((f, i) => (
+                <button
+                  key={f.time}
+                  onClick={() => {
+                    setPlaying(false);
+                    setFrameIdx(i);
+                  }}
+                  title={`${frameLabel(f.time)} · ${f.rn_mm.toFixed(1)}mm`}
+                  aria-label={`${frameLabel(f.time)}로 이동`}
+                  className="group relative h-full flex-1"
+                >
+                  <span
+                    className={`absolute bottom-0 block w-full rounded-sm transition-colors ${
+                      i === frameIdx
+                        ? "bg-amber-300"
+                        : i < frameIdx
+                          ? "bg-sky-500/70 group-hover:bg-sky-400"
+                          : "bg-slate-700 group-hover:bg-slate-500"
+                    }`}
+                    style={{ height: `${Math.max((f.rn_mm / maxFrameRain) * 100, 4)}%` }}
+                  />
+                  {/* 이 시각에 위험영역이 새로 생긴다 — 39개 중 6개뿐이라 이 표시가
+                      없으면 어느 시각을 봐야 하는지 알 수 없다 */}
+                  {arrivalHours.has(f.hour) && (
+                    <span className="absolute -bottom-1.5 left-1/2 block h-1.5 w-1.5 -translate-x-1/2 rounded-full bg-orange-400" />
+                  )}
+                </button>
+              ))}
+            </div>
+
+            <input
+              type="range"
+              min={0}
+              max={frames.length - 1}
+              step={1}
+              value={frameIdx}
+              onChange={(e) => {
+                setPlaying(false);
+                setFrameIdx(Number(e.target.value));
+              }}
+              aria-label="예측 시각 이동"
+              className="mt-2 w-full accent-amber-400"
+            />
+
+            <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-xs">
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => setPlaying((v) => !v)}
+                  className="rounded-md border border-slate-700 px-3 py-1 text-slate-200 hover:border-amber-500 hover:text-amber-300"
+                >
+                  {playing ? "❚❚ 정지" : "▶ 시간 재생"}
+                </button>
+                <button
+                  onClick={() => {
+                    setPlaying(false);
+                    setFrameIdx(0);
+                  }}
+                  className="rounded-md border border-slate-700 px-2 py-1 text-slate-400 hover:text-slate-200"
+                >
+                  ↺ 처음
+                </button>
+                <button
+                  onClick={() => {
+                    if (!riskBounds) return;
+                    mapRef.current?.fitBounds(riskBounds, {
+                      padding: 160,
+                      pitch: DEFAULT_PITCH,
+                      bearing: -20,
+                      duration: 1600,
+                      maxZoom: 15.5,
+                    });
+                  }}
+                  disabled={!riskBounds}
+                  className="rounded-md border border-orange-700/60 px-2 py-1 text-orange-300 hover:border-orange-500 hover:text-orange-200 disabled:cursor-not-allowed disabled:border-slate-800 disabled:text-slate-600"
+                  title={riskBounds ? "이 시각의 위험영역이 다 들어오게 카메라를 옮긴다" : "이 시각에는 위험영역이 없다"}
+                >
+                  ⤢ 위험영역으로
+                </button>
+              </div>
+              <div className="flex items-center gap-3 text-[11px] text-slate-400">
+                <span>
+                  🟡 우리 탐지 <span className="font-mono text-amber-300">{hhmm(timeline.markers.detected)}</span>
+                </span>
+                <span>
+                  📨 발송 <span className="font-mono text-slate-300">{hhmm(timeline.markers.alert_sent)}</span>
+                </span>
+                <span>
+                  🏛 공식 경보{" "}
+                  <span className="font-mono text-slate-300">{hhmm(timeline.markers.official_warning)}</span>
+                </span>
+              </div>
+            </div>
+
+            <p className="mt-2 text-[11px] text-slate-500">
+              지도의 <span className="text-slate-400">침수·위험영역은 그 시각의 모형 산출</span>이지
+              그 시각에 관측된 피해 범위가 아닙니다. 실측은 강우뿐이고(막대·누적), 모형은 그
+              강우를 받아 돌아갑니다 — 2025.7.19 산청 사례를 실제 강우로 재현한 것이라
+              사후 재현(hindcast)이며 실시간 예보 성능과는 다릅니다.
+              {" "}트랙① 위험영역 {timeline.scenario} {timeline.level}.{" "}
+              {floodSeries?.available
+                ? "침수는 SFINCS 최대침수심에 같은 모의의 하천 수위 시계열을 적용한 준정적 근사입니다."
+                : "침수는 시간축이 없어 최대 범위로 고정됩니다."}
+            </p>
+          </div>
+        </div>
+      )}
+
+      {!showScrubber && (
+        <div className="pointer-events-none absolute inset-x-0 bottom-0 flex justify-center p-4">
+          <p className="pointer-events-auto rounded-lg border border-white/10 bg-slate-950/75 px-3 py-2 text-xs text-slate-400 backdrop-blur-xl">
+            {shelterRegion !== "sancheong"
+              ? "시간축 없음 — 시각별 위험영역은 산청 AOI만 사전계산돼 있습니다"
+              : (timelineError ?? `시간축 없음 — ${timeline?.reason ?? "시계열 위험영역 레이어가 없습니다"}`)}
+          </p>
+        </div>
+      )}
     </div>
   );
 }

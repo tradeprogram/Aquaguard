@@ -1,0 +1,24 @@
+{
+  "eval": "공통 50m격자·동일 SAR·HAND<5m 평가역",
+  "obs_flood_km2": 5.75,
+  "ANUGA_v1": {
+    "IoU": 0.359,
+    "F1": 0.529,
+    "POD": 0.676,
+    "FAR": 0.566,
+    "precision": 0.434,
+    "flood_km2": 8.94,
+    "WSE_rmse_m": 2.48,
+    "WSE_peak_m": 97.02
+  },
+  "SFINCS": {
+    "IoU": 0.363,
+    "F1": 0.533,
+    "POD": 0.664,
+    "FAR": 0.555,
+    "precision": 0.445,
+    "flood_km2": 8.57,
+    "WSE_rmse_m": 1.42,
+    "WSE_peak_m": 93.31
+  }
+}
