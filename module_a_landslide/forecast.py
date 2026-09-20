@@ -109,6 +109,7 @@ def time_to_critical(
     rain_24h_mm: float | None,
     api_index: float | None,
     dc_kr: str,
+    m0: float | None,
     strength: dict,
     z_soil_depth_m: float,
     slope_deg: float,
@@ -135,7 +136,8 @@ def time_to_critical(
     for h, rain_h in enumerate(future_rain_1h_mm, start=1):
         window.append(rain_h)                    # 24h 이동창: 가장 오래된 시간이 빠진다
         cum24 = float(sum(window))
-        m = _params.wetness_from_rainfall(api_index, cum24, dc_kr, strength["ksat_m_s"])
+        m = _params.wetness_from_rainfall(api_index, cum24, dc_kr,
+                                          strength["ksat_m_s"], m0=m0)
         fos_t = _fos.factor_of_safety(slope_deg, strength["c_kpa"], strength["phi_deg"],
                                       strength["gamma_kn_m3"], z_soil_depth_m, m, cr_eff_kpa)
         prob_t = _fos.fos_to_probability(fos_t)

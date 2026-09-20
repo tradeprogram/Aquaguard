@@ -39,6 +39,7 @@ import numpy as np
 import pandas as pd
 import rasterio
 from rasterio.features import rasterize
+from scipy.ndimage import binary_dilation, maximum_filter
 from shapely.geometry import Point, box
 from sklearn.metrics import average_precision_score, roc_auc_score
 
@@ -119,6 +120,81 @@ def metrics(y: np.ndarray, s: np.ndarray) -> dict:
     }
 
 
+
+# --- 상류사면 집계 (4차 작업지시서 P0) -------------------------------------
+#
+# 안동 사전검증에서 같은 모형·같은 데이터로 집계 단위만 "그 지점"에서 "그 지점 위쪽
+# 사면"으로 바꿨더니 AUC 가 0.408 → 0.597 로 올랐다(05_fos_upslope_buffer.py).
+# 이유: 산사태 기록 좌표는 발생부(급사면)가 아니라 피해가 난 계곡·마을이다. 그 마을을
+# 위협하는 사면은 위쪽에 있고, 1km 격자를 벗어나 옆 격자에 있을 수도 있다.
+# 산청 평가(이 스크립트)에는 그 보정이 빠져 있었다 — 여기서 넣는다.
+#
+# 흐름 라우팅은 20m 로 낮춰서 돈다. 5m 47M 셀을 표고순으로 파이썬 루프 돌리면 수십 분
+# 걸리는데, "어느 1km 격자가 상류 불안정셀을 받는가"를 가리는 데는 20m 로 충분하다.
+FLOW_RES_FACTOR = 4          # 5m → 20m
+BUFFER_M = 200.0             # 안동에서 쓴 값 그대로
+
+
+def _block_any(mask, f):
+    h, w = (mask.shape[0] // f) * f, (mask.shape[1] // f) * f
+    return mask[:h, :w].reshape(h // f, f, w // f, f).any(axis=(1, 3))
+
+
+def _block_max(arr, f):
+    h, w = (arr.shape[0] // f) * f, (arr.shape[1] // f) * f
+    return np.nanmax(arr[:h, :w].reshape(h // f, f, w // f, f), axis=(1, 3))
+
+
+def buffer_score(crit, steep, zones, n_cells, radius_m, cell_m=5.0):
+    """(a) 반경 버퍼 — 격자 경계에서 radius_m 안에 불안정 셀이 있으면 그 격자도 위험.
+
+    안동에서 효과가 입증된 거친 하한선. 형태학적 팽창 한 번이면 끝난다.
+    """
+    r = int(round(radius_m / cell_m))
+    dil = binary_dilation(crit, structure=np.ones((3, 3), bool), iterations=r)
+    num = np.bincount(zones[dil & steep], minlength=n_cells + 1)[1:]
+    den = np.bincount(zones[steep], minlength=n_cells + 1)[1:]
+    return num / np.maximum(den, 1)
+
+
+def flow_upslope_score(dem, crit, zones, n_cells, f=FLOW_RES_FACTOR):
+    """(b) D8 흐름누적 — 불안정 셀을 사면 아래로 흘려보내 어느 격자가 받는지 센다.
+
+    새 의존성 없이 numpy 로 D8 을 직접 짠다(richdem·pysheds·whitebox 미설치, 배포
+    안전성 우선 — 4차 지시서 권고). 표고 내림차순 1패스면 O(n) 이다.
+    """
+    d = _block_max(dem.astype("float64"), f)
+    c = _block_any(crit, f)
+    zc = zones[::f, ::f][:d.shape[0], :d.shape[1]]
+    H, W = d.shape
+
+    # D8 수용 셀: 8이웃 중 경사낙차가 가장 큰 곳
+    recv = np.full(H * W, -1, dtype=np.int64)
+    best = np.zeros((H, W))
+    for dr, dc, dist in ((-1,-1,2**0.5),(-1,0,1),(-1,1,2**0.5),(0,-1,1),
+                         (0,1,1),(1,-1,2**0.5),(1,0,1),(1,1,2**0.5)):
+        drop = (d - np.roll(np.roll(d, -dr, 0), -dc, 1)) / dist
+        upd = np.isfinite(drop) & (drop > best)
+        best[upd] = drop[upd]
+        idx = (np.arange(H)[:, None] + dr) * W + (np.arange(W)[None, :] + dc)
+        recv.reshape(H, W)[upd] = idx[upd]
+
+    # 불안정 셀 1개씩을 하류로 흘려보내 누적
+    acc = c.ravel().astype("float64").copy()
+    for i in np.argsort(d.ravel())[::-1]:
+        j = recv[i]
+        if 0 <= j < H * W:
+            acc[j] += acc[i]
+    acc = acc.reshape(H, W)
+
+    # 격자별 최대 상류기여 (합이 아니라 최대 — 한 계곡이 받는 최대량이 위협 크기)
+    out = np.zeros(n_cells)
+    flat_z, flat_a = zc.ravel(), acc.ravel()
+    sel = flat_z > 0
+    np.maximum.at(out, flat_z[sel] - 1, flat_a[sel])
+    return out
+
+
 def main() -> None:
     print("래스터 적재 중...")
     steep, crit, tr, crs, shape = crit_mask()
@@ -141,6 +217,12 @@ def main() -> None:
     grid["임계px"] = n_crit
     grid["점수"] = np.where(n_steep > 0, n_crit / np.maximum(n_steep, 1), 0.0)
 
+    print(f"상류사면 집계 중 (버퍼 {BUFFER_M:.0f}m · D8 {5*FLOW_RES_FACTOR}m)...", flush=True)
+    grid["점수_버퍼"] = buffer_score(crit, steep, zones, len(grid), BUFFER_M)
+    dem, _, _, _ = _read(ROOT / "data" / "dem" / "산청_dem_5m_5179.tif")
+    grid["점수_흐름"] = flow_upslope_score(dem, crit, zones, len(grid))
+    del dem
+
     # 라벨: 2025 산사태 리 중심점 포함 여부
     ri = pd.read_csv(OUT / "sancheong_ri_validation.csv")
     pts = gpd.GeoDataFrame(ri, geometry=[Point(xy) for xy in zip(ri["lon"], ri["lat"])],
@@ -159,7 +241,32 @@ def main() -> None:
     y = ev["y"].to_numpy(int)
     s = ev["점수"].to_numpy(float)
 
-    results = {"a_전체": metrics(y, s)}
+    # --- 집계 기하 3종 비교 (4차 지시서 P0 완료기준) ---
+    print("")
+    print("=== 집계 기하별 비교 (같은 모형·같은 라벨, 점수 정의만 다름) ===")
+    geom_cmp = {}
+    for tag, col in (("점_평가", "점수"), (f"버퍼{BUFFER_M:.0f}m", "점수_버퍼"),
+                     ("흐름누적D8", "점수_흐름")):
+        sc = ev[col].to_numpy(float)
+        m_all = metrics(y, sc)
+        loo = []
+        for nm in sorted(ev["읍면"].unique()):
+            mk = (ev["읍면"] == nm).to_numpy()
+            mm = metrics(y[mk], sc[mk])
+            if mm["AUPRC"] is not None:
+                loo.append(mm["AUPRC"])
+        geom_cmp[tag] = {"전체": m_all,
+                         "읍면LOO_AUPRC_중앙값": round(float(np.median(loo)), 4) if loo else None,
+                         "읍면수": len(loo)}
+        print(f"  {tag:12s} AUPRC {m_all['AUPRC']}  ROC-AUC {m_all['ROC_AUC']}  "
+              f"lift {m_all['lift']}  |  읍면LOO 중앙값 {geom_cmp[tag]['읍면LOO_AUPRC_중앙값']}")
+    _base = geom_cmp["점_평가"]["전체"]["ROC_AUC"]
+    for tag in geom_cmp:
+        a = geom_cmp[tag]["전체"]["ROC_AUC"]
+        geom_cmp[tag]["ROC_AUC_점평가대비"] = (None if (a is None or _base is None)
+                                            else round(a - _base, 4))
+
+    results = {"a_전체": metrics(y, s), "집계기하_비교": geom_cmp}
     print(f"\n(a) 전체(낙관적 상한): {results['a_전체']}")
 
     # (b) 무작위 5-fold
@@ -210,7 +317,7 @@ def main() -> None:
     }
     print(f"\n(d) 이벤트 분할: 2023 {n23}건 / 2025 {n25}건 → 통계적으로 성립하지 않음")
 
-    ev[["읍면", "급사면px", "임계px", "점수", "산사태건수", "y"]].to_csv(
+    ev[["읍면", "급사면px", "임계px", "점수", "점수_버퍼", "점수_흐름", "산사태건수", "y"]].to_csv(
         OUT / "backtest_eval_grid.csv", index=False, encoding="utf-8-sig")
 
     summary = {

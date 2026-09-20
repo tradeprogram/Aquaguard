@@ -10,7 +10,7 @@ import json
 from pathlib import Path
 
 import module_a_landslide as A
-from module_a_landslide import forecast
+from module_a_landslide import envelope as _env, forecast
 
 ROOT = Path(__file__).resolve().parents[2]
 EXAMPLE = json.loads((ROOT / "contracts" / "module_a.example.json").read_text(encoding="utf-8"))
@@ -19,8 +19,13 @@ EXAMPLE = json.loads((ROOT / "contracts" / "module_a.example.json").read_text(en
 # FoS≈1.9라 도달시각이 영영 안 나와서 이 테스트의 대상이 아니다(물리대로).
 SANDY = {"texture_kr": "사질", "ad_kr": "50-100", "dc_kr": "약간양호"}
 
+# 기준 경사 30°: 이 조합의 무강우 기저 prob 이 0.348 로 임계(CRITICAL_PROB=0.5) 아래라
+# "예보를 넣어야 비로소 도달한다"를 시험할 수 있다. 35°는 기저 0.587 로 이미 임계를
+# 넘어 htc 가 항상 0 이 되어 예보 로직을 못 시험한다. (임계 재유도로 바뀐 값)
+BASE_SLOPE = 30.0
 
-def _input(slope=35.0, rain=None, soil=SANDY, api=0.3, cum24=20.0, source="observed"):
+
+def _input(slope=BASE_SLOPE, rain=None, soil=SANDY, api=0.3, cum24=20.0, source="observed"):
     i = json.loads(json.dumps(EXAMPLE["input"]))
     i["static"]["slope_deg"] = slope
     i["dynamic"]["api_index"] = api
@@ -68,7 +73,7 @@ def test_already_critical_returns_zero():
     """현재 이미 임계 초과면 0.0 — 미래를 볼 것도 없다."""
     out = A.run(_input(slope=45.0, rain=[30.0] * 6, api=1.0, cum24=300.0))
     d = out["data"]
-    if d["landslide_prob"] >= 0.7:
+    if d["landslide_prob"] >= _env.CRITICAL_PROB:
         assert d["hours_to_critical"] == 0.0
 
 

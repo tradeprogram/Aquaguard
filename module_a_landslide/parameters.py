@@ -47,15 +47,39 @@ def wetness_baseline(dc_kr: str) -> float:
     return bundle()["drainage_wetness_DC"].get(dc_kr, 0.30)
 
 
+def strength_from_raw(soil: dict) -> dict | None:
+    """_soil 에 토성 카테고리 대신 원시 지반정수가 직접 들어온 경우.
+
+    토양도 격자(soil_sampler)는 픽셀별 c'·φ'·γ 를 그대로 갖고 있어서 8개 토성
+    카테고리로 되돌릴 이유가 없다. 풍화화강토처럼 토성표에 없는 재료도 그대로
+    넣을 수 있다. Ksat 은 강우→포화 민감도에만 쓰이므로 없으면 중간값으로 둔다.
+    """
+    if soil.get("c_kpa") is None or soil.get("phi_deg") is None:
+        return None
+    try:
+        return {
+            "c_kpa": float(soil["c_kpa"]),
+            "phi_deg": float(soil["phi_deg"]),
+            "gamma_kn_m3": float(soil.get("gamma_kn_m3", 18.5)),
+            "ksat_m_s": float(soil.get("ksat_m_s", 1e-6)),
+            "provenance": soil.get("provenance", "MEASURED"),
+            "source": soil.get("source", "원시 지반정수 직접 주입(_soil)"),
+        }
+    except (TypeError, ValueError):
+        return None
+
+
 def wetness_from_rainfall(api_index: float | None, rain_24h_mm: float | None,
-                          dc_kr: str, ksat_m_s: float) -> float:
+                          dc_kr: str, ksat_m_s: float, m0: float | None = None) -> float:
     """선행습윤 기저값(배수등급) + 강우 기여로 동적 습윤도 m 추정(0~1).
 
     m = clip( m0(배수) + api_index_기여 + 24h강우 기여, 0, 1 ).
     강우→포화 반응은 Ksat이 낮을수록(배수 나쁠수록) 민감. 구조는 물리 근거이나
     계수는 산청 백테스트로 보정 예정 → provenance MODEL(미보정). 근거 §5, §9.3.
+
+    m0 를 직접 주면(격자 샘플러) 배수등급 룩업 대신 그 값을 기저로 쓴다.
     """
-    m0 = wetness_baseline(dc_kr)
+    m0 = wetness_baseline(dc_kr) if m0 is None else max(0.0, min(float(m0), 1.0))
     api_term = 0.0 if api_index is None else 0.25 * max(0.0, min(api_index, 1.0))
     # 24h 강우: 200mm에서 포화 근접. Ksat 낮으면 계수↑(1e-6 기준 정규화, 상한)
     if rain_24h_mm is None:
