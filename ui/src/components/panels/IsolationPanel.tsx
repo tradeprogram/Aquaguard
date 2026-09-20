@@ -1,20 +1,25 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { checkIsolation, type IsolationCheckResult } from "@/lib/api";
+import { checkIsolation, getSnapshotIsolation, type IsolationCheckResult } from "@/lib/api";
 import { diagnoseFailure } from "@/lib/backendDiagnosis";
 import { DEMO_REGIONS, DEFAULT_REGION, type RegionKey } from "@/lib/demoShelters";
 
-// §7(독창성 축 4) — 도로망 그래프에서 위험 구간을 제거한 뒤 대피소까지 도달 가능한
+// §7 — 도로망 그래프에서 위험 구간을 제거한 뒤 대피소까지 도달 가능한
 // 경로가 하나도 안 남는 건물을 찾는다. module_e_routing/isolation.py가 VWorld
 // 도로망(LT_L_MOCTLINK)·건물(LT_C_SPBD) 실데이터로 networkx 그래프를 만들어 계산한다.
 // 대피소 목록·bbox는 lib/demoShelters.ts 지역별 공통 정의(EvacuationPanel·MapExplorer와 동일).
 
 // "위험 시나리오 적용" 버튼용 데모 지오메트리 — bbox 한가운데를 세로로 가르는 좁고 긴
 // 폴리곤(진입로가 끊긴 상황을 흉내). 지역마다 bbox 위치가 다르므로 고정 좌표 대신
-// 현재 지역의 bbox에서 매번 계산한다 — 실제 침수·토사 슬라이더 값은 MapExplorer.tsx가
-// 자동으로 /isolation-check에 넘긴다(이 버튼은 슬라이더 없이도 화면 단독으로 테스트해볼
-// 수 있게 남겨둔 수동 트리거).
+// 현재 지역의 bbox에서 매번 계산한다.
+//
+// scripts/build_demo_snapshot.py의 _demo_hazard가 **같은 식**으로 이 폴리곤을 만든다
+// (폭 = 경도폭의 2%). 한쪽만 고치면 저장본이 안 맞아 매번 다시 계산하게 되므로 같이 고칠 것.
+//
+// 지도의 실제 위험영역(시각별 산사태 + 침수)은 MapExplorer.tsx가 시간 스크러버에
+// 맞춰 자동으로 /isolation-check에 넘긴다 — 이 버튼은 그것과 별개로, 이 화면만으로
+// 빠르게 확인해볼 수 있는 수동 시나리오다.
 function buildDemoHazard(bbox: [number, number, number, number]): GeoJSON.Polygon {
   const [minLon, minLat, maxLon, maxLat] = bbox;
   const midLon = (minLon + maxLon) / 2;
@@ -89,7 +94,14 @@ export default function IsolationPanel({
     setLoading(applyHazard);
     setError(null);
     try {
-      const r = await checkIsolation(isolationBbox, shelterLonLat, applyHazard ? buildDemoHazard(isolationBbox) : undefined);
+      // 사전계산본이 있으면 그걸 쓴다(같은 bbox·같은 대피소 수일 때만).
+      const r =
+        (await getSnapshotIsolation(key, isolationBbox, shelterLonLat.length)) ??
+        (await checkIsolation(
+          isolationBbox,
+          shelterLonLat,
+          applyHazard ? buildDemoHazard(isolationBbox) : undefined
+        ));
       onCache?.(key, r);
       onShownChange?.(key);
       onResult?.(r);
@@ -105,7 +117,7 @@ export default function IsolationPanel({
   };
 
   // 패널을 다시 열면 목록은 캐시에서 바로 복원되지만 지도 레이어는 그렇지 않다 —
-  // onResult 는 run() 안에서만 불리기 때문이다. 그사이 슬라이더가 같은 레이어를
+  // onResult 는 run() 안에서만 불리기 때문이다. 그사이 시간 스크러버가 같은 레이어를
   // 덮어썼을 수도 있어서, 보여주는 조합이 바뀔 때마다 지도에 한 번 다시 밀어준다.
   const pushedRef = useRef<IsolationCacheKey | null>(null);
   useEffect(() => {
@@ -121,9 +133,9 @@ export default function IsolationPanel({
   return (
     <div className="space-y-4 text-sm">
       <p className="text-xs text-slate-400">
-        §7(독창성 축 4) — &ldquo;물이 여기까지 찼다&rdquo;가 아니라 &ldquo;이 마을은
-        이제 대피소로 가는 길이 하나도 안 남았다&rdquo;를 실제 도로망 그래프 연결성
-        분석으로 증명한다. VWorld 실도로·실건물 데이터 기반 실계산이다(개념 미리보기 아님).
+&ldquo;물이 여기까지 찼다&rdquo;가 아니라 &ldquo;이 마을은 이제 대피소로 가는 길이
+        하나도 안 남았다&rdquo;를 실제 도로망 그래프 연결성 분석으로 증명한다.
+        VWorld 실도로·실건물 데이터 기반 실계산이다.
       </p>
 
       <div className="flex gap-2">
@@ -216,12 +228,12 @@ export default function IsolationPanel({
       )}
 
       <div className="rounded-xl border border-white/10 bg-white/5 p-3 text-xs text-slate-400">
-        지도 위 마젠타 영역이 고립 구역이다. 지금은 {DEMO_REGIONS[region].label} 데모
-        지역·고정 대피소 {shelters.length}곳 기준. 지도 오른쪽 위 침수·토사 슬라이더를
-        움직이면 그 값 기준으로 자동으로도 재계산된다 — 이 버튼은 슬라이더 없이 이
-        화면만으로 빠르게 테스트해볼 수 있는 별도 데모 시나리오다.
-        한 번 계산한 조합은 저장해두므로, 패널을 닫았다 열거나 두 시나리오를 오가도
-        다시 기다리지 않는다(지역을 바꾸면 그 지역 것을 따로 계산한다).
+        지도 위 마젠타 영역이 고립 구역이다. {DEMO_REGIONS[region].label} 대피소{" "}
+        {shelters.length}곳 기준. 시간 스크러버를 움직이면 그 시각의 침수·산사태 위험영역
+        기준으로 지도 쪽에서 자동으로도 재계산된다 — 이 버튼은 그것과 별개로 이 화면만으로
+        빠르게 확인해보는 수동 시나리오다.
+        한 번 계산한 결과는 저장해두므로 패널을 닫았다 열거나 두 시나리오를 오가도
+        다시 기다리지 않는다.
       </div>
     </div>
   );

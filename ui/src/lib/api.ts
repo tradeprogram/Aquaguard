@@ -105,6 +105,28 @@ export async function getDemoEnvelope(): Promise<ModuleOEnvelope | null> {
   return fetchDemoAsset<ModuleOEnvelope>("envelope.json");
 }
 
+// 사전계산된 고립 분석. 도로망 그래프를 세우고 연결성을 푸는 계산이라 화면에서 누르면
+// 수십 초가 걸린다(산청 8초, 강남은 77초였다) — 입력이 고정이면 결과도 고정이다.
+//
+// **bbox가 다르면 쓰지 않는다.** 산청을 군 전체로 넓히는 작업이 진행 중이라 범위가
+// 바뀔 텐데, 그때 저장본을 그대로 쓰면 화면이 다른 범위의 고립 결과를 보여주게 된다.
+// 안 맞으면 null을 돌려주고 호출부가 실제로 계산한다 — 느려질 뿐 틀리지는 않는다.
+export async function getSnapshotIsolation(
+  key: string,
+  bbox: [number, number, number, number],
+  shelterCount: number
+): Promise<IsolationCheckResult | null> {
+  const all = await fetchDemoAsset<
+    Record<string, { bbox: number[]; shelter_count: number; result: IsolationCheckResult }>
+  >("isolation.json");
+  const entry = all?.[key];
+  if (!entry) return null;
+  const sameBbox =
+    entry.bbox.length === 4 && entry.bbox.every((v, i) => Math.abs(v - bbox[i]) < 1e-6);
+  if (!sameBbox || entry.shelter_count !== shelterCount) return null;
+  return entry.result;
+}
+
 export async function triggerAlert(input: TriggerInput): Promise<ModuleOEnvelope> {
   const res = await fetch(`${API_BASE}/alerts/trigger`, {
     method: "POST",

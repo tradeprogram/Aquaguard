@@ -45,7 +45,7 @@ const PANEL_TITLE: Record<Mode, Partial<Record<PanelKey, string>>> = {
   citizen: {
     dashboard: "우리 동네 위험 현황",
     evacuation: "대피소 찾기",
-    isolation: "고립마을 위험 (독창성 축 4)",
+    isolation: "고립마을 위험",
   },
   gov: {
     dashboard: "아쿠아가드 골든타임 대시보드",

@@ -205,6 +205,8 @@ def build(verbose: bool = True) -> dict:
     except ImportError:
         pass
 
+    isolation = build_isolation(verbose=verbose)
+
     return {
         "schema": 1,
         "alert_id": payload["alert_id"],
@@ -219,6 +221,7 @@ def build(verbose: bool = True) -> dict:
         "flood_display": flood_display,
         "flood_display_meta": flood_stats,
         "flood_series": flood_series,
+        "isolation": isolation,
         "risk_display": risk_display,
         "정직성": [
             "envelope 은 orchestrator.run() 이 낸 값 그대로다 — 손으로 고친 값이 없다.",
@@ -276,6 +279,7 @@ def write_ui_copies(snapshot: dict, verbose: bool = True) -> None:
         "envelope.json": envelope,
         "geojson.json": {"type": "FeatureCollection",
                          "features": snapshot["flood_display"]["features"]},
+        "isolation.json": snapshot.get("isolation") or {},
         "timeline.json": {"frames": snapshot.get("frames") or [],
                           "markers": markers,
                           "flood_series": snapshot["flood_series"],
@@ -288,6 +292,106 @@ def write_ui_copies(snapshot: dict, verbose: bool = True) -> None:
             json.dump(payload, f, ensure_ascii=False, separators=(",", ":"))
         if verbose:
             print(f"  ui/public/demo/{name}  {path.stat().st_size / 1e6:.2f}MB")
+
+
+# 고립 분석 — 지역 x 시나리오 네 가지를 미리 돌려 둔다.
+#
+# 이 계산은 VWorld에서 도로망과 건물을 bbox 타일로 나눠 받아 networkx 그래프를 세운
+# 다음 연결성을 푸는 것이라, 화면에서 누르면 한참 걸린다. 입력(지역 bbox·대피소·
+# 시나리오 지오메트리)이 전부 고정이므로 결과도 고정이다 — 매번 다시 풀 이유가 없다.
+#
+# 시나리오 지오메트리는 화면(IsolationPanel)이 쓰는 것과 **같은 식**으로 만들어야 한다.
+# 다르면 화면이 저장본을 못 찾고 조용히 다시 계산한다.
+# 2026-09-21 예선 제출 계획 변경: 강남·서초는 빼고 산청군 전체로 넓히는 쪽으로 갔다
+# (고립마을 위험·대피소 찾기, 김동현 작업 중). 여기서 강남을 같이 구우면 150초를
+# 더 쓰면서 쓰이지도 않는다.
+ISOLATION_REGIONS = ("sancheong",)
+
+
+def _demo_hazard(bbox):
+    """bbox 한가운데를 세로로 가르는 좁고 긴 폴리곤 — 진입로가 끊긴 상황.
+
+    IsolationPanel.tsx의 buildDemoHazard와 같은 식이다(폭 = 경도폭의 2%).
+    한쪽만 바꾸면 저장본 키가 어긋나므로 같이 고칠 것.
+    """
+    min_lon, min_lat, max_lon, max_lat = bbox
+    mid = (min_lon + max_lon) / 2
+    half = (max_lon - min_lon) * 0.02
+    return {
+        "type": "Polygon",
+        "coordinates": [[
+            [mid - half, min_lat], [mid + half, min_lat],
+            [mid + half, max_lat], [mid - half, max_lat], [mid - half, min_lat],
+        ]],
+    }
+
+
+def _read_demo_regions() -> dict:
+    """ui/src/lib/demoShelters.ts 에서 지역별 bbox·대피소를 읽는다.
+
+    TS를 파싱하는 건 깨지기 쉽지만, 지역 정의를 파이썬에 따로 적어 두면 둘이 어긋날 때
+    화면과 저장본이 **다른 지역을 계산**하게 된다 — 그쪽이 더 나쁘다. 대신 읽어낸
+    개수를 아래에서 검증해서, 형식이 바뀌면 조용히 넘어가지 않고 경고를 낸다.
+    """
+    import re
+
+    source = (REPO_ROOT / "ui" / "src" / "lib" / "demoShelters.ts").read_text(encoding="utf-8")
+    # 각 지역 블록: "  key: {" ~ "  }," (다음 지역 시작 전까지)
+    regions: dict = {}
+    for match in re.finditer(r"^  (\w+): \{$(.*?)^  \},$", source, re.S | re.M):
+        key, body = match.group(1), match.group(2)
+        bbox_match = re.search(r"isolationBbox: \[([^\]]+)\]", body)
+        if not bbox_match:
+            continue
+        bbox = tuple(float(v) for v in bbox_match.group(1).split(","))
+        shelters = [
+            (float(lon), float(lat))
+            for lon, lat in re.findall(r"lon: (-?[\d.]+), lat: (-?[\d.]+)", body)
+        ]
+        if len(bbox) == 4 and shelters:
+            regions[key] = {"bbox": bbox, "shelters": shelters}
+    return regions
+
+
+# 읽기가 성공했는지 확인할 기준값 — 이 숫자가 바뀌면 지역 정의가 바뀐 것이므로
+# 여기도 같이 고쳐야 한다(자동으로 맞추면 파싱 실패를 알아챌 방법이 없어진다).
+EXPECTED_SHELTERS = {"sancheong": 8}
+
+
+def build_isolation(verbose: bool = True) -> dict:
+    from module_e_routing import isolation as iso
+
+    regions = _read_demo_regions()
+    out: dict = {}
+    for region in ISOLATION_REGIONS:
+        info = regions.get(region)
+        expected = EXPECTED_SHELTERS.get(region)
+        if not info or (expected and len(info["shelters"]) != expected):
+            print(f"  [경고] 고립 {region}: 지역 정의를 못 읽었습니다"
+                  f"(대피소 {len(info['shelters']) if info else 0}곳, {expected}곳 기대) — "
+                  f"demoShelters.ts 형식이 바뀌었는지 확인하십시오. 이 지역은 건너뜁니다.")
+            continue
+
+        for scenario, hazard in (("base", None), ("hazard", _demo_hazard(info["bbox"]))):
+            t0 = time.perf_counter()
+            try:
+                result = iso.check_isolation(info["bbox"], info["shelters"], hazard)
+            except Exception as exc:  # noqa: BLE001 - 한 조합이 실패해도 나머지는 굽는다
+                print(f"  [경고] 고립 {region}:{scenario} 실패 — {exc}")
+                continue
+            # bbox와 대피소 수를 같이 적어 둔다. 산청을 군 전체로 넓히는 작업이
+            # 진행 중이라 bbox가 바뀔 텐데, 그때 이 저장본을 그대로 쓰면 화면이
+            # **다른 범위**의 고립 결과를 보여주게 된다. 화면은 자기 bbox와 대조해
+            # 안 맞으면 저장본을 버리고 실제로 계산한다.
+            out[f"{region}:{scenario}"] = {
+                "bbox": list(info["bbox"]),
+                "shelter_count": len(info["shelters"]),
+                "result": result,
+            }
+            if verbose:
+                print(f"  고립 {region}:{scenario} 고립건물 {result.get('isolated_building_count')}동 "
+                      f"{time.perf_counter() - t0:.1f}s")
+    return out
 
 
 def main() -> int:
