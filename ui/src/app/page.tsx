@@ -10,6 +10,7 @@ import WhatifPanel from "@/components/panels/WhatifPanel";
 import ModelPerformancePanel from "@/components/panels/ModelPerformancePanel";
 import ApprovePanel from "@/components/panels/ApprovePanel";
 import ValidationPanel from "@/components/panels/ValidationPanel";
+import { DEFAULT_REGION, type RegionKey } from "@/lib/demoShelters";
 
 type PanelKey = "dashboard" | "evacuation" | "isolation" | "whatif" | "performance" | "validation" | "approve";
 type Mode = "citizen" | "gov";
@@ -63,6 +64,9 @@ export default function HomePage() {
   // §7 IsolationPanel↔MapExplorer도 형제 컴포넌트라 같은 방식으로 상태를 끌어올린다.
   const [isolatedAreas, setIsolatedAreas] = useState<GeoJSON.FeatureCollection | null>(null);
   const [focusBbox, setFocusBbox] = useState<{ bbox: [number, number, number, number]; nonce: number } | null>(null);
+  // 지도의 "산청 상능마을"/"서울 강남" 버튼이 바꾸는 현재 데모 지역 — EvacuationPanel/
+  // IsolationPanel이 이 값 기준으로 대피소 목록을 고른다(lib/demoShelters.ts).
+  const [region, setRegion] = useState<RegionKey>(DEFAULT_REGION);
 
   return (
     <div className="relative h-full w-full">
@@ -72,9 +76,19 @@ export default function HomePage() {
         onOriginPicked={(coord) => {
           setPickedOrigin(coord);
           setPickingOrigin(false);
+          // 지도 클릭 모드로 넘어가며 닫았던 패널을 다시 연다(아래 onRequestMapPick 참조).
+          setActive("evacuation");
         }}
         isolatedAreas={isolatedAreas}
         focusBbox={focusBbox}
+        onRegionSelect={(r) => {
+          setRegion(r);
+          // 지역이 바뀌면 이전 지역 기준으로 계산된 경로·고립 결과는 더 이상 유효하지
+          // 않으므로 같이 비운다 — 안 비우면 강남으로 이동했는데 산청 경로선이 남아있는
+          // 것처럼 보일 수 있음.
+          setEvacuationRoute(null);
+          setIsolatedAreas(null);
+        }}
       />
 
       {/* 지도가 메인 화면 — 메뉴는 더 이상 페이지를 이동시키지 않고 지도 위에
@@ -132,13 +146,22 @@ export default function HomePage() {
               {active === "validation" && <ValidationPanel />}
               {active === "evacuation" && (
                 <EvacuationPanel
+                  region={region}
                   onSelectRoute={setEvacuationRoute}
-                  onRequestMapPick={() => setPickingOrigin(true)}
+                  onRequestMapPick={() => {
+                    // 패널(화면의 70%)이 지도를 가리고 있으면 가운데를 못 찍는다는
+                    // 문제(2026-09-10 사용자 피드백) — 클릭 모드로 들어가는 동안은
+                    // 패널을 아예 닫아 지도 전체를 클릭 가능하게 하고, 좌표를 찍으면
+                    // 위 onOriginPicked가 다시 열어준다.
+                    setPickingOrigin(true);
+                    setActive(null);
+                  }}
                   mapPickedOrigin={pickedOrigin}
                 />
               )}
               {active === "isolation" && (
                 <IsolationPanel
+                  region={region}
                   onResult={(r) => setIsolatedAreas(r?.isolated_areas ?? null)}
                   onFocusCluster={(bbox) => {
                     // 패널이 화면을 넓게 덮고 있으면 지도가 이동해도 가려서 안 보이므로
