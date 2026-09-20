@@ -1148,6 +1148,43 @@ export default function MapExplorer({
         },
       });
 
+      // 수면 가장자리 빛 — "금속성" 요청에 대한 현실적인 답.
+      //
+      // MapLibre의 fill은 무광 평면이라 반사광(specular)이 없다. 레퍼런스(FLOW-3D)의
+      // 그 느낌은 3D 렌더러가 수면 메시에 조명을 계산해서 나오는 것이고, 여기서는
+      // 같은 걸 만들 수 없다. 대신 그 인상의 상당 부분은 **경계가 빛나는 것**에서
+      // 오므로, 바깥 윤곽(band 0)에 번지는 선과 또렷한 선을 겹쳐 림라이트를 준다.
+      // 물 안쪽이 아니라 테두리만 밝아져서 표면장력 있는 액체처럼 읽힌다.
+      //
+      // band 0만 그린다 — 안쪽 등고선까지 선을 그으면 등고선 지도가 되고, 방금
+      // 없앤 "층이 분리돼 보인다"가 선으로 되돌아온다.
+      map.addLayer({
+        id: "flood-rim-glow",
+        type: "line",
+        source: "flood-model",
+        filter: ["==", ["number", ["get", "band"], -1], 0],
+        layout: { "line-cap": "round", "line-join": "round" },
+        paint: {
+          "line-color": "#67e8f9",
+          "line-width": ["interpolate", ["linear"], ["zoom"], 10, 2.5, 14, 6, 17, 12],
+          "line-blur": ["interpolate", ["linear"], ["zoom"], 10, 2, 14, 5, 17, 10],
+          "line-opacity": 0.55,
+        },
+      });
+      map.addLayer({
+        id: "flood-rim",
+        type: "line",
+        source: "flood-model",
+        filter: ["==", ["number", ["get", "band"], -1], 0],
+        layout: { "line-cap": "round", "line-join": "round" },
+        paint: {
+          "line-color": "#cffafe",
+          "line-width": ["interpolate", ["linear"], ["zoom"], 10, 0.6, 14, 1.2, 17, 2],
+          "line-opacity": 0.75,
+        },
+      });
+
+
       // 대피 경로(§6.9) — 지금은 직선거리 근사라 "실제 도로 경로 아님"이 시각적으로도
       // 드러나게 점선으로 그린다. 실경로 API가 붙으면 LineString 좌표만 실제 폴리라인으로
       // 바뀌고 이 레이어 자체는 그대로 재사용된다.
