@@ -1101,23 +1101,32 @@ export default function MapExplorer({
         type: "fill-extrusion",
         source: "flood-model",
         paint: {
+          // 침수심에 따라 색이 이어지게 한다. 예전에는 4단 match라 이 지역 침수심
+          // 중앙값 5.7m·최대 15.5m가 전부 맨 위 한 칸에 몰려 단색 덩어리로 보였다.
+          // 지금 구간은 0.3~12m 10단이고, 색은 그 사이를 보간해 물처럼 이어진다.
           "fill-extrusion-color": [
-            "match",
-            ["get", "band"],
-            0, "#bae6fd",
-            1, "#38bdf8",
-            2, "#0284c7",
-            3, "#1e3a8a",
-            "#38bdf8",
+            "interpolate",
+            ["linear"],
+            ["number", ["get", "depth_min_m"], 0.3],
+            0.3, "#a5f3fc",
+            1.0, "#67e8f9",
+            2.0, "#22d3ee",
+            3.0, "#06b6d4",
+            4.0, "#0891b2",
+            5.0, "#0e7490",
+            6.0, "#155e75",
+            8.0, "#1e40af",
+            10.0, "#1e3a8a",
+            12.0, "#172554",
           ],
-          // 지형 기복 위에 얹히므로 수심을 그대로 쓰면 얕은 구간이 안 보인다 —
-          // 최소 높이를 두되 과장하지 않는다(실제 수심 값은 팝업에 그대로 표기).
-          // ["number", x, fallback]으로 감싸는 이유: 속성이 없거나 null이면 ["max"]가
-          // null을 돌려주고 MapLibre가 그 폴리곤을 조용히 안 그린다(스타일 스펙
-          // 검증기로 확인). 침수 구역이 이유 없이 사라지는 것보다 최소 높이가 낫다.
-          "fill-extrusion-height": ["max", ["number", ["get", "depth_p90_m"], 0.5], 0.5],
+          // 구간이 **누적**이라(depth >= lo) 깊은 구간이 얕은 구간 안에 포개져 있다.
+          // 각 구간을 그 구간의 하한 높이로 세우면, 겹친 채로 층이 지면서 등수심선을
+          // 따라 계단처럼 올라가는 수면이 된다 — 띠 사이에 틈이 생기지 않는다.
+          // 높이는 그 구간이 보장하는 최소 침수심이라 과장이 아니다(보수적).
+          "fill-extrusion-height": ["max", ["number", ["get", "depth_min_m"], 0.3], 0.3],
           "fill-extrusion-base": 0,
-          "fill-extrusion-opacity": 0.72,
+          // 층이 겹쳐 보여야 깊이감이 생긴다 — 완전 불투명이면 맨 위 층만 보인다.
+          "fill-extrusion-opacity": 0.62,
         },
       });
 
@@ -1885,8 +1894,15 @@ export default function MapExplorer({
                   <p className="text-slate-200">침수 범위 · Module B</p>
                   <p className="text-slate-500">
                     SFINCS <span className="text-sky-300">최대</span> 침수심
-                    {modelFloodDepth !== null && <> (최심 {modelFloodDepth.toFixed(1)}m)</>} — 시간축이 없어
-                    프레임과 무관하게 항상 최대 범위입니다.
+                    {modelFloodDepth !== null && <> (최심 {modelFloodDepth.toFixed(1)}m)</>}. 얕은 곳은
+                    하늘색, 깊을수록 남색으로 층이 집니다 — 시간축이 없어 프레임과
+                    무관하게 항상 최대 범위입니다.
+                  </p>
+                  <p className="mt-0.5 text-slate-500">
+                    원본은 50m 격자라 그대로 그리면 셀 모서리가 계단으로 보입니다. 화면에는
+                    등수심선을 따라 다듬은 것을 올립니다 — <span className="text-slate-300">범위는
+                    원본과 IoU 0.929·면적 −0.2%</span>이고, 노출자산·고립 판정은 다듬지 않은
+                    원본으로 계산합니다.
                   </p>
                 </div>
               </div>

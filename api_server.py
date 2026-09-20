@@ -10,6 +10,8 @@ import json
 import math
 import os
 import re
+from datetime import datetime, timezone
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Literal
 
@@ -26,6 +28,8 @@ import module_e_routing
 from module_e_routing import isolation as module_e_isolation
 from module_o_orchestrator import geo
 from module_o_orchestrator.modules_client import module_sources
+from module_o_orchestrator import snapshot as snapshot_store
+from module_o_orchestrator.store import Alert
 from module_o_orchestrator.orchestrator import (
     DEFAULT_SHELTER_CANDIDATES,
     LANDSLIDE_THRESHOLD,
@@ -90,12 +94,70 @@ class ApproveRequest(BaseModel):
     approver_id: str
 
 
+@lru_cache(maxsize=1)
+def _demo_snapshot() -> dict | None:
+    """사전계산된 데모 결과. 없으면 None이고 그러면 전부 실시간으로 돈다.
+
+    산청 데모는 입력이 고정이라 결과도 고정인데, 버튼을 누를 때마다 전 모듈을 다시
+    돌리고 노출자산 GeoJSON을 다시 읽고 침수 래스터를 다시 폴리곤화했다. 배포
+    서버(2코어·RAM 908MB)에서 수십 초가 걸려 시연 중에 멈춘 것처럼 보였다.
+
+    저장본은 scripts/build_demo_snapshot.py 가 `run()`을 불러 받아 적은 것이고,
+    tests/test_demo_snapshot.py 가 파이프라인을 다시 돌려 대조한다 — 모듈이 바뀌면
+    테스트가 깨지므로 이 값은 항상 '지금 코드가 내는 값'이다.
+    """
+    return snapshot_store.load()
+
+
+def _snapshot_for(payload: dict) -> dict | None:
+    """입력이 저장본과 **정확히 같을 때만** 저장본을 쓴다.
+
+    입력 지문이 다르면(좌표를 옮겼거나 강우를 바꿨거나) 다른 질문이므로 반드시
+    실시간으로 돌아야 한다 — 저장본을 내주면 화면이 질문과 다른 답을 보여준다.
+    """
+    return snapshot_store.matching(payload, _demo_snapshot())
+
+
 @app.post("/alerts/trigger")
-def trigger_alert(req: TriggerRequest) -> dict:
+def trigger_alert(req: TriggerRequest, fresh: bool = False) -> dict:
     """Module A/B 감시 결과 임계치를 넘었다고 가정하고 Module O 파이프라인을 실행한다.
     (실제 연동 시에는 Module A/B의 상시 감시 루프가 임계치 초과를 감지했을 때 이 함수를 내부 호출하게 된다.)
+
+    입력이 사전계산된 데모와 같으면 저장본을 그대로 돌려준다 — 같은 입력에 같은 결과라
+    다시 계산할 이유가 없다. `?fresh=1`이면 저장본을 무시하고 전 모듈을 실제로 돌린다.
     """
-    return run_orchestrator(req.to_orchestrator_input())
+    payload = req.to_orchestrator_input()
+    if not fresh:
+        snapshot = _snapshot_for(payload)
+        if snapshot is not None:
+            envelope = json.loads(json.dumps(snapshot["envelope"]))
+            # 경보 저장소에도 넣어야 승인/지도/시간축 엔드포인트가 그대로 동작한다.
+            # 등록 시각은 지금이다 — escalation 타임아웃은 저장본을 만든 날이 아니라
+            # 화면을 띄운 시각부터 흘러야 한다(orchestrator.run 과 같은 이유).
+            alert_store.add(Alert(
+                alert_id=payload["alert_id"],
+                created_at=datetime.now(timezone.utc).astimezone(),
+                escalation_timeout_min=int(payload.get("escalation_timeout_min") or 15),
+                envelope=envelope,
+                trigger_input=payload,
+                triggered=envelope["data"].get("approval_status") != "감시중",
+            ))
+            stored = alert_store.get(payload["alert_id"])
+            envelope["data"]["approval_status"] = stored.resolve_status()
+            envelope["data"]["escalation_level"] = stored.escalation_level
+            envelope["meta"] = {
+                **envelope.get("meta", {}),
+                # 화면이 "이건 사전계산본"이라고 말할 수 있어야 한다. 값이 실시간과
+                # 같다는 것과, 사용자가 그 사실을 아는 것은 별개다.
+                "served_from": "snapshot",
+                "snapshot_built_at": snapshot.get("built_at"),
+                "snapshot_commit": snapshot.get("built_commit"),
+                "snapshot_pipeline_seconds": snapshot.get("pipeline_seconds"),
+            }
+            return envelope
+    envelope = run_orchestrator(payload)
+    envelope["meta"] = {**envelope.get("meta", {}), "served_from": "live"}
+    return envelope
 
 
 @app.get("/alerts/{alert_id}")
@@ -187,11 +249,23 @@ def get_alert_timeline(alert_id: str) -> dict:
     LEVELS = ("warning", "critical")
     features = []
     level_summary = []
+    # 사전계산본의 표시용 위험영역(모서리를 다듬은 것). 없으면 아래에서 원본을 만든다.
+    snapshot = _demo_snapshot()
+    display_risk = (snapshot or {}).get("risk_display") if (
+        snapshot and snapshot.get("alert_id") == alert_id
+    ) else None
     for lvl in LEVELS:
-        collection = risk_layers.load(scenario, lvl)
         meta = layers.get(f"{scenario}_{lvl}") or {}
         count = 0
-        for feature in geo.featurecollection_5179_to_lonlat(collection):
+        if display_risk:
+            source = [f for f in display_risk["features"] if f["properties"].get("level") == lvl]
+        else:
+            source = [
+                {"type": "Feature", "geometry": f["geometry"],
+                 "properties": {"kind": "landslide_risk", "level": lvl, **f["properties"]}}
+                for f in geo.featurecollection_5179_to_lonlat(risk_layers.load(scenario, lvl))
+            ]
+        for feature in source:
             props = feature["properties"]
             count += 1
             features.append({
@@ -293,10 +367,25 @@ def get_alert_geojson(alert_id: str) -> dict:
     # Module B 실산출 — SFINCS/ANUGA 최대침수심을 깊이 구간별로 폴리곤화한 것이다.
     # placeholder가 아니라 물리모형 결과이므로 kind로 구분해 내보낸다(UI가 배지를
     # MODEL로 달고, 슬라이더 what-if 볼륨과 섞이지 않게 별도 레이어로 그린다).
-    for feature in geo.featurecollection_5179_to_lonlat(flood.get("inundation_extent_5179")):
-        feature["properties"]["kind"] = "inundation"
-        feature["properties"]["flood_prob"] = flood.get("flood_prob")
-        features.append(feature)
+    #
+    # 사전계산본이 있으면 **표시용** 침수를 쓴다. 50m 격자를 그대로 폴리곤화하면 셀
+    # 모서리가 그대로 계단이 되어 확대할수록 각져 보이는데, 그 계단은 지형이 아니라
+    # 격자 해상도의 흔적이다(module_o_orchestrator/display_geometry.py). 표시용은
+    # 등수심선을 따라 다듬은 것이고 침수 범위는 원본 대비 IoU 0.929·면적 −0.2%다.
+    # 노출자산·고립 판정은 여전히 envelope 안의 원본 기하로 계산돼 있다.
+    snapshot = _snapshot_for(alert.trigger_input)
+    display_flood = (snapshot or {}).get("flood_display")
+    if display_flood and display_flood.get("features"):
+        for feature in display_flood["features"]:
+            feature = json.loads(json.dumps(feature))
+            feature["properties"]["flood_prob"] = flood.get("flood_prob")
+            feature["properties"]["smoothed"] = True
+            features.append(feature)
+    else:
+        for feature in geo.featurecollection_5179_to_lonlat(flood.get("inundation_extent_5179")):
+            feature["properties"]["kind"] = "inundation"
+            feature["properties"]["flood_prob"] = flood.get("flood_prob")
+            features.append(feature)
 
     shelter = (alert.trigger_input.get("shelter_candidates") or DEFAULT_SHELTER_CANDIDATES)[0]
     features.append(
