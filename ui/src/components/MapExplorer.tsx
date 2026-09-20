@@ -1584,6 +1584,22 @@ export default function MapExplorer({
     return `(${w.area_km2}km² / ${c.area_km2}km²)`;
   })();
 
+  // 탐지 시각 기준 상대 시간. "지금 보는 게 탐지 시점에서 몇 시간 뒤인가"를 못 쓰면
+  // 화면의 침수·위험영역이 **그 시각에 관측된 것**으로 읽힌다 — 전부 모형 산출물이다.
+  const detectedFrame = timeline?.markers?.detected
+    ? frames.find((f) => f.time === timeline.markers.detected)
+    : undefined;
+  const leadHours =
+    currentFrame && detectedFrame ? currentFrame.hour - detectedFrame.hour : null;
+  const leadLabel =
+    leadHours === null
+      ? null
+      : leadHours === 0
+        ? "탐지 시점"
+        : leadHours > 0
+          ? `탐지 +${leadHours}시간`
+          : `탐지 ${leadHours}시간`;
+
   const arrivalHours = new Set(
     (timeline?.risk.features ?? []).map((f) => Number(f.properties?.arrival_hour))
   );
@@ -2039,21 +2055,35 @@ export default function MapExplorer({
           <div className="pointer-events-auto w-full max-w-3xl rounded-xl border border-white/15 bg-slate-950/75 p-4 shadow-lg backdrop-blur-xl">
             <div className="flex flex-wrap items-end justify-between gap-4">
               <div>
-                <p className="text-[11px] uppercase tracking-wider text-slate-500">예측 시각</p>
+                <div className="flex items-center gap-2">
+                  <p className="text-[11px] uppercase tracking-wider text-slate-500">예측 시각</p>
+                  {leadLabel && (
+                    <span
+                      className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${
+                        (leadHours ?? 0) > 0
+                          ? "bg-amber-500/20 text-amber-300"
+                          : "bg-slate-700/60 text-slate-300"
+                      }`}
+                      title="에이전트가 위험을 탐지한 시각(2025-07-19 09:00) 기준"
+                    >
+                      {leadLabel}
+                    </span>
+                  )}
+                </div>
                 <p className="font-mono text-2xl font-bold text-slate-100">{frameLabel(currentFrame.time)}</p>
               </div>
               <div className="flex items-end gap-4 text-right">
                 <div>
-                  <p className="text-[11px] text-slate-500">시간강우</p>
+                  <p className="text-[11px] text-slate-500">시간강우 <span className="text-emerald-400/70">실측</span></p>
                   <p className="font-mono text-lg text-sky-300">{currentFrame.rn_mm.toFixed(1)}mm</p>
                 </div>
                 <div>
-                  <p className="text-[11px] text-slate-500">24h 누적</p>
+                  <p className="text-[11px] text-slate-500">24h 누적 <span className="text-emerald-400/70">실측</span></p>
                   <p className="font-mono text-lg text-sky-200">{currentFrame.cum24_mm.toFixed(0)}mm</p>
                 </div>
                 {frameFloodM2 !== null && (
                   <div>
-                    <p className="text-[11px] text-slate-500">침수</p>
+                    <p className="text-[11px] text-slate-500">침수 <span className="text-sky-400/70">모형</span></p>
                     <p className="font-mono text-lg text-sky-400">
                       {(frameFloodM2 / 10_000).toFixed(0)}ha
                       {frameMaxDepth !== null && (
@@ -2063,7 +2093,7 @@ export default function MapExplorer({
                   </div>
                 )}
                 <div>
-                  <p className="text-[11px] text-slate-500">위험영역</p>
+                  <p className="text-[11px] text-slate-500">위험영역 <span className="text-sky-400/70">모형</span></p>
                   <p className="font-mono text-lg text-orange-400">
                     {riskPatchCount}곳
                     <span className="ml-1 text-xs text-orange-300/70">
@@ -2172,8 +2202,11 @@ export default function MapExplorer({
             </div>
 
             <p className="mt-2 text-[11px] text-slate-500">
-              MODEL · 트랙① 사전계산 위험영역({timeline.scenario} {timeline.level})을 실측 강우로 시간마다 구동한
-              결과입니다. 막대는 그 시각의 시간강우.{" "}
+              지도의 <span className="text-slate-400">침수·위험영역은 그 시각의 모형 산출</span>이지
+              그 시각에 관측된 피해 범위가 아닙니다. 실측은 강우뿐이고(막대·누적), 모형은 그
+              강우를 받아 돌아갑니다 — 2025.7.19 산청 사례를 실제 강우로 재현한 것이라
+              사후 재현(hindcast)이며 실시간 예보 성능과는 다릅니다.
+              {" "}트랙① 위험영역 {timeline.scenario} {timeline.level}.{" "}
               {floodSeries?.available
                 ? "침수는 SFINCS 최대침수심에 같은 모의의 하천 수위 시계열을 적용한 준정적 근사입니다."
                 : "침수는 시간축이 없어 최대 범위로 고정됩니다."}

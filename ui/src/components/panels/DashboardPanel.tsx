@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { SANGCHEONG_DEMO_INPUT, triggerAlert } from "@/lib/api";
+import { SANGCHEONG_DEMO_INPUT, getDemoEnvelope, triggerAlert } from "@/lib/api";
 import { diagnoseFailure } from "@/lib/backendDiagnosis";
 import type { ModuleOEnvelope } from "@/lib/types";
 import { useSlowLoading } from "@/lib/useSlowLoading";
@@ -70,14 +70,17 @@ export default function DashboardPanel({
     return () => clearInterval(id);
   }, [loading]);
 
-  async function runDemo() {
+  async function runDemo(forceLive = false) {
     // 경과 표시를 0에서 시작시킨다 — effect 본문에서 setState 하면 렌더가 한 번 더 돈다.
     setElapsed(0);
     setLoading(true);
     setError(null);
     start();
     try {
-      const result = await triggerAlert(SANGCHEONG_DEMO_INPUT);
+      // 사전계산본을 프론트 자기 오리진에서 먼저 읽는다. 지도가 EC2로 타일을 수백 장
+      // 부르는 동안 이 요청이 그 줄 뒤에 서면 서버가 0.013초에 답해도 화면에서는
+      // 수십~수백 초가 된다(2026-09-21 실측). 오리진이 다르면 그 줄을 안 탄다.
+      const result = (!forceLive && (await getDemoEnvelope())) || (await triggerAlert(SANGCHEONG_DEMO_INPUT));
       setEnvelope(result);
       onAlertUpdated?.();
     } catch {
@@ -118,7 +121,7 @@ export default function DashboardPanel({
             : "2025.7.19 산청 산사태 재연 데이터 기반 — 우리 동네 위험 현황"}
         </p>
         <button
-          onClick={runDemo}
+          onClick={() => runDemo()}
           disabled={loading}
           className="shrink-0 rounded-lg bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-500 disabled:opacity-50"
         >
@@ -137,6 +140,27 @@ export default function DashboardPanel({
           </span>
         </button>
       </div>
+
+      {envelope?.meta?.served_from === "snapshot" && !loading && (
+        <div className="flex items-center justify-between gap-2 rounded-lg border border-slate-800 bg-slate-900/40 px-3 py-1.5 text-[11px] text-slate-400">
+          <span>
+            사전계산 결과입니다
+            {typeof envelope.meta.snapshot_built_commit === "string" && (
+              <> · {envelope.meta.snapshot_built_commit}</>
+            )}
+            {typeof envelope.meta.snapshot_pipeline_seconds === "number" && (
+              <> · 실제 파이프라인 {envelope.meta.snapshot_pipeline_seconds}초</>
+            )}
+          </span>
+          <button
+            onClick={() => runDemo(true)}
+            className="shrink-0 rounded-md border border-slate-700 px-2 py-0.5 text-slate-300 hover:border-sky-600 hover:text-sky-300"
+            title="저장본을 무시하고 전 모듈을 실제로 다시 돌립니다"
+          >
+            ↻ 실시간으로 다시 계산
+          </button>
+        </div>
+      )}
 
       {error && (
         <div className="rounded-lg border border-red-800/50 bg-red-950/30 p-3 text-xs text-red-300">{error}</div>

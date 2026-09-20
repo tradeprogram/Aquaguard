@@ -193,6 +193,8 @@ def build(verbose: bool = True) -> dict:
         "built_commit": git_commit(),
         "pipeline_seconds": round(pipeline_s, 2),
         "mock_mode": False,
+        # 시각별 강우. 화면의 시간 스크러버가 이걸로 막대를 그린다.
+        "frames": frames,
         "envelope": envelope,
         "flood_display": flood_display,
         "flood_display_meta": flood_stats,
@@ -208,6 +210,66 @@ def build(verbose: bool = True) -> dict:
     }
 
 
+# 프론트엔드가 자기 오리진에서 바로 읽을 정적 사본.
+#
+# **왜 프론트에도 두나**: 브라우저는 한 오리진에 동시 요청 수가 제한된다. 지도가
+# EC2로 지형·벡터 타일을 수백 장 쏟아붓는 동안 경보 요청이 그 줄 뒤에 서면서,
+# 서버가 0.013초에 답하는데도 화면에서는 200초가 걸렸다(2026-09-21 실측).
+# 저장해 둔 값을 굳이 그 줄에 세울 이유가 없다 — Vercel CDN에서 바로 읽으면
+# 오리진이 달라 타일과 경쟁하지 않는다.
+#
+# 백엔드 사본(data/precomputed)도 그대로 둔다. `?fresh=1` 실시간 경로와 API를
+# 직접 쓰는 쪽이 여전히 그걸 쓴다.
+UI_DEMO_DIR = REPO_ROOT / "ui" / "public" / "demo"
+
+
+def write_ui_copies(snapshot: dict, verbose: bool = True) -> None:
+    """화면이 쓰는 세 덩어리를 따로 떼어 정적 파일로 쓴다.
+
+    한 덩어리로 두면 대시보드가 등고선 2MB까지 같이 받아야 해서, 화면에 처음
+    숫자가 뜨는 시각이 그만큼 늦어진다. 쓰는 쪽에 맞춰 잘라 둔다.
+    """
+    UI_DEMO_DIR.mkdir(parents=True, exist_ok=True)
+    meta = {
+        "alert_id": snapshot["alert_id"],
+        "built_at": snapshot["built_at"],
+        "built_commit": snapshot["built_commit"],
+        "pipeline_seconds": snapshot["pipeline_seconds"],
+        "input_sha": snapshot["input_sha"],
+    }
+    data = snapshot["envelope"]["data"]
+    agent = data.get("timeline_agent") or {}
+    actual = data.get("timeline_actual") or {}
+    # 탐지 시각은 시간축의 기준점이다 — "이 프레임은 탐지 +N시간"을 쓰려면 필요하다.
+    markers = {
+        "detected": agent.get("detected"),
+        "alert_sent": agent.get("alert_sent"),
+        "official_warning": actual.get("warning_escalated"),
+        "report_start": actual.get("report_start"),
+    }
+    envelope = json.loads(json.dumps(snapshot["envelope"]))
+    envelope["meta"] = {**envelope.get("meta", {}), "served_from": "snapshot", **{
+        f"snapshot_{k}": v for k, v in meta.items() if k != "alert_id"
+    }}
+
+    parts = {
+        "envelope.json": envelope,
+        "geojson.json": {"type": "FeatureCollection",
+                         "features": snapshot["flood_display"]["features"]},
+        "timeline.json": {"frames": snapshot.get("frames") or [],
+                          "markers": markers,
+                          "flood_series": snapshot["flood_series"],
+                          "risk_display": snapshot["risk_display"],
+                          "meta": meta},
+    }
+    for name, payload in parts.items():
+        path = UI_DEMO_DIR / name
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, separators=(",", ":"))
+        if verbose:
+            print(f"  ui/public/demo/{name}  {path.stat().st_size / 1e6:.2f}MB")
+
+
 def main() -> int:
     print(f"데모 스냅샷 생성 → {SNAPSHOT_PATH.relative_to(REPO_ROOT)}")
     snapshot = build()
@@ -217,6 +279,7 @@ def main() -> int:
     size_mb = SNAPSHOT_PATH.stat().st_size / 1e6
     print(f"완료: {size_mb:.2f}MB  input_sha={snapshot['input_sha']}  "
           f"commit={snapshot['built_commit']}")
+    write_ui_copies(snapshot)
     return 0
 
 

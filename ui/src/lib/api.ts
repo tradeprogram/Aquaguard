@@ -78,6 +78,33 @@ export const SANGCHEONG_DEMO_INPUT: TriggerInput = {
   ],
 };
 
+// 사전계산된 데모 결과를 **프론트 자기 오리진**에서 읽는다(scripts/build_demo_snapshot.py가
+// ui/public/demo/ 에 써 둔다).
+//
+// **왜 백엔드에서 안 받나**: 브라우저는 한 오리진에 동시 요청 수가 제한된다. 지도가
+// EC2로 지형·벡터 타일을 수백 장 부르는 동안 경보 요청이 그 줄 뒤에 서면서, 서버가
+// 0.013초에 답하는데도 화면에서는 200초가 걸렸다(2026-09-21 실측). 이미 계산해 둔
+// 값을 그 줄에 세울 이유가 없다 — Vercel CDN은 오리진이 달라 타일과 경쟁하지 않는다.
+//
+// 정적 사본이 없거나(빌드 누락) 읽기에 실패하면 그대로 백엔드로 떨어진다.
+async function fetchDemoAsset<T>(name: string): Promise<T | null> {
+  try {
+    // force-cache는 쓰지 않는다 — 스냅샷을 다시 만들어도 브라우저가 옛 파일을 계속
+    // 들고 있어서, 실제로 markers가 빠진 낡은 사본이 화면에 남았다(2026-09-21).
+    // no-cache는 "쓰기 전에 검증"이라 안 바뀌었으면 CDN이 304만 돌려준다 — 본문
+    // 전송이 없으니 빠르고, 바뀌면 반드시 새 것을 받는다.
+    const res = await fetch(`/demo/${name}`, { cache: "no-cache" });
+    if (!res.ok) return null;
+    return (await res.json()) as T;
+  } catch {
+    return null;
+  }
+}
+
+export async function getDemoEnvelope(): Promise<ModuleOEnvelope | null> {
+  return fetchDemoAsset<ModuleOEnvelope>("envelope.json");
+}
+
 export async function triggerAlert(input: TriggerInput): Promise<ModuleOEnvelope> {
   const res = await fetch(`${API_BASE}/alerts/trigger`, {
     method: "POST",
@@ -141,6 +168,11 @@ export async function searchAdmin(q: string): Promise<AdminSearchResult[]> {
 }
 
 export async function getAlertGeojson(alertId: string): Promise<GeoJSON.FeatureCollection> {
+  // 데모 경보면 정적 사본을 먼저 본다(위 fetchDemoAsset 주석 참고).
+  if (alertId === SANGCHEONG_DEMO_INPUT.alert_id) {
+    const cached = await fetchDemoAsset<GeoJSON.FeatureCollection>("geojson.json");
+    if (cached?.features?.length) return cached;
+  }
   const res = await fetch(`${API_BASE}/alerts/${alertId}/geojson`, { cache: "no-store" });
   if (!res.ok) throw new Error(`get alert geojson failed: ${res.status}`);
   return res.json();
@@ -218,6 +250,31 @@ const EMPTY_TIMELINE: AlertTimeline = {
 };
 
 export async function getAlertTimeline(alertId: string): Promise<AlertTimeline> {
+  // 시간축은 프레임·위험영역·침수 등고선 전부 사전계산물이라 백엔드를 안 거쳐도 된다.
+  // 다만 탐지/발송/공식경보 시각은 경보에서 나오므로, 정적 사본으로 화면을 먼저 띄우고
+  // 백엔드가 답하면 그때 마커를 채운다 — 지도가 뜨는 속도를 서버에 걸지 않는다.
+  if (alertId === SANGCHEONG_DEMO_INPUT.alert_id) {
+    const cached = await fetchDemoAsset<{
+      frames?: TimelineFrame[];
+      markers?: AlertTimeline["markers"];
+      flood_series?: AlertTimeline["flood_series"];
+      risk_display?: GeoJSON.FeatureCollection;
+      meta?: Record<string, unknown>;
+    }>("timeline.json");
+    if (cached?.risk_display?.features?.length) {
+      return {
+        ...EMPTY_TIMELINE,
+        available: true,
+        scenario: "A_soilmap",
+        level: "warning+critical",
+        frames: cached.frames ?? [],
+        markers: cached.markers ?? {},
+        risk: cached.risk_display,
+        flood_series: cached.flood_series,
+        flood_is_max: !cached.flood_series?.available,
+      };
+    }
+  }
   const res = await fetch(`${API_BASE}/alerts/${alertId}/timeline`, { cache: "no-store" });
   if (!res.ok) return { ...EMPTY_TIMELINE, httpStatus: res.status };
   const body = (await res.json()) as Partial<AlertTimeline>;
