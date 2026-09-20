@@ -212,6 +212,13 @@ def _feature_bounds(geometry: Any) -> tuple[float, float, float, float] | None:
 # 무시할 만하면서 걸러내는 효과는 거의 최대치였다(2026-09-20 실측).
 RISK_CELL_M = 200.0
 
+# 격자 칸 수 상한. 칸 수는 bbox **면적**에 비례하므로 좌표가 하나라도 깨지면
+# (5179 미터 자리에 0이나 위경도가 섞이는 경우) 한 폴리곤이 4,470만 칸을 요구한다 —
+# 그 루프가 도는 동안 서버는 수 GB를 먹고 통째로 멈춘다. RAM 908MB짜리 배포 서버에서
+# 이건 곧 정지다. 산청 AOI 전체가 452km²(≈11,300칸)이고 실제 데모는 1,471칸을 쓰므로
+# 50,000칸(2,000km²)이면 정상 데이터에는 절대 안 걸린다.
+MAX_RISK_CELLS = 50_000
+
 
 def risk_cells(geometries: list[dict[str, Any]]) -> set[tuple[int, int]] | None:
     """위험 지오메트리들이 실제로 덮는 격자 칸 집합.
@@ -231,8 +238,15 @@ def risk_cells(geometries: list[dict[str, Any]]) -> set[tuple[int, int]] | None:
     for geometry in geometries:
         for box in _subgeometry_bounds(geometry):
             x0, y0, x1, y1 = box
-            for gx in range(int(x0 // RISK_CELL_M), int(x1 // RISK_CELL_M) + 1):
-                for gy in range(int(y0 // RISK_CELL_M), int(y1 // RISK_CELL_M) + 1):
+            gx0, gx1 = int(x0 // RISK_CELL_M), int(x1 // RISK_CELL_M)
+            gy0, gy1 = int(y0 // RISK_CELL_M), int(y1 // RISK_CELL_M)
+            # 세기 전에 칸 수를 먼저 계산한다 — 만들면서 세면 이미 늦는다.
+            if (gx1 - gx0 + 1) * (gy1 - gy0 + 1) + len(cells) > MAX_RISK_CELLS:
+                # 격자를 포기하고 종전 bbox 필터로 돌아간다. 느려질 뿐 결과는 같다 —
+                # 여기서 무리하게 만들다가 서버가 멈추는 쪽이 비교할 수 없이 나쁘다.
+                return None
+            for gx in range(gx0, gx1 + 1):
+                for gy in range(gy0, gy1 + 1):
                     cells.add((gx, gy))
     return cells or None
 

@@ -318,6 +318,39 @@ function featuresBounds(
   return Number.isFinite(minLon) ? [[minLon, minLat], [maxLon, maxLat]] : null;
 }
 
+// 위험영역 폴리곤 하나하나의 중심점.
+//
+// **왜 필요한가**: 위험영역은 한 덩어리가 아니라 20~75m짜리 조각 390개가 35km에
+// 흩어진 형태다(2026-09-20 실측). 조각 하나가 z14에서 2.6~9.6픽셀, 데모 초기 뷰인
+// z12.5에서는 1픽셀도 안 된다 — 3D로 세워도 화면에 아무것도 안 보인다. 그래서
+// 지형에 붙는 폴리곤과 별개로, **화면 픽셀 크기로 그려지는 점**을 같이 찍는다.
+// 점은 위치를 가리키는 표시이고 크기에 뜻이 없다(범례에 명시).
+function riskMarkerPoints(
+  features: Feature<Polygon | MultiPolygon>[]
+): Feature<GeoJSON.Point>[] {
+  const out: Feature<GeoJSON.Point>[] = [];
+  for (const f of features) {
+    const parts =
+      f.geometry.type === "MultiPolygon" ? f.geometry.coordinates : [f.geometry.coordinates];
+    for (const part of parts) {
+      const ring = part[0];
+      if (!ring || ring.length === 0) continue;
+      let sx = 0;
+      let sy = 0;
+      for (const c of ring) {
+        sx += c[0];
+        sy += c[1];
+      }
+      out.push({
+        type: "Feature",
+        geometry: { type: "Point", coordinates: [sx / ring.length, sy / ring.length] },
+        properties: { ...f.properties },
+      });
+    }
+  }
+  return out;
+}
+
 const RISK_WALL_HEIGHT_M = 14;
 // 0.7 영역은 0.5 영역 안에 들어가 있다(P>=0.7 ⊂ P>=0.5). 같은 높이로 세우면 겹쳐서
 // 아예 안 보이므로 더 높게 세운다 — 깊이를 뜻하는 값이 아니라 순전히 가림 방지다.
@@ -447,7 +480,7 @@ export default function MapExplorer({
   // 지금 화면에 세워진 위험영역의 경계. 폴리곤이 카메라에서 5~20km 떨어진 곳에
   // 있어서(대표지점이 생비량면이 아니다) 시각을 넘겨도 "아무 변화 없음"으로 보였다 —
   // 버튼 하나로 거기로 갈 수 있어야 한다.
-  const [riskBounds, setRiskBounds] = useState<[[number, number], [number, number]] | null>(null);
+
   const [frameIdx, setFrameIdx] = useState(0);
   const [playing, setPlaying] = useState(false);
 
@@ -1023,6 +1056,40 @@ export default function MapExplorer({
       });
 
 
+      // 위험영역 표시점 — 위 폴리곤이 화면에서 1픽셀도 안 되기 때문에 필요하다
+      // (riskMarkerPoints 주석 참고). 지형에 붙는 3D와 달리 항상 같은 화면 크기로
+      // 그려지므로, 줌을 어떻게 두든 "여기가 위험하다"가 보이고 시각을 넘기면
+      // 점이 늘어나는 것으로 확산이 읽힌다.
+      map.addSource("risk-markers", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
+      map.addLayer({
+        id: "risk-markers-halo",
+        type: "circle",
+        source: "risk-markers",
+        // 이번 시각에 새로 도달한 것만 큰 테를 두른다 — 어디가 새로 생겼는지 보이게
+        filter: ["==", ["number", ["get", "age"], 99], 0],
+        paint: {
+          "circle-radius": ["interpolate", ["linear"], ["zoom"], 9, 9, 13, 14, 17, 22],
+          "circle-color": "#fbbf24",
+          "circle-opacity": 0.25,
+        },
+      });
+      map.addLayer({
+        id: "risk-markers-dot",
+        type: "circle",
+        source: "risk-markers",
+        paint: {
+          "circle-radius": ["interpolate", ["linear"], ["zoom"], 9, 3.5, 13, 6, 17, 10],
+          "circle-color": [
+            "case",
+            ["==", ["get", "level"], "critical"],
+            ["step", ["number", ["get", "age"], 99], RISK_CRIT_NEW, 1, RISK_CRIT_RECENT, 6, RISK_CRIT_OLD],
+            ["step", ["number", ["get", "age"], 99], RISK_COLOR_NEW, 1, RISK_COLOR_RECENT, 6, RISK_COLOR_OLD],
+          ],
+          "circle-stroke-width": 1.2,
+          "circle-stroke-color": "rgba(255,255,255,0.85)",
+        },
+      });
+
       // Module B 실산출 침수 — 위의 flood-water와 달리 슬라이더가 아니라 SFINCS/ANUGA
       // 최대침수심 래스터에서 나온 값이다(module_b_flood/fim.py가 깊이 구간별로 폴리곤화,
       // api_server의 /alerts/{id}/geojson이 4326으로 재투영). 높이는 그 구간의 실제
@@ -1427,9 +1494,30 @@ export default function MapExplorer({
     shelterRegion === "sancheong" && (timeline?.available ?? false) && frames.length > 0;
   // 침수 폴리곤이 없으면 카운트 자체가 의미 없으므로 파생값에서 null로 눌러 준다.
   const floodedInRange = floodFeatures.length === 0 ? null : floodedBuildingCount;
-  const riskReachedCount = (timeline?.risk.features ?? []).filter(
-    (f) => currentFrame !== null && Number(f.properties?.arrival_hour) <= currentFrame.hour
-  ).length;
+  // 현재 시각까지 도달한 위험영역. 지도에 올리는 것도, 화면에 쓰는 숫자도 전부
+  // 여기서 나온다 — 예전에는 지도 effect 안에서 setState로 세었는데, 그러면 WebGL이
+  // 없는 환경에서 지도가 안 뜰 때 숫자까지 0으로 남는다. 숫자는 지도 상태와 무관하게
+  // 맞아야 하고, 렌더마다 다시 계산해도 폴리곤이 8개뿐이라 비용이 없다.
+  const reachedRisk = ((): Feature<Polygon | MultiPolygon>[] => {
+    const hour = currentFrame?.hour;
+    if (hour === undefined) return [];
+    return (timeline?.risk.features ?? [])
+      .filter((f) => {
+        const h = Number(f.properties?.arrival_hour);
+        return Number.isFinite(h) && h <= hour;
+      })
+      .map((f) => ({
+        ...f,
+        properties: { ...f.properties, age: hour - Number(f.properties?.arrival_hour) },
+      })) as Feature<Polygon | MultiPolygon>[];
+  })();
+  // 화면 표시점. "8곳"은 feature 수라 눈에 보이는 것과 안 맞는다 — 한 feature가
+  // 조각 295개인 경우도 있어서, 조각 수와 누적 면적을 쓴다(둘 다 시각에 따라 는다).
+  const riskMarkers = riskMarkerPoints(reachedRisk);
+  const riskPatchCount = riskMarkers.length;
+  const riskAreaM2 = reachedRisk.reduce((sum, f) => sum + (Number(f.properties?.area_m2) || 0), 0);
+  const riskBounds = featuresBounds(reachedRisk);
+
   // 위험영역이 새로 생기는 시각들 — 39프레임 중 6개뿐이라 표시가 없으면 어디를 봐야
   // 할지 알 수 없다. 막대 아래에 점으로 찍는다.
   // 범례에 쓸 한 줄 — 두 임계의 면적 차이가 크다는 걸 숫자로 보여 준다(0.0103 vs
@@ -1461,29 +1549,21 @@ export default function MapExplorer({
     return () => clearInterval(id);
   }, [playing, frames.length]);
 
-  // 현재 시각까지 도달한 위험영역만 누적해서 3D로 세운다.
+  // 위에서 고른 위험영역을 지도에 올린다. 계산은 이미 끝났고 여기서는 밀어넣기만 한다.
   useEffect(() => {
     if (!mapReady) return;
     const source = mapRef.current?.getSource("landslide-risk") as GeoJSONSource | undefined;
     if (!source) return;
-    const hour = currentFrame?.hour;
-    const reached =
-      hour === undefined
-        ? []
-        : (timeline?.risk.features ?? []).filter((f) => {
-            const h = Number(f.properties?.arrival_hour);
-            return Number.isFinite(h) && h <= hour;
-          });
-    const withAge = reached.map((f) => ({
-      ...f,
-      properties: { ...f.properties, age: (hour ?? 0) - Number(f.properties?.arrival_hour) },
-    })) as Feature<Polygon | MultiPolygon>[];
-    source.setData({ type: "FeatureCollection", features: withAge } as FeatureCollection);
-    setRiskBounds(featuresBounds(withAge));
+    source.setData({ type: "FeatureCollection", features: reachedRisk } as FeatureCollection);
+    (mapRef.current?.getSource("risk-markers") as GeoJSONSource | undefined)?.setData({
+      type: "FeatureCollection",
+      features: riskMarkers,
+    } as FeatureCollection);
 
     // 고립 판정은 산사태 위험영역 + 침수 범위를 함께 본다. 침수는 시간축이 없어
     // (SFINCS 최대침수심) 프레임과 무관하게 항상 최대 범위로 들어간다.
-    scheduleIsolationCheck([...withAge, ...floodFeatures]);
+    scheduleIsolationCheck([...reachedRisk, ...floodFeatures]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- reachedRisk/riskMarkers는 매 렌더 새 배열이라 currentFrame으로 건다
   }, [mapReady, timeline, currentFrame, floodFeatures, scheduleIsolationCheck]);
 
   // 대피소 찾기 패널(EvacuationPanel)에서 고른 경로 — app/page.tsx가 상태를 끌어올려
@@ -1789,7 +1869,12 @@ export default function MapExplorer({
                     {riskLevelNote && <> {riskLevelNote}</>}
                   </p>
                   <p className="mt-0.5 text-slate-500">
-                    <span className="text-amber-300/80">높이는 표시용</span> — 토사 퇴적깊이 모형이
+                    실제 위험영역은 <span className="text-slate-300">20~75m짜리 조각</span>이라 화면에서
+                    1픽셀도 안 됩니다 — <span className="text-slate-300">동그란 점</span>이 그 위치 표시이고,
+                    확대하면 아래에 실제 모양이 3D로 서 있습니다. 점 크기에는 뜻이 없습니다.
+                  </p>
+                  <p className="mt-0.5 text-slate-500">
+                    <span className="text-amber-300/80">높이도 표시용</span> — 토사 퇴적깊이 모형이
                     없어 높이에 뜻이 없습니다. 0.7을 더 높게 세운 건 0.5에 가려지지 않게 하려는 것뿐입니다.
                   </p>
                 </div>
@@ -1875,7 +1960,14 @@ export default function MapExplorer({
                 </div>
                 <div>
                   <p className="text-[11px] text-slate-500">위험영역</p>
-                  <p className="font-mono text-lg text-red-400">{riskReachedCount}곳</p>
+                  <p className="font-mono text-lg text-orange-400">
+                    {riskPatchCount}곳
+                    <span className="ml-1 text-xs text-orange-300/70">
+                      {riskAreaM2 >= 10_000
+                        ? `${(riskAreaM2 / 10_000).toFixed(1)}ha`
+                        : `${Math.round(riskAreaM2)}m²`}
+                    </span>
+                  </p>
                 </div>
               </div>
             </div>
