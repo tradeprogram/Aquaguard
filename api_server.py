@@ -129,6 +129,79 @@ def approve_alert(alert_id: str, req: ApproveRequest) -> dict:
     }
 
 
+@app.get("/alerts/{alert_id}/timeline")
+def get_alert_timeline(alert_id: str) -> dict:
+    """§5 UI-3D 시간축 — 경보가 어느 시각의 예측인지와, 위험이 번져간 순서.
+
+    화면에 시각이 안 보이면 지금 보는 게 언제의 예측인지 알 수가 없다. 트랙①의
+    scripts/45 가 산청 전역 격자를 실측 강우로 시간마다 구동해 프레임과 폴리곤별
+    도달시각(arrival_hour)을 남겨 뒀으므로 그대로 내보낸다.
+
+    프레임 수가 39개, 위험 폴리곤이 한 자릿수라 통째로 한 번에 보낸다 — 스크럽할
+    때마다 서버를 부르면 끊긴다. 시간 필터링은 UI가 arrival_hour로 한다.
+
+    침수(Module B)는 시간축이 없다. SFINCS 산출물이 '최대' 침수심 래스터 하나라
+    시간에 따라 번지는 과정이 없으므로, 있는 척하지 않고 flood_is_max=true로
+    알린다 — UI는 그걸 최대 범위로 표기한다.
+    """
+    # 경보가 아직 없어도(데모 실행 전) 프레임과 위험영역은 사전계산물이라 그대로
+    # 돌려준다 — 지도가 뜨자마자 시간축이 보여야 "지금 뭘 보고 있는지"를 읽을 수 있다.
+    # 탐지/발송/공식경보 시각만 경보에서 오므로, 없으면 그 부분만 빈다.
+    alert = alert_store.get(alert_id)
+
+    try:
+        from module_a_landslide import risk_layers
+    except ImportError:
+        return {"available": False, "reason": "Module A 미설치 — 시간축 데이터 없음"}
+
+    index_path = (
+        Path(risk_layers.__file__).resolve().parent
+        / "data" / "risk_polygons" / "risk_landslide_index.json"
+    )
+    if not index_path.exists():
+        return {"available": False,
+                "reason": "위험영역 시계열 레이어 없음 — python module_a_landslide/scripts/"
+                          "45_risk_polygons_timeseries.py 로 생성"}
+
+    with open(index_path, encoding="utf-8") as f:
+        index = json.load(f)
+
+    scenario, level = risk_layers.DEFAULT_SCENARIO, risk_layers.DEFAULT_LEVEL
+    collection = risk_layers.load(scenario, level)
+    features = []
+    for feature in geo.featurecollection_5179_to_lonlat(collection):
+        props = feature["properties"]
+        features.append({
+            "type": "Feature",
+            "geometry": feature["geometry"],
+            "properties": {
+                "kind": "landslide_risk",
+                "arrival_hour": props.get("arrival_hour"),
+                "arrival_time": props.get("arrival_time"),
+                "area_m2": props.get("area_m2"),
+            },
+        })
+
+    timeline = alert.envelope["data"]["timeline_actual"] if alert else {}
+    agent = alert.envelope["data"]["timeline_agent"] if alert else {}
+    return {
+        "available": True,
+        "scenario": scenario,
+        "level": level,
+        "frames": index.get("frames") or [],
+        "risk": {"type": "FeatureCollection", "features": features},
+        # 화면에 시각과 함께 표시할 기준점들 — "지금 보는 게 언제인가"의 맥락
+        "markers": {
+            "detected": agent.get("detected"),
+            "alert_sent": agent.get("alert_sent"),
+            "official_warning": timeline.get("warning_escalated"),
+            "report_start": timeline.get("report_start"),
+        },
+        "flood_is_max": True,
+        "limits": index.get("한계") or [],
+    }
+
+
 @app.get("/alerts/{alert_id}/geojson")
 def get_alert_geojson(alert_id: str) -> dict:
     """§5 Module UI-3D 입력 — 여기서만 EPSG:5179 → EPSG:4326 재투영을 수행한다(§4.1).

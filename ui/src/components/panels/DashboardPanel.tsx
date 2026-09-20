@@ -27,7 +27,15 @@ const LEVEL_STYLE: Record<string, string> = {
   위험: "bg-red-900/60 text-red-300",
 };
 
-export default function DashboardPanel({ mode }: { mode: "citizen" | "gov" }) {
+export default function DashboardPanel({
+  mode,
+  onAlertUpdated,
+}: {
+  mode: "citizen" | "gov";
+  // 데모를 돌리면 지도 쪽 침수 폴리곤·시간축도 같이 새로 받아야 한다 — 두 컴포넌트가
+  // 형제라 page.tsx가 이 신호를 받아 MapExplorer로 내려 준다(§6.9와 같은 방식).
+  onAlertUpdated?: () => void;
+}) {
   const govOnly = mode === "gov";
   const [envelope, setEnvelope] = useState<ModuleOEnvelope | null>(null);
   const [loading, setLoading] = useState(false);
@@ -41,6 +49,7 @@ export default function DashboardPanel({ mode }: { mode: "citizen" | "gov" }) {
     try {
       const result = await triggerAlert(SANGCHEONG_DEMO_INPUT);
       setEnvelope(result);
+      onAlertUpdated?.();
     } catch {
       // 문구를 고정해두면 진단이 헛돈다 — 2026-09-20에 실제로 그랬다. 화면에는
       // "무료 호스팅이라 깨어나는 데 시간이 걸린다"(Render 시절 문구)가 떴지만

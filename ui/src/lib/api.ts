@@ -146,6 +146,50 @@ export async function getAlertGeojson(alertId: string): Promise<GeoJSON.FeatureC
   return res.json();
 }
 
+// §5 UI-3D 시간축 — "지금 화면이 언제의 예측인가"를 화면에 쓸 수 있게 하는 데이터.
+// 프레임 39개 + 위험 폴리곤 한 자릿수라 한 번에 통째로 받아 두고, 시간 스크럽은
+// arrival_hour로 클라이언트에서 거른다(스크럽마다 서버를 부르면 끊긴다).
+export interface TimelineFrame {
+  hour: number;
+  time: string; // ISO8601 +09:00
+  rn_mm: number; // 그 시각 시간강우
+  cum24_mm: number; // 24시간 누적
+}
+
+export interface AlertTimeline {
+  available: boolean;
+  reason?: string;
+  scenario?: string;
+  level?: string;
+  frames: TimelineFrame[];
+  risk: GeoJSON.FeatureCollection;
+  markers: {
+    detected?: string | null;
+    alert_sent?: string | null;
+    official_warning?: string | null;
+    report_start?: string | null;
+  };
+  // 침수(Module B)는 SFINCS 최대침수심 래스터 한 장뿐이라 시간축이 없다.
+  // true면 UI는 "최대 범위"로만 표기하고 시간에 따라 번지는 척하지 않는다.
+  flood_is_max: boolean;
+  limits?: string[];
+}
+
+const EMPTY_TIMELINE: AlertTimeline = {
+  available: false,
+  frames: [],
+  risk: { type: "FeatureCollection", features: [] },
+  markers: {},
+  flood_is_max: true,
+};
+
+export async function getAlertTimeline(alertId: string): Promise<AlertTimeline> {
+  const res = await fetch(`${API_BASE}/alerts/${alertId}/timeline`, { cache: "no-store" });
+  if (!res.ok) return { ...EMPTY_TIMELINE, reason: `시간축 조회 실패 (${res.status})` };
+  const body = (await res.json()) as Partial<AlertTimeline>;
+  return { ...EMPTY_TIMELINE, ...body };
+}
+
 export interface ChatHistoryTurn {
   role: "user" | "bot";
   text: string;

@@ -76,10 +76,13 @@ export default function HomePage() {
   // 지도의 "산청 상능마을"/"서울 강남" 버튼이 바꾸는 현재 데모 지역 — EvacuationPanel/
   // IsolationPanel이 이 값 기준으로 대피소 목록을 고른다(lib/demoShelters.ts).
   const [region, setRegion] = useState<RegionKey>(DEFAULT_REGION);
+  // 데모를 돌리면 경보가 새로 생기므로 지도의 침수 폴리곤·시간축을 다시 받게 한다.
+  const [alertNonce, setAlertNonce] = useState(0);
 
   return (
     <div className="relative h-full w-full">
       <MapExplorer
+        alertNonce={alertNonce}
         route={evacuationRoute}
         pickOrigin={pickingOrigin}
         onOriginPicked={(coord) => {
@@ -152,7 +155,7 @@ export default function HomePage() {
         <div className="pointer-events-none absolute inset-0 z-20 flex items-start justify-center pt-24">
           <div className="pointer-events-auto">
             <GlassPanel title={PANEL_TITLE[mode][active] ?? ""} onClose={() => setActive(null)}>
-              {active === "dashboard" && <DashboardPanel mode={mode} />}
+              {active === "dashboard" && <DashboardPanel mode={mode} onAlertUpdated={() => setAlertNonce((n) => n + 1)} />}
               {active === "performance" && <ModelPerformancePanel />}
               {active === "validation" && <ValidationPanel />}
               {active === "evacuation" && (
