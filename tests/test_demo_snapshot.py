@@ -48,7 +48,21 @@ def fresh_envelope() -> dict:
     비교하면 contracts 예시와 대조하는 셈이라 아무것도 검증하지 못한다.
     """
     import os
+
+    from dotenv import load_dotenv
+
+    # 저장본을 만든 쪽(scripts/build_demo_snapshot.py)은 .env를 읽는다. 여기서 안 읽으면
+    # 재실행만 NAVER 키가 없어 대피 경로가 직선으로 떨어지고, 저장본은 실도로라
+    # **경로 때문에** 불일치가 난다 — 실제로 어긋난 건 아무것도 없는데 말이다.
+    load_dotenv(ROOT / ".env")
+
     from module_o_orchestrator.orchestrator import run as run_orchestrator
+
+    if not (os.environ.get("NAVER_CLIENT_ID") and os.environ.get("NAVER_CLIENT_SECRET")):
+        pytest.skip(
+            "NAVER_CLIENT_ID/SECRET 없음 — 키 없이 재실행하면 대피 경로가 직선으로 "
+            "떨어져서 저장본과 대조할 수가 없다(.env에 키를 넣으면 이 테스트가 돈다)"
+        )
 
     with open(ROOT / "contracts" / "module_o.example.json", encoding="utf-8") as f:
         payload = json.load(f)["input"]
@@ -75,15 +89,47 @@ def test_snapshot_input_matches_the_demo_contract(snapshot: dict) -> None:
     assert snapshot["alert_id"] == demo_input()["alert_id"]
 
 
+# 네이버 Directions는 option=trafast(실시간 빠른길)로 부르므로 같은 좌표라도 호출
+# 시점의 교통 상황에 따라 소요시간이 조금씩 달라진다(실측 14.1 vs 14.2분). 값이
+# 흔들리는 건 이 API를 쓰는 이상 정상이고, 저장본이 낡았다는 신호가 아니다.
+TRAFFIC_DEPENDENT = ("eta_min", "time_margin_min")
+ETA_TOLERANCE_MIN = 2.0
+
+
+def split_route_times(package: dict) -> tuple[dict, dict]:
+    """교통에 따라 흔들리는 시간값을 따로 떼어낸다. 나머지는 정확히 같아야 한다."""
+    package = as_transported(package)
+    route = package.get("shelter_route") or {}
+    times = {k: route.pop(k, None) for k in TRAFFIC_DEPENDENT}
+    for name, mode in (route.get("modes") or {}).items():
+        times[f"modes.{name}.eta_min"] = mode.pop("eta_min", None)
+    return package, times
+
+
 def test_snapshot_alert_package_matches_a_fresh_run(snapshot: dict, fresh_envelope: dict) -> None:
     """핵심 — 저장된 경보 내용이 지금 파이프라인 결과와 같은가.
 
     alert_package 안에 산사태 확률·침수 확률·노출자산·피해액·대피경로가 전부 들어 있다.
     여기가 어긋나면 화면에 뜨는 숫자가 코드와 다른 것이다.
+
+    소요시간만 허용오차를 둔다 — 실시간 교통이 섞여 호출마다 몇 초씩 다르다.
+    경로 좌표·모드·폴백 여부 같은 나머지는 전부 정확히 일치해야 한다.
     """
-    assert as_transported(snapshot["envelope"]["data"]["alert_package"]) == as_transported(
-        fresh_envelope["data"]["alert_package"]
-    )
+    stored, stored_times = split_route_times(snapshot["envelope"]["data"]["alert_package"])
+    fresh, fresh_times = split_route_times(fresh_envelope["data"]["alert_package"])
+
+    assert stored == fresh
+
+    for key, stored_value in stored_times.items():
+        fresh_value = fresh_times.get(key)
+        if stored_value is None or fresh_value is None:
+            assert stored_value == fresh_value, f"{key}: 한쪽에만 값이 있다"
+            continue
+        assert abs(stored_value - fresh_value) <= ETA_TOLERANCE_MIN, (
+            f"{key}: 저장본 {stored_value}분 vs 재실행 {fresh_value}분 — "
+            f"교통 변동으로 보기엔 차이가 크다({ETA_TOLERANCE_MIN}분 초과). "
+            f"저장본을 다시 구우십시오."
+        )
 
 
 def test_snapshot_status_and_sources_match(snapshot: dict, fresh_envelope: dict) -> None:
