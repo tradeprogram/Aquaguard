@@ -1,7 +1,8 @@
 "use client";
 
 import { useState } from "react";
-import { API_BASE, SANGCHEONG_DEMO_INPUT, triggerAlert } from "@/lib/api";
+import { SANGCHEONG_DEMO_INPUT, triggerAlert } from "@/lib/api";
+import { diagnoseFailure } from "@/lib/backendDiagnosis";
 import type { ModuleOEnvelope } from "@/lib/types";
 import { useSlowLoading } from "@/lib/useSlowLoading";
 import GoldenTimeCounter from "@/components/GoldenTimeCounter";
@@ -40,16 +41,13 @@ export default function DashboardPanel({ mode }: { mode: "citizen" | "gov" }) {
     try {
       const result = await triggerAlert(SANGCHEONG_DEMO_INPUT);
       setEnvelope(result);
-    } catch (e) {
-      setError(
-        API_BASE.includes("localhost")
-          ? `백엔드(api_server.py) 연결 실패 — "python -m uvicorn api_server:app --port 8000"로 먼저 띄워주세요. (${
-              e instanceof Error ? e.message : String(e)
-            })`
-          : `백엔드 서버 연결 실패 — 무료 호스팅이라 오래 쉬었으면 깨어나는 데 시간이 걸릴 수 있어요. 잠시 후 다시 시도해주세요. (${
-              e instanceof Error ? e.message : String(e)
-            })`
-      );
+    } catch {
+      // 문구를 고정해두면 진단이 헛돈다 — 2026-09-20에 실제로 그랬다. 화면에는
+      // "무료 호스팅이라 깨어나는 데 시간이 걸린다"(Render 시절 문구)가 떴지만
+      // 배포는 EC2였고, 진짜 원인은 메모리 부족으로 uvicorn이 OOM-kill 당한 것이라
+      // "기다리면 되는 문제"로 읽혀 원인 파악이 늦어졌다. 다른 패널들처럼 /health를
+      // 실제로 찔러 서버가 죽었는지·배포가 뒤처졌는지·요청 자체 문제인지 구분한다.
+      setError(await diagnoseFailure("데모 실행", "/alerts/trigger"));
     } finally {
       stop();
       setLoading(false);
