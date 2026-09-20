@@ -186,7 +186,7 @@ export default function IsolationPanel({
                 : "border-cyan-700 bg-cyan-950/30 text-cyan-300 hover:bg-cyan-950/60"
             }`}
           >
-            {loading === "flood" ? "불러오는 중…" : "실제 침수 반영"}
+            {loading === "flood" ? "불러오는 중…" : "침수 반영"}
             {cached("flood") && loading === null && <span className="ml-1 text-[10px] opacity-60">저장됨</span>}
           </button>
         )}
