@@ -32,10 +32,16 @@ def test_run_matches_contract_shape():
 
 
 def test_golden_time_matches_documented_example():
-    """contracts/module_o.example.json의 기본 입력값은 golden_time_saved_min=197을 문서화하고 있다."""
+    """contracts/module_o.example.json의 기본 입력값은 golden_time_saved_min=212를 문서화한다.
+
+    212 = 공식 경보 12:37 − 전파 09:05. 트랙① 백테스트가 실측한 T_agent(09:00)에
+    detection_lag_min=60으로 맞추고 전파지연 5분을 더한 값이다. 백테스트가 보고하는
+    decision_latency 217분은 '탐지'까지만 재므로 이 값과 5분 차이가 나며, 둘은
+    다른 지표다(backtest_sancheong/README.md §1).
+    """
     example = _load_example("o")
     envelope = run(example["input"])
-    assert envelope["data"]["golden_time_saved_min"] == 197.0
+    assert envelope["data"]["golden_time_saved_min"] == 212.0
 
 
 def test_alert_registered_for_approval():

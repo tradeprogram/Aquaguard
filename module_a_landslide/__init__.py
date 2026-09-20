@@ -115,6 +115,11 @@ def run(input: dict) -> dict:  # noqa: A002 - §4.2 규약이 지정한 이름
                 "precursor_flag": precursor,
                 "hours_to_critical": htc,
                 "location": {"x_5179": norm.x_5179, "y_5179": norm.y_5179},
+                # §4.3 합의로 계약에 추가된 필수·nullable 필드. run()은 지점 단위
+                # FoS만 계산하므로 폴리곤을 만들지 않는다 — 면 단위 위험영역은
+                # backtest_sancheong의 래스터 파이프라인 쪽 산출물이다.
+                # null을 주면 Module O가 location(점)으로 폴백한다(orchestrator.py).
+                "risk_polygon_5179": None,
             },
             warnings=warnings,
         )
