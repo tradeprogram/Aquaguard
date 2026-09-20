@@ -1,0 +1,23 @@
+{
+  "engine": "ANUGA",
+  "depth_thr_m": 0.3,
+  "extent_vs_S1": {
+    "IoU": 0.424,
+    "F1": 0.595,
+    "POD": 0.523,
+    "FAR": 0.308,
+    "precision": 0.692,
+    "TP": 566,
+    "FP": 252,
+    "FN": 517,
+    "TN": 2780
+  },
+  "model_flood_km2": 8.18,
+  "obs_flood_km2": 10.83,
+  "gyeongho_WSE": {
+    "obs_peak_m": 94.12,
+    "sim_peak_m": 97.02,
+    "diff_m": 2.91
+  },
+  "gyeongho_WSE_rmse_m": 2.476
+}

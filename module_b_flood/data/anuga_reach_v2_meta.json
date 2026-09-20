@@ -1,0 +1,11 @@
+{
+  "engine": "ANUGA v2 (100m corridor + multi-inflow)",
+  "tri": 20248,
+  "gyeongho_WSE": {
+    "obs_peak": 94.12,
+    "sim_peak": 98.3,
+    "diff_m": 4.19,
+    "rmse_m": 3.33
+  },
+  "runtime_s": 6296.0
+}
