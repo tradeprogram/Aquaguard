@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { EvacuationRoute } from "@/components/MapExplorer";
 import { getEvacuationRoutes, type EvacuationRouteResult } from "@/lib/api";
 import { diagnoseFailure } from "@/lib/backendDiagnosis";
@@ -16,6 +16,7 @@ const PLACEHOLDER_ETA = { carMin: 14.5, walkMin: 52.0, feasible: true } as const
 
 const CAR_KMH = 30; // 산간도로 실도로거리 보정을 반쯤 흡수한 가정 속도 — 실API 전 근사치
 const WALK_KMH = 4; // §6.3
+const MAX_QUERIED_SHELTERS = 12; // 후보가 이보다 많은 지역(산청군 전체 104곳)은 출발지에서 직선거리가 가까운 곳만 네이버로 조회
 const TIME_BUDGET_MIN = 120; // contracts/module_e.example.json의 time_budget_hours 2.0
 
 function haversineKm(a: [number, number], b: [number, number]): number {
@@ -43,8 +44,14 @@ export default function EvacuationPanel({
   onRequestMapPick?: () => void;
   mapPickedOrigin?: [number, number] | null;
 }) {
-  const SHELTERS = DEMO_REGIONS[region].shelters;
+  const ALL_SHELTERS = DEMO_REGIONS[region].shelters;
   const [origin, setOrigin] = useState<[number, number] | null>(null);
+  const SHELTERS = useMemo(() => {
+    if (!origin || ALL_SHELTERS.length <= MAX_QUERIED_SHELTERS) return ALL_SHELTERS;
+    return [...ALL_SHELTERS]
+      .sort((a, b) => haversineKm(origin, [a.lon, a.lat]) - haversineKm(origin, [b.lon, b.lat]))
+      .slice(0, MAX_QUERIED_SHELTERS);
+  }, [ALL_SHELTERS, origin]);
   const [locating, setLocating] = useState(false);
   const [locError, setLocError] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -149,13 +156,19 @@ export default function EvacuationPanel({
         distanceKm: null as number | null,
         real: !backend.fallback_used,
         routeLonlat: backend.route_lonlat,
+        floodedM: backend.route_flooded ? (backend.flooded_route_m ?? 0) : null,
       };
     }
     const distanceKm = haversineKm(origin, [s.lon, s.lat]);
     const carMin = (distanceKm / CAR_KMH) * 60;
     const walkMin = (distanceKm / WALK_KMH) * 60;
     return { ...s, carMin, walkMin, feasible: carMin <= TIME_BUDGET_MIN, distanceKm, real: false as const };
-  }).sort((a, b) => a.carMin - b.carMin);
+  }).sort((a, b) => {
+    // 침수 구간을 지나는 대피소는 아무리 가까워도 뒤로 — 통행 불가 길을 1순위로 안내하면 안 된다.
+    const fa = "floodedM" in a && a.floodedM !== null ? 1 : 0;
+    const fb = "floodedM" in b && b.floodedM !== null ? 1 : 0;
+    return fa - fb || a.carMin - b.carMin;
+  });
 
   // 대피소가 지역마다 최대 20곳까지 있어 전부 보여주면 리스트가 너무 길다(2026-09-10
   // 사용자 피드백) — 계산은 전체를 대상으로 하되(가장 가까운 곳을 정확히 알아야 하니까),
@@ -281,7 +294,12 @@ export default function EvacuationPanel({
               </span>
               <span className="text-slate-500">수용인원 {s.capacity}명</span>
             </div>
-            {!s.feasible && (
+            {"floodedM" in s && s.floodedM !== null && (
+              <p className="mt-2 text-xs font-medium text-cyan-300">
+                🌊 통행 불가 — {s.floodedM > 0 ? `경로 중 약 ${s.floodedM}m가 침수 구간(수심 0.3m 이상)을 지납니다` : "이 대피소가 침수범위 안에 있습니다"}
+              </p>
+            )}
+            {!s.feasible && !("floodedM" in s && s.floodedM !== null) && (
               <p className="mt-2 text-xs font-medium text-red-300">
                 ⚠ 제한시간 내 도달 불가 — 더 가까운 대피소나 안전지대로 즉시 이동하세요
               </p>
@@ -290,7 +308,7 @@ export default function EvacuationPanel({
         ))}
         {allRows.length > MAX_VISIBLE_SHELTERS && (
           <p className="text-center text-[11px] text-slate-500">
-            가까운 {MAX_VISIBLE_SHELTERS}곳만 표시 — 이 지역에 대피소 {allRows.length}곳 있음
+            가까운 {MAX_VISIBLE_SHELTERS}곳만 표시 — 이 지역에 대피소 {ALL_SHELTERS.length}곳 있음
           </p>
         )}
       </div>

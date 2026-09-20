@@ -205,7 +205,7 @@ def build(verbose: bool = True) -> dict:
     except ImportError:
         pass
 
-    isolation = build_isolation(verbose=verbose)
+    isolation = build_isolation(verbose=verbose, flood_hazard=_flood_hazard(flood_display))
 
     return {
         "schema": 1,
@@ -305,7 +305,7 @@ def write_ui_copies(snapshot: dict, verbose: bool = True) -> None:
 # 2026-09-21 예선 제출 계획 변경: 강남·서초는 빼고 산청군 전체로 넓히는 쪽으로 갔다
 # (고립마을 위험·대피소 찾기, 김동현 작업 중). 여기서 강남을 같이 구우면 150초를
 # 더 쓰면서 쓰이지도 않는다.
-ISOLATION_REGIONS = ("sancheong",)
+ISOLATION_REGIONS = ("sancheong", "sancheong_all")
 
 
 def _demo_hazard(bbox):
@@ -355,10 +355,21 @@ def _read_demo_regions() -> dict:
 
 # 읽기가 성공했는지 확인할 기준값 — 이 숫자가 바뀌면 지역 정의가 바뀐 것이므로
 # 여기도 같이 고쳐야 한다(자동으로 맞추면 파싱 실패를 알아챌 방법이 없어진다).
-EXPECTED_SHELTERS = {"sancheong": 8}
+EXPECTED_SHELTERS = {"sancheong": 8, "sancheong_all": 104}
 
 
-def build_isolation(verbose: bool = True) -> dict:
+def _flood_hazard(flood_display: dict):
+    """Module B의 실제 침수범위(표시용 폴리곤 중 최저 수심 구간) — 고립분석의 "실제 침수" 시나리오 입력.
+
+    표시용 폴리곤은 누적 구간이라 band 0(수심 0.3m 이상)이 가장 넓은 범위를 통째로 덮는다.
+    승용차가 못 지나가는 수심을 0.3m로 본 가정이다(depth_thr_m). 화면 전용이라던 폴리곤을 쓰는
+    이유: 계산에 쓰인 원본 기하는 5179 격자 폴리곤 수백 개라 lon/lat 변환·병합이 이쪽이 이미 돼 있다.
+    """
+    feats = [f for f in (flood_display or {}).get("features", []) if (f.get("properties") or {}).get("band") == 0]
+    return feats[0]["geometry"] if feats else None
+
+
+def build_isolation(verbose: bool = True, flood_hazard: dict | None = None) -> dict:
     from module_e_routing import isolation as iso
 
     regions = _read_demo_regions()
@@ -372,7 +383,11 @@ def build_isolation(verbose: bool = True) -> dict:
                   f"demoShelters.ts 형식이 바뀌었는지 확인하십시오. 이 지역은 건너뜁니다.")
             continue
 
-        for scenario, hazard in (("base", None), ("hazard", _demo_hazard(info["bbox"]))):
+        scenarios = [("base", None), ("hazard", _demo_hazard(info["bbox"]))]
+        # 실제 침수범위는 산청 AOI(경호강 일대)라 군 전체 범위에서만 의미가 있다.
+        if region == "sancheong_all" and flood_hazard:
+            scenarios.append(("flood", flood_hazard))
+        for scenario, hazard in scenarios:
             t0 = time.perf_counter()
             try:
                 result = iso.check_isolation(info["bbox"], info["shelters"], hazard)

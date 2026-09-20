@@ -335,6 +335,9 @@ export interface EvacuationRouteResult {
   time_feasible: boolean;
   time_margin_min: number | null;
   fallback_used: boolean;
+  // 실제 침수범위(Module B)와 겹치는 경로/대피소 — 겹치면 time_feasible이 false로 온다.
+  route_flooded?: boolean;
+  flooded_route_m?: number;
   modes: { car: { eta_min: number; source: string }; walk: { eta_min: number; source: string } };
 }
 
