@@ -80,19 +80,32 @@ export function RocCurve({ points, auc, width = 200, height = 200 }: { points: [
   );
 }
 
-export function ConfusionMatrix({ tp, fp, fn, tn }: { tp: number; fp: number; fn: number; tn: number }) {
+// tn 이 null 인 경우가 있다 — 평가역을 위험가능역으로 한정하면(예: 침수범위 검증에서
+// HAND<15m 계곡만) 진음성 모집단이 정의되지 않는다. 0으로 채우면 없는 성능을 만들어
+// 내는 셈이라, 그대로 '정의 안 됨'으로 표시한다.
+export function ConfusionMatrix({ tp, fp, fn, tn }: { tp: number; fp: number; fn: number; tn?: number | null }) {
   const cells = [
     { label: "TP", value: tp, tone: "bg-emerald-900/50 text-emerald-300" },
     { label: "FP", value: fp, tone: "bg-red-900/40 text-red-300" },
     { label: "FN", value: fn, tone: "bg-red-900/40 text-red-300" },
-    { label: "TN", value: tn, tone: "bg-emerald-900/50 text-emerald-300" },
+    {
+      label: "TN",
+      value: tn ?? null,
+      tone: tn == null ? "bg-slate-800/50 text-slate-500" : "bg-emerald-900/50 text-emerald-300",
+    },
   ];
   return (
     <div className="grid grid-cols-2 gap-1.5">
       {cells.map((c) => (
         <div key={c.label} className={`rounded-lg p-2 text-center ${c.tone}`}>
           <p className="text-[10px] opacity-70">{c.label}</p>
-          <p className="text-base font-bold">{c.value}</p>
+          {c.value == null ? (
+            <p className="text-base font-bold" title="평가역 한정으로 진음성 모집단이 정의되지 않음">
+              —
+            </p>
+          ) : (
+            <p className="text-base font-bold">{c.value}</p>
+          )}
         </div>
       ))}
     </div>

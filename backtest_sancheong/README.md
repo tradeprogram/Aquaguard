@@ -4,6 +4,9 @@ Module A(산사태)의 골든타임·예측력을 **2025.7.16~20 산청군 재�
 p5 체크리스트 항목 `bt-time` `bt-abl` `bt-overlap` `bt-metric` `bt-eval` `bt-panel`의
 실행 코드와 산출물이 전부 여기 있다.
 
+> 📋 **파라미터 전수·실행 횟수·한계 24개는 [RUN_LOG.md](RUN_LOG.md)에 따로 있다.**
+> 어떤 값을 썼고 몇 번 돌렸고 왜 다시 돌렸는지까지 거기 적었다.
+
 > **먼저 읽을 것 — 이 문서는 좋은 숫자를 자랑하지 않는다.**
 > 결과의 상당수가 음성(negative)이다. 그 이유가 모형인지 참값인지 분리할 수
 > 없다는 사실까지 포함해 그대로 적었다. 발표에서 유리한 숫자만 떼어 쓰면
@@ -21,7 +24,7 @@ p5 체크리스트 항목 `bt-time` `bt-abl` `bt-overlap` `bt-metric` `bt-eval` 
 | `bt-overlap` 흉터×산사태 | Spearman ρ≈0, 농축 **0.82×** | ❌ 불지지 (참값 부적합) |
 | `bt-eval` 공간분할 AUPRC | 0.061 vs 기저 0.064 (**lift 0.94**) | ❌ 전역 무기력, 읍면 6/9만 lift>1 |
 | `a-ml` ML 보정 | 중앙값 0.072→0.130, **p=0.074** | ❌ 사전기준 미달로 기각 |
-| `bt-panel` UI 실제값 | `outputs/model_performance_panel.json` | ✅ 산출 (목업 교체용) |
+| `bt-panel` UI 실제값 | `.tsx` 2종 교체 완료 (ROC-AUC 0.91→0.469 등) | ✅ 교체 완료 |
 
 ---
 
@@ -157,9 +160,19 @@ ML을 맞추면 모형은 산사태가 아니라 **"사람이 사는 곳"을 학
 
 ## 6. `bt-panel` — UI 실제값 (44번)
 
-`ui/src/components/panels/ModelPerformancePanel.tsx`의 숫자는 **전부 목업**이다
-(컴포넌트 주석에도 그렇게 적혀 있다). 실제값을 같은 스키마로 내보냈다:
-`outputs/model_performance_panel.json`.
+**2026-09-20: 교체 완료.** 트랙① 소유 패널 2종의 목업을 실제값으로 갈아끼웠다.
+산출 JSON은 `outputs/model_performance_panel.json`.
+
+| 컴포넌트 | 교체 전(목업) | 교체 후(실제) |
+|---|---|---|
+| `ModelPerformancePanel.tsx` | AUC 0.91 · precision 0.86 · confusion 34/6/9/151 | **0.469 · 0.068 · 32/436/22/348** |
+| `ValidationPanel.tsx` | IoU 0.58 · F1 0.71 · lead 195분 | **0.32 · 0.485 · 217분** |
+
+두 패널 모두 지표 위에 **참값 한계 배너**를 상시 노출하도록 바꿨다 — 숫자만 떼어
+인용하는 걸 막기 위해서다. `ValidationPanel`에는 같은 엔진을 산사태에 돌린 결과
+(IoU 0.0038)도 함께 띄워 "Module V가 만능이 아님"을 명시했다.
+
+⚠ Node.js 미설치로 `tsc`/`next build` 검증은 못 했다. 트랙③이 빌드로 확인 필요.
 
 | 지표 | 목업 | **실제** |
 |---|---|---|
