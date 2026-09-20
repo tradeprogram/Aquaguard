@@ -62,6 +62,18 @@ def build(verbose: bool = True) -> dict:
 
     payload = demo_input()
 
+    # 시간축 프레임(트랙①의 사전계산 강우 시계열) — 침수 수위를 여기에 맞춰 붙인다.
+    frames = []
+    try:
+        from module_a_landslide import risk_layers
+        index_path = (Path(risk_layers.__file__).resolve().parent
+                      / "data" / "risk_polygons" / "risk_landslide_index.json")
+        if index_path.exists():
+            with open(index_path, encoding="utf-8") as f:
+                frames = json.load(f).get("frames") or []
+    except ImportError:
+        pass
+
     t0 = time.perf_counter()
     envelope = run_orchestrator(payload)
     pipeline_s = time.perf_counter() - t0
@@ -98,6 +110,53 @@ def build(verbose: bool = True) -> dict:
         if verbose:
             print(f"  표시용 침수 {flood_stats['polygons']}개 폴리곤 "
                   f"{flood_stats['build_seconds']}s")
+
+    # 시간축 침수 — 등고선 한 벌 + 시각별 수위강하.
+    #
+    # SFINCS는 "최대" 침수심 한 장만 내지만 같은 모의가 경호교 시간별 수위도 남겼다.
+    # 깊이(t) ≥ b ⟺ 최대깊이 ≥ b + 수위강하(t) 이므로, 등고선을 한 벌만 보내 두면
+    # 화면이 시각마다 골라 쓰고 색만 다시 매길 수 있다(display_geometry 참고).
+    flood_series: dict = {"available": False}
+    if raster_path:
+        t0 = time.perf_counter()
+        contours_5179 = display_geometry.flood_contours(raster_path)
+        contours = {
+            "type": "FeatureCollection",
+            "features": geo.featurecollection_5179_to_lonlat(contours_5179),
+        }
+        wse_csv = REPO_ROOT / "module_b_flood" / "data" / "sfincs_reach_wse.csv"
+        stage_by_time = (
+            display_geometry.reach_stage_series(str(wse_csv)) if wse_csv.exists() else {}
+        )
+        if stage_by_time:
+            peak = max(stage_by_time.values())
+            # 프레임 시각(ISO+09:00)을 수위 CSV의 키("YYYY-MM-DD HH:MM:SS")로 맞춘다
+            drop_by_hour = {}
+            for frame in frames:
+                key = frame["time"][:19].replace("T", " ")
+                stage = stage_by_time.get(key)
+                if stage is not None:
+                    drop_by_hour[str(frame["hour"])] = round(peak - stage, 3)
+            flood_series = {
+                "available": True,
+                "contours": contours,
+                "levels": contours_5179["levels"],
+                "observed_max_m": contours_5179["observed_max_m"],
+                "peak_stage_m": round(peak, 3),
+                "stage_drop_by_hour": drop_by_hour,
+                "gauge": "경호교",
+                "build_seconds": round(time.perf_counter() - t0, 2),
+                "한계": [
+                    "SFINCS를 시각마다 다시 돌린 것이 아니다 — 최대침수심 한 장에 "
+                    "같은 모의의 경호교 시간별 수위를 빼서 만든 준정적(bathtub) 근사다.",
+                    "수면이 한 덩어리로 오르내린다고 가정했다. 실제 홍수파는 구간을 "
+                    "따라 경사를 가지므로 상·하류 시차가 이 방식에는 없다.",
+                    "수위 곡선은 침수심 래스터와 같은 SFINCS 모의 산출이라 엔진을 섞지는 않았다.",
+                ],
+            }
+            if verbose:
+                print(f"  시간축 침수 등고선 {len(contours['features'])}개 · "
+                      f"{len(drop_by_hour)}시각 {flood_series['build_seconds']}s")
 
     # 표시용 산사태 위험영역 — 5m 격자에서 나온 20~75m 조각이라 각이 그대로 보인다.
     risk_display = {"type": "FeatureCollection", "features": []}
@@ -137,6 +196,7 @@ def build(verbose: bool = True) -> dict:
         "envelope": envelope,
         "flood_display": flood_display,
         "flood_display_meta": flood_stats,
+        "flood_series": flood_series,
         "risk_display": risk_display,
         "정직성": [
             "envelope 은 orchestrator.run() 이 낸 값 그대로다 — 손으로 고친 값이 없다.",

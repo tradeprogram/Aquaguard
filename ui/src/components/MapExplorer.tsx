@@ -1530,6 +1530,42 @@ export default function MapExplorer({
         properties: { ...f.properties, age: hour - Number(f.properties?.arrival_hour) },
       })) as Feature<Polygon | MultiPolygon>[];
   })();
+  // 이 시각의 침수. 등고선은 최대침수심 기준이므로, 수위강하만큼 잠긴 것만 남기고
+  // 색은 그 시각의 실제 침수심(level_m − 강하)으로 다시 매긴다.
+  //
+  // 등고선을 한 벌만 받아 두고 여기서 고르는 구조라 프레임을 넘겨도 네트워크를
+  // 다시 타지 않는다 — 스크럽이 끊기지 않는 이유다.
+  const floodSeries = timeline?.flood_series;
+  const floodDrop =
+    currentFrame && floodSeries?.available
+      ? floodSeries.stage_drop_by_hour?.[String(currentFrame.hour)]
+      : undefined;
+  const floodAtFrame: Feature<Polygon | MultiPolygon>[] =
+    floodDrop === undefined
+      ? []
+      : ((floodSeries?.contours?.features ?? []) as Feature<Polygon | MultiPolygon>[])
+          .filter((f) => Number(f.properties?.level_m) >= floodDrop + 0.3)
+          .map((f) => ({
+            ...f,
+            properties: {
+              ...f.properties,
+              depth_min_m: Number((Number(f.properties?.level_m) - floodDrop).toFixed(2)),
+            },
+          }));
+  // 이 시각의 최심 — 화면에 쓰는 숫자도 프레임을 따라 움직여야 한다.
+  const frameMaxDepth = floodAtFrame.length
+    ? Math.max(...floodAtFrame.map((f) => Number(f.properties?.depth_min_m) || 0))
+    : null;
+  // 이 시각의 침수 면적. 등고선이 누적이라 **가장 바깥 레벨**의 합이 곧 전체 범위다
+  // (안쪽 레벨을 더하면 같은 땅을 여러 번 세게 된다). 면적은 5179에서 미리 재 둔 값이다.
+  const frameFloodM2 = (() => {
+    if (!floodAtFrame.length) return null;
+    const outer = Math.min(...floodAtFrame.map((f) => Number(f.properties?.level_m)));
+    return floodAtFrame
+      .filter((f) => Number(f.properties?.level_m) === outer)
+      .reduce((sum, f) => sum + (Number(f.properties?.area_m2) || 0), 0);
+  })();
+
   // 화면 표시점. "8곳"은 feature 수라 눈에 보이는 것과 안 맞는다 — 한 feature가
   // 조각 295개인 경우도 있어서, 조각 수와 누적 면적을 쓴다(둘 다 시각에 따라 는다).
   const riskMarkers = riskMarkerPoints(reachedRisk);
@@ -1579,10 +1615,23 @@ export default function MapExplorer({
       features: riskMarkers,
     } as FeatureCollection);
 
+    // 침수도 이 시각 것으로 갈아 끼운다. 시간축 자료가 없으면(floodSeries 미제공)
+    // 아래 getAlertGeojson 쪽이 채운 최대 범위를 그대로 둔다 — 여기서 비우면
+    // 시간축이 없는 지역에서 물이 통째로 사라진다.
+    if (floodSeries?.available) {
+      (mapRef.current?.getSource("flood-model") as GeoJSONSource | undefined)?.setData({
+        type: "FeatureCollection",
+        features: floodAtFrame,
+      } as FeatureCollection);
+    }
+
     // 고립 판정은 산사태 위험영역 + 침수 범위를 함께 본다. 침수는 시간축이 없어
     // (SFINCS 최대침수심) 프레임과 무관하게 항상 최대 범위로 들어간다.
-    scheduleIsolationCheck([...reachedRisk, ...floodFeatures]);
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- reachedRisk/riskMarkers는 매 렌더 새 배열이라 currentFrame으로 건다
+    // 고립 판정도 그 시각의 침수로 본다 — 시간축이 생겼으므로 "최대 범위로 고정"할
+    // 이유가 없어졌다. 자료가 없는 시각이면 최대 범위(floodFeatures)로 떨어진다.
+    const floodForIsolation = floodSeries?.available ? floodAtFrame : floodFeatures;
+    scheduleIsolationCheck([...reachedRisk, ...floodForIsolation]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 파생 배열은 매 렌더 새로 만들어지므로 currentFrame으로 건다
   }, [mapReady, timeline, currentFrame, floodFeatures, scheduleIsolationCheck]);
 
   // 대피소 찾기 패널(EvacuationPanel)에서 고른 경로 — app/page.tsx가 상태를 끌어올려
@@ -1903,10 +1952,20 @@ export default function MapExplorer({
                 <div>
                   <p className="text-slate-200">침수 범위 · Module B</p>
                   <p className="text-slate-500">
-                    SFINCS <span className="text-sky-300">최대</span> 침수심
-                    {modelFloodDepth !== null && <> (최심 {modelFloodDepth.toFixed(1)}m)</>}. 얕은 곳은
-                    하늘색, 깊을수록 남색입니다(15단) — 깊이는 <span className="text-slate-300">높이가
-                    아니라 색</span>으로 표시합니다. 시간축이 없어 프레임과 무관하게 항상 최대 범위입니다.
+                    {floodSeries?.available ? (
+                      <>
+                        이 시각의 침수
+                        {frameMaxDepth !== null && <> (최심 {frameMaxDepth.toFixed(1)}m)</>}. 얕은 곳은
+                        하늘색, 깊을수록 남색입니다 — 깊이는{" "}
+                        <span className="text-slate-300">높이가 아니라 색</span>으로 표시합니다.
+                      </>
+                    ) : (
+                      <>
+                        SFINCS <span className="text-sky-300">최대</span> 침수심
+                        {modelFloodDepth !== null && <> (최심 {modelFloodDepth.toFixed(1)}m)</>} —
+                        시간축이 없어 프레임과 무관하게 항상 최대 범위입니다.
+                      </>
+                    )}
                   </p>
                   <p className="mt-0.5 text-slate-500">
                     원본은 50m 격자라 그대로 그리면 셀 모서리가 계단으로 보입니다. 화면에는
@@ -1914,6 +1973,14 @@ export default function MapExplorer({
                     원본과 IoU 0.929·면적 −0.2%</span>이고, 노출자산·고립 판정은 다듬지 않은
                     원본으로 계산합니다.
                   </p>
+                  {floodSeries?.available && (
+                    <p className="mt-0.5 text-amber-300/70">
+                      시각별 침수는 <span className="text-amber-200">준정적 근사</span>입니다 —
+                      SFINCS를 시각마다 다시 돌린 게 아니라, 최대침수심에서 같은 모의의{" "}
+                      {floodSeries.gauge ?? "하천"} 시간별 수위만큼 뺀 것입니다. 수면이 한 덩어리로
+                      오르내린다고 가정해 상·하류 시차가 없습니다.
+                    </p>
+                  )}
                 </div>
               </div>
               <div className="flex items-start gap-2">
@@ -1984,6 +2051,17 @@ export default function MapExplorer({
                   <p className="text-[11px] text-slate-500">24h 누적</p>
                   <p className="font-mono text-lg text-sky-200">{currentFrame.cum24_mm.toFixed(0)}mm</p>
                 </div>
+                {frameFloodM2 !== null && (
+                  <div>
+                    <p className="text-[11px] text-slate-500">침수</p>
+                    <p className="font-mono text-lg text-sky-400">
+                      {(frameFloodM2 / 10_000).toFixed(0)}ha
+                      {frameMaxDepth !== null && (
+                        <span className="ml-1 text-xs text-sky-300/70">최심 {frameMaxDepth.toFixed(1)}m</span>
+                      )}
+                    </p>
+                  </div>
+                )}
                 <div>
                   <p className="text-[11px] text-slate-500">위험영역</p>
                   <p className="font-mono text-lg text-orange-400">

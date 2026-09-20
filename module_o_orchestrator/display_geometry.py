@@ -223,3 +223,130 @@ def flood_display_featurecollection(depth_path: str,
         "features": features,
         "crs": {"type": "name", "properties": {"name": "EPSG:5179"}},
     }
+
+
+# --- 시간축 침수 ---------------------------------------------------------
+#
+# SFINCS 산출물은 "최대" 침수심 래스터 한 장이라 시각별 침수가 없다. 그런데 같은
+# 모의가 경호교 지점의 **시간별 수위**도 남겼다(module_b_flood/data/sfincs_reach_wse.csv,
+# 2025-07-18 02:00 ~ 07-20 12:00 매시). 이걸로 시각별 침수를 준정적(bathtub)으로 만든다.
+#
+#     깊이(t) = 최대깊이 − (첨두수위 − 수위(t))        음수는 0
+#
+# 여기서 핵심은 **기하를 시각마다 다시 만들 필요가 없다**는 것이다.
+#
+#     깊이(t) ≥ b   ⟺   최대깊이 ≥ b + 수위강하(t)
+#
+# 즉 어느 시각의 어느 수심 등고선도 전부 "최대깊이 래스터의 등고선"이다. 그래서
+# 등고선을 촘촘히 한 벌만 만들어 두고, 화면이 시각마다 수위강하만큼 골라내고
+# 색만 다시 매기면 된다. 39프레임치 폴리곤을 보내지 않아도 된다.
+#
+# **정직성**: 이건 SFINCS를 시각마다 다시 돌린 게 아니다. 수면이 한 덩어리로
+# 오르내린다고 가정한 준정적 근사이고, 실제 홍수파는 구간을 따라 경사를 갖는다.
+# 다만 그 수위 곡선은 같은 SFINCS 모의가 낸 값이라 엔진을 섞지는 않았다.
+# 화면은 이 구분을 MODEL/ASSUMPTION 배지로 표기해야 한다.
+
+# 경호교 하상고(EPSG:5179, reach_hydrograph_meta.json의 gdt). 수심 = WSE − 이 값.
+GYEONGHO_BED_M = 85.446
+
+# 등고선 레벨(m). 0.3(침수 판정 하한)부터 래스터 최댓값까지 0.5m 간격.
+# 시각별 수위강하가 0.65~4.8m이고 표시 구간이 0.3~14m이므로 그 합만큼 필요하다.
+CONTOUR_STEP_M = 0.5
+
+
+def reach_stage_series(csv_path: str, bed_m: float = GYEONGHO_BED_M) -> dict[str, float]:
+    """시각 -> 하천 수심(m). 값이 빈 행은 건너뛴다.
+
+    CSV는 UTF-8 BOM으로 저장돼 있어 utf-8-sig로 읽지 않으면 첫 열 이름이 깨진다.
+    """
+    import csv
+
+    series: dict[str, float] = {}
+    with open(csv_path, encoding="utf-8-sig") as f:
+        for row in csv.DictReader(f):
+            raw = (row.get("WSE_sim") or "").strip()
+            if not raw:
+                continue
+            try:
+                series[row["dt"].strip()] = float(raw) - bed_m
+            except ValueError:
+                continue
+    return series
+
+
+def flood_contours(depth_path: str, thr: float = 0.3,
+                   step_m: float = CONTOUR_STEP_M,
+                   upsample: int = UPSAMPLE,
+                   min_part_area_m2: float = MIN_PART_AREA_M2) -> dict[str, Any]:
+    """최대침수심 래스터의 누적 등고선 한 벌(EPSG:5179).
+
+    feature마다 properties.level_m = 그 등고선의 최대침수심 기준값. 화면은 시각 t에서
+    level_m >= 수위강하(t) + thr 인 것만 골라 그리고, 색은 level_m − 수위강하(t)로
+    칠한다 — 그게 그 시각의 실제 침수심이다.
+
+    flood_display_featurecollection과 같은 다듬기를 쓴다(보간 → 발자국으로 클립 →
+    Chaikin). 누적이라 깊은 등고선이 얕은 등고선 안에 포개진다.
+    """
+    import numpy as np
+    import rasterio
+    from rasterio.features import shapes
+    from rasterio.transform import Affine
+    from shapely.geometry import mapping, shape
+
+    with rasterio.open(depth_path) as ds:
+        depth = ds.read(1).astype("float32")
+        transform = ds.transform
+
+    finite = np.isfinite(depth)
+    observed_max = float(depth[finite].max()) if finite.any() else thr
+    depth = np.where(finite, depth, 0.0)
+    footprint = depth >= thr
+
+    if upsample and upsample > 1:
+        from scipy.ndimage import zoom
+        depth = zoom(depth, upsample, order=1)
+        footprint = zoom(footprint.astype("uint8"), upsample, order=0).astype(bool)
+        transform = Affine(transform.a / upsample, transform.b, transform.c,
+                           transform.d, transform.e / upsample, transform.f)
+
+    levels = [thr]
+    level = step_m * (int(thr / step_m) + 1)
+    while level <= observed_max:
+        levels.append(round(level, 2))
+        level += step_m
+
+    features: list[dict[str, Any]] = []
+    for lo in levels:
+        mask = ((depth >= lo) & footprint).astype("uint8")
+        if not mask.any():
+            continue
+        for geom, value in shapes(mask, mask=mask > 0, transform=transform):
+            if value != 1:
+                continue
+            poly = shape(geom)
+            if poly.area < min_part_area_m2:
+                continue
+            smoothed = smooth_geometry(mapping(poly))
+            if smoothed is None:
+                continue
+            features.append({
+                "type": "Feature",
+                "geometry": smoothed,
+                "properties": {
+                    "kind": "inundation",
+                    "level_m": round(lo, 2),
+                    "cumulative": True,
+                    # 5179는 미터 좌표계라 넓이가 곧 m². 화면이 "지금 몇 ha 잠겼나"를
+                    # 쓰려면 필요하다 — 4326으로 재투영된 뒤에는 도(°) 넓이가 돼서
+                    # 브라우저가 다시 계산할 수 없다.
+                    "area_m2": round(shape(smoothed).area, 1),
+                },
+            })
+
+    return {
+        "type": "FeatureCollection",
+        "features": features,
+        "crs": {"type": "name", "properties": {"name": "EPSG:5179"}},
+        "levels": levels,
+        "observed_max_m": round(observed_max, 2),
+    }

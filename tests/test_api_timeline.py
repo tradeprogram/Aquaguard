@@ -80,14 +80,76 @@ def test_timeline_risk_is_lonlat_with_arrival_hour(client: TestClient) -> None:
         assert 33.0 < lat < 39.0, f"위도가 4326이 아님: {lat}"
 
 
-def test_timeline_marks_flood_as_max_not_animated(client: TestClient) -> None:
-    """침수는 시간축이 없다는 사실 자체가 계약이다.
+def test_timeline_carries_a_flood_time_series(client: TestClient) -> None:
+    """침수에 시간축이 붙었는지, 그리고 그게 무엇인지 화면이 알 수 있는지.
 
-    Module B는 SFINCS 최대침수심 래스터 한 장만 낸다. 프레임을 넘길 때 침수도 같이
-    번지는 것처럼 보이면 없는 모형을 있다고 말하는 셈이라, UI가 "최대 범위"로 표기할
-    수 있게 이 플래그를 준다. 시계열 산출이 생기면 이 테스트부터 바뀌어야 한다.
+    예전에는 SFINCS 최대침수심 한 장뿐이라 flood_is_max=True로 "시간축 없음"을
+    알렸다. 지금은 같은 모의의 경호교 시간별 수위로 준정적 근사를 만들어 시각별
+    침수를 그린다. **근사라는 사실이 응답에 같이 실려야 한다** — 시각마다 SFINCS를
+    다시 돌린 것처럼 읽히면 안 된다.
     """
-    assert client.get("/alerts/NO-SUCH-ALERT/timeline").json()["flood_is_max"] is True
+    body = client.get("/alerts/NO-SUCH-ALERT/timeline").json()
+    series = body["flood_series"]
+
+    if not series.get("available"):
+        # 저장본이 없는 환경 — 그때는 최대 범위 고정이라고 정직하게 말해야 한다
+        assert body["flood_is_max"] is True
+        return
+
+    assert body["flood_is_max"] is False
+    assert series["contours"]["features"], "등고선이 없으면 어느 시각도 그릴 수 없다"
+    assert series["한계"], "근사라는 설명이 빠지면 모의 산출로 읽힌다"
+    assert any("준정적" in line or "다시 돌린 것이 아니" in line for line in series["한계"])
+
+
+def test_flood_stage_drops_track_the_frames(client: TestClient) -> None:
+    """수위강하가 프레임 시각과 맞물려 있고, 강우 첨두 뒤에 하천이 차오르는지.
+
+    강우가 09:00에 첨두인데 하천 수위가 그보다 **먼저** 최고가 되면 시간 관계가
+    뒤집힌 것이고, 화면은 원인과 결과가 거꾸로인 애니메이션을 보여주게 된다.
+    """
+    body = client.get("/alerts/NO-SUCH-ALERT/timeline").json()
+    series = body["flood_series"]
+    if not series.get("available"):
+        pytest.skip("침수 시간축 없음")
+
+    drops = series["stage_drop_by_hour"]
+    frames = {str(f["hour"]): f for f in body["frames"]}
+    assert drops, "시각별 수위강하가 비어 있으면 시간축이 멈춘다"
+    for hour in drops:
+        assert hour in frames, f"프레임에 없는 시각 {hour}에 수위가 붙어 있다"
+        assert drops[hour] >= 0, "강하는 첨두 대비 값이라 음수일 수 없다"
+
+    # 강우 첨두 시각과 침수 최대(=강하 최소) 시각
+    rain_peak = max(body["frames"], key=lambda f: f["rn_mm"])["hour"]
+    flood_peak = int(min(drops, key=lambda h: drops[h]))
+    assert flood_peak >= rain_peak, (
+        f"하천 첨두(h{flood_peak})가 강우 첨두(h{rain_peak})보다 빠르다 — 인과가 뒤집혔다"
+    )
+
+
+def test_flood_extent_grows_toward_the_peak(client: TestClient) -> None:
+    """시간을 넘기면 침수가 실제로 넓어지는지 — 이게 안 되면 시간축을 돌릴 이유가 없다."""
+    body = client.get("/alerts/NO-SUCH-ALERT/timeline").json()
+    series = body["flood_series"]
+    if not series.get("available"):
+        pytest.skip("침수 시간축 없음")
+
+    from shapely.geometry import shape
+    from shapely.ops import unary_union
+
+    def extent_at(drop: float) -> float:
+        visible = [
+            shape(f["geometry"])
+            for f in series["contours"]["features"]
+            if f["properties"]["level_m"] >= drop + 0.3
+        ]
+        return unary_union(visible).area if visible else 0.0
+
+    drops = series["stage_drop_by_hour"]
+    early = extent_at(max(drops.values()))   # 수위가 가장 낮은 시각
+    peak = extent_at(min(drops.values()))    # 첨두
+    assert peak > early * 1.2, f"첨두 침수가 저수위 때보다 거의 안 넓다 ({early:.0f} -> {peak:.0f})"
 
 
 def test_timeline_markers_come_from_the_alert(client: TestClient, demo_input: dict) -> None:

@@ -181,8 +181,22 @@ export interface AlertTimeline {
     official_warning?: string | null;
     report_start?: string | null;
   };
-  // 침수(Module B)는 SFINCS 최대침수심 래스터 한 장뿐이라 시간축이 없다.
-  // true면 UI는 "최대 범위"로만 표기하고 시간에 따라 번지는 척하지 않는다.
+  // 침수 시간축. SFINCS는 "최대" 침수심 한 장만 내지만 같은 모의가 경호교 시간별
+  // 수위도 남겼고, 깊이(t) ≥ b ⟺ 최대깊이 ≥ b + 수위강하(t) 이므로 등고선 한 벌로
+  // 모든 시각을 그릴 수 있다. available이 false면 최대 범위 고정으로 떨어진다.
+  flood_series?: {
+    available: boolean;
+    contours?: GeoJSON.FeatureCollection;
+    levels?: number[];
+    observed_max_m?: number;
+    peak_stage_m?: number;
+    // 프레임 hour -> 첨두 대비 수위강하(m). 값이 없는 시각은 수위 자료가 없는 것이다.
+    stage_drop_by_hour?: Record<string, number>;
+    gauge?: string;
+    한계?: string[];
+  };
+  // flood_series가 없을 때만 true — 그때는 "최대 범위"로만 표기하고 시간에 따라
+  // 번지는 척하지 않는다.
   flood_is_max: boolean;
   limits?: string[];
   // 200이 아니었을 때의 상태코드. 화면 문구는 이걸 그대로 쓰지 않고 /health를 찔러

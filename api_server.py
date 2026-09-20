@@ -56,6 +56,15 @@ app = FastAPI(title="AquaGuard AI — api_server")
 # /alerts/{id}/geojson 0.65MB를 매 요청 그대로 내보내고 있었다. 회선이 느린 시연장에서
 # 이게 그대로 대기 시간이 된다. CORS보다 **뒤에** 추가해야 CORS 헤더가 압축 응답에도
 # 제대로 붙는다(Starlette은 나중에 추가한 미들웨어가 바깥쪽에 온다).
+#
+# 단, **이미 압축된 것은 건드리면 안 된다.** Starlette의 GZipMiddleware는
+# text/event-stream만 제외하므로 PNG 타일까지 압축하는데, 실측하면 40KB가 40KB로
+# 0.1% 커지면서 장당 0.5ms를 쓴다. 지도는 한 화면에 타일을 수십~수백 장 부르므로
+# 2코어 서버에서 그대로 지연이 되고, 지형 타일이 늦으면 고도를 못 읽어 건물이
+# 엉뚱한 높이에 뜨고 래스터가 흰 구멍으로 남는다. 그래서 이미지·압축 응답은
+# 이미지 응답은 _IMAGE_HEADERS로 Content-Encoding을 미리 박아 미들웨어를 건너뛴다
+# (미들웨어를 하나 더 끼워 넣는 방법도 되지만 추가 순서에 따라 안팎이 뒤집혀서
+#  조용히 무력화된다 — 실제로 그렇게 당했다. 응답에 직접 박는 쪽이 확실하다).
 app.add_middleware(GZipMiddleware, minimum_size=1024)
 app.add_middleware(
     CORSMiddleware,
@@ -313,7 +322,9 @@ def get_alert_timeline(alert_id: str) -> dict:
             "official_warning": timeline.get("warning_escalated"),
             "report_start": timeline.get("report_start"),
         },
-        "flood_is_max": True,
+        # 침수 시간축. 있으면 UI가 프레임마다 등고선을 골라 그린다(없으면 최대 범위 고정).
+        "flood_series": (snapshot or {}).get("flood_series") or {"available": False},
+        "flood_is_max": not ((snapshot or {}).get("flood_series") or {}).get("available"),
         "limits": index.get("한계") or [],
     }
 
@@ -571,7 +582,7 @@ def get_terrain_tile(z: int, x: int, y: int) -> Response:
     cache_key = ("terrain", z, x, y)
     cached = _IMAGERY_CACHE.get(cache_key)
     if cached is not None:
-        return Response(content=cached, media_type="image/png", headers={"Cache-Control": "public, max-age=86400"})
+        return Response(content=cached, media_type="image/png", headers=_IMAGE_HEADERS)
 
     upstream = f"https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png"
     try:
@@ -586,7 +597,7 @@ def get_terrain_tile(z: int, x: int, y: int) -> Response:
         raise HTTPException(status_code=resp.status_code, detail="terrain tile fetch failed")
     if len(_IMAGERY_CACHE) < _IMAGERY_CACHE_MAX_ENTRIES:
         _IMAGERY_CACHE[cache_key] = resp.content
-    return Response(content=resp.content, media_type="image/png", headers={"Cache-Control": "public, max-age=86400"})
+    return Response(content=resp.content, media_type="image/png", headers=_IMAGE_HEADERS)
 
 
 ESRI_IMAGERY_TILE_URL = (
@@ -616,6 +627,10 @@ ESRI_FALLBACK_MAX_ZOOM_STEPS = 3
 _IMAGERY_CACHE: dict[tuple, bytes] = {}
 _IMAGERY_CACHE_MAX_ENTRIES = 4000
 
+
+# 이미 압축된 본문임을 밝혀 GZipMiddleware를 건너뛰게 한다. identity는 "인코딩 없음"을
+# 뜻하는 정규 값이라 브라우저가 그대로 읽는다.
+_IMAGE_HEADERS = {"Cache-Control": "public, max-age=86400", "Content-Encoding": "identity"}
 
 VWORLD_BUILDING_LAYER = "LT_C_SPBD"  # 건물통합정보(국토교통부) — 브이월드 Data API 2.0
 VWORLD_ROAD_LAYER = "LT_L_MOCTLINK"  # 국가교통정보센터 표준노드링크(§2.6이 원래 지정한 소스)
