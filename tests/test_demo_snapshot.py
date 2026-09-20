@@ -236,3 +236,30 @@ def test_fingerprint_changes_when_the_question_changes() -> None:
     assert input_fingerprint(moved) != input_fingerprint(payload)
     assert matching(moved, {"input_sha": input_fingerprint(payload)}) is None
     assert matching(payload, {"input_sha": input_fingerprint(payload)}) is not None
+
+
+def test_geojson_serves_flood_before_the_demo_is_triggered() -> None:
+    """경보가 없어도 침수는 지도에 떠야 한다.
+
+    경보 저장소는 메모리에 있어서 서버를 재시작하면 비는데, 침수 폴리곤은 경보와
+    무관한 사전계산물이다. 그때 지도만 비워 두면 "재시작했더니 물이 사라졌다"가 되고,
+    실제로 배포 서버를 재시작한 직후 /geojson이 404를 냈다(2026-09-20).
+    시간축(/timeline)이 경보 없이 응답하는 것과 같은 이유다.
+    """
+    from fastapi.testclient import TestClient
+
+    import api_server
+
+    client = TestClient(api_server.app)
+    api_server.alert_store._alerts.clear()  # 재시작 직후 상태
+
+    with open(SNAPSHOT_PATH, encoding="utf-8") as f:
+        alert_id = json.load(f)["alert_id"]
+
+    body = client.get(f"/alerts/{alert_id}/geojson").json()
+    flood = [f for f in body["features"] if f["properties"].get("kind") == "inundation"]
+    assert flood, "트리거 전이라고 침수까지 비우면 지도가 빈 채로 시작한다"
+    assert len({f["properties"]["band"] for f in flood}) > 1
+
+    # 저장본에 없는 경보는 여전히 404 — 아무 id나 물으면 침수를 주면 안 된다
+    assert client.get("/alerts/NO-SUCH-ALERT/geojson").status_code == 404

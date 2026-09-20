@@ -324,14 +324,25 @@ def get_alert_geojson(alert_id: str) -> dict:
 
     Module B가 최대침수심 래스터를 받으면 inundation_extent_5179에 깊이 구간별
     폴리곤이 들어온다(module_b_flood/fim.py). 그 경우 kind="inundation"으로 그대로
-    내보내며, UI는 properties.depth_p90_m를 3D 높이로 쓴다.
+    내보내며, UI는 properties.depth_min_m로 색을 칠한다.
 
     아직 지오메트리가 없는 출력은 placeholder로 대신 그린다 — Module A의
     risk_polygon_5179는 지점 FoS만 계산하므로 null이고(반경 버퍼 원으로 대체),
     Module E의 route_5179는 키가 없으면 직선 근사로 내려간다.
+
+    경보가 아직 없으면(서버를 막 재시작했거나 데모를 안 눌렀을 때) 사전계산된 침수만
+    내보낸다. 경보 저장소는 메모리에 있어서 재시작하면 비는데, 침수 폴리곤은 경보와
+    무관한 사전계산물이라 그때 지도만 비워 둘 이유가 없다 — 시간축(/timeline)도 같은
+    이유로 경보 없이 응답한다. 대피 경로·대피소처럼 경보에서 나오는 것만 빠진다.
     """
     alert = alert_store.get(alert_id)
     if alert is None:
+        snapshot = _demo_snapshot()
+        if snapshot and snapshot.get("alert_id") == alert_id:
+            return {
+                "type": "FeatureCollection",
+                "features": json.loads(json.dumps(snapshot["flood_display"]["features"])),
+            }
         raise HTTPException(status_code=404, detail="alert not found")
 
     package = alert.envelope["data"]["alert_package"]
