@@ -287,5 +287,8 @@ def test_snapshot_route_is_a_real_road_route(snapshot: dict) -> None:
     coords = (route.get("route_5179") or {}).get("coordinates") or []
     assert len(coords) > 2, f"경로 점이 {len(coords)}개뿐 — 실도로라면 꺾임이 있어야 한다"
 
-    for mode in (route.get("modes") or {}).values():
-        assert mode.get("source") != "straight_line_approx", f"{mode}가 직선 근사다"
+    for name, mode in (route.get("modes") or {}).items():
+        assert mode.get("source") != "straight_line_approx", (
+            f"{name} 모드가 직선 근사다 — 직선은 강을 건너고 능선을 넘는 선이라 "
+            f"시간이 늘 짧게 나오고, 대피 가능 시간을 실제보다 낙관적으로 보이게 한다"
+        )
