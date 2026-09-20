@@ -30,13 +30,15 @@ export interface TriggerInput {
 // contracts/module_o.example.json의 input과 같은 값이다 — 한쪽만 고치면 화면과
 // 계약 예시가 어긋나므로 둘을 함께 바꿀 것.
 //
-// trigger_location은 data/vector/adm_dong_5179.geojson(행정동 경계 실데이터)으로
-// 확인한 산청군 생비량면 AOI 내부 실좌표다.
+// trigger_location은 트랙①이 사전계산한 위험영역(A_soilmap critical)에서 가장 큰
+// 폴리곤의 대표지점이다(risk_landslide_index.json). 임의 좌표가 아니라 모형이 실제로
+// 위험하다고 판정한 지점이며, 안정 지반을 찍으면 확률이 0.002로 떨어져 아무것도
+// 트리거되지 않는다.
 // detection_lag_min=60은 트랙①의 산청 백테스트가 실측한 T_agent(09:00)에 맞춘 값
 // (backtest_sancheong/outputs/backtest_leadtime_summary.json).
 export const SANGCHEONG_DEMO_INPUT: TriggerInput = {
   alert_id: "AL-20250719-0915",
-  trigger_location: { x_5179: 1050511.5, y_5179: 1706245.2 },
+  trigger_location: { x_5179: 1046783.0, y_5179: 1707543.0 },
   timestamp: "2025-07-19T08:00:00+09:00",
   escalation_timeout_min: 15,
   safety_margin_hours: 0.5,

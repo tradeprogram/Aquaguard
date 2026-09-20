@@ -1,8 +1,9 @@
 {
+  "_note_trigger": "trigger_location은 트랙①이 사전계산한 위험영역(A_soilmap critical)에서 가장 큰 폴리곤의 대표지점이다 — module_a_landslide/data/risk_polygons/risk_landslide_index.json. 임의로 고른 좌표가 아니라 모형이 실제로 위험하다고 판정한 지점이며, AOI 중심에서 3.95km라 노출자산 클립본 안에 들어온다. 안정 지반 위를 찍으면 확률이 0.002로 떨어져 아무것도 트리거되지 않는다.",
   "_note_input": "트랙①의 A/B 실모듈이 들어오기 전까지 이 input은 좌표·시각만 담고 있었다. 목업 A/B는 입력을 무시하고 example 출력을 그대로 돌려줬기 때문이다. 실모듈이 붙은 뒤로는 Module O가 A/B에 실제 관측값을 먹여야 하며, orchestrator.py가 그 통로로 module_a_extra/module_b_extra를 이미 갖고 있다. 여기 실린 static/dynamic은 contracts/module_a.example.json·module_b.example.json의 값과 같다 — 같은 산청 2025-07-19 시나리오다.",
   "input": {
     "alert_id": "AL-20250719-0915",
-    "trigger_location": { "x_5179": 1050511.5, "y_5179": 1706245.2 },
+    "trigger_location": { "x_5179": 1046783.0, "y_5179": 1707543.0 },
     "timestamp": "2025-07-19T08:00:00+09:00",
     "escalation_timeout_min": 15,
     "safety_margin_hours": 0.5,

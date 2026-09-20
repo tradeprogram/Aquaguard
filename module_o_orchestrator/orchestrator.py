@@ -23,7 +23,30 @@ from .exposure_layers import (
 from .modules_client import call_explain, call_module, module_sources, resolve_source
 from .store import Alert, alert_store
 
-LANDSLIDE_THRESHOLD = 0.7
+# 산사태 트리거 — landslide_prob >= 0.5.
+#
+# 0.7에서 내린 값이지만 "안 걸리니까 낮춘다"가 아니다. Module A의 확률은
+# P = 1/(1+exp(k·(FoS-1)))로 안전율을 변환한 값이고, k는 아직 미보정이다
+# (module_a_landslide/fos.py docstring, backtest RUN_LOG).
+#
+#   FoS = 1.0  ⟺  P = 0.5      k와 무관하게 항상 성립
+#   FoS = 0.859 ⟺ P = 0.7      k=6일 때만. k가 바뀌면 이 대응도 바뀐다
+#
+# FoS=1은 사면이 버티는 힘과 무너뜨리는 힘이 같아지는 물리적 파괴 한계다. 그
+# 지점이 시그모이드에서 유일하게 미보정 파라미터에 불변인 곳이므로, 지금 쓸 수
+# 있는 임계 중 근거가 가장 단단하다. 0.7은 k=6이라는 임의값에 딸려 있을 뿐이다.
+# (설계 실무는 보통 FoS 1.3~1.5를 요구하므로 FoS=1 발동은 이르기는커녕 늦다.)
+#
+# 과다 발동도 아니다 — 트랙①이 사전계산한 위험영역에서 P>=0.5는 산청 AOI 452km²
+# 중 0.238km²(0.053%)뿐이다. 트랙① 자신도 이 값을 'warning' 레이어 기준으로 쓴다.
+#
+# k가 보정되면 이 값을 다시 유도할 것. 그때는 0.7이 맞을 수도 있다.
+LANDSLIDE_THRESHOLD = 0.5
+
+# 하천범람은 0.7 그대로다 — Module B의 flood_prob은 산사태와 달리 실측 수위·강우를
+# 홍수특보 기준과 실측 사례(경호강 2025-07-19)로 보정한 값이라(module_b_flood 참조)
+# 척도가 이미 의미를 갖는다. 두 숫자가 달라 보이는 이유는 두 확률이 다른 것이기
+# 때문이며, 같은 값으로 맞추면 오히려 근거가 사라진다.
 FLOOD_THRESHOLD = 0.7
 
 # Module G가 실제로 참조하는 단가표 ID(policies/module_g.json의 policy_version).
