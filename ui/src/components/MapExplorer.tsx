@@ -2173,7 +2173,10 @@ export default function MapExplorer({
 
             <p className="mt-2 text-[11px] text-slate-500">
               MODEL · 트랙① 사전계산 위험영역({timeline.scenario} {timeline.level})을 실측 강우로 시간마다 구동한
-              결과입니다. 막대는 그 시각의 시간강우. 침수는 시간축이 없어 최대 범위로 고정됩니다.
+              결과입니다. 막대는 그 시각의 시간강우.{" "}
+              {floodSeries?.available
+                ? "침수는 SFINCS 최대침수심에 같은 모의의 하천 수위 시계열을 적용한 준정적 근사입니다."
+                : "침수는 시간축이 없어 최대 범위로 고정됩니다."}
             </p>
           </div>
         </div>

@@ -11,12 +11,14 @@ import json
 import math
 import os
 import re
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Literal
 
 import geopandas as gpd
+import httpx
 import requests
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request, Response
@@ -46,7 +48,20 @@ VWORLD_API_KEY = os.environ.get("VWORLD_API_KEY")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-flash-latest")
 
-app = FastAPI(title="AquaGuard AI — api_server")
+@asynccontextmanager
+async def _lifespan(_app: FastAPI):
+    """종료할 때 타일 프록시용 HTTP 연결을 정리한다.
+
+    on_event("shutdown")은 FastAPI가 폐기 예정으로 표시해 둔 API라 lifespan을 쓴다.
+    """
+    yield
+    global _TILE_CLIENT
+    if _TILE_CLIENT is not None:
+        await _TILE_CLIENT.aclose()
+        _TILE_CLIENT = None
+
+
+app = FastAPI(title="AquaGuard AI — api_server", lifespan=_lifespan)
 
 # ui/(Next.js dev server, 기본 3000포트)에서 로컬 개발 중 호출할 수 있도록 허용 +
 # Vercel 배포 도메인(프로덕션 URL은 매번 같지만 프리뷰 배포마다 서브도메인이 바뀌므로
@@ -570,7 +585,7 @@ def search_admin(q: str) -> list[dict]:
 
 
 @app.get("/terrain-tiles/{z}/{x}/{y}.png")
-def get_terrain_tile(z: int, x: int, y: int) -> Response:
+async def get_terrain_tile(z: int, x: int, y: int) -> Response:
     """AWS 공개 지형 타일(elevation-tiles-prod, terrarium 인코딩) 프록시.
 
     브라우저가 직접 이 S3 버킷을 호출하면 Access-Control-Allow-Origin 헤더가
@@ -586,8 +601,8 @@ def get_terrain_tile(z: int, x: int, y: int) -> Response:
 
     upstream = f"https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png"
     try:
-        resp = requests.get(upstream, timeout=5)
-    except requests.RequestException as e:
+        resp = await _tile_client().get(upstream)
+    except httpx.HTTPError as e:
         # 2026-08-28: 전에는 여기 예외 처리가 없어서 S3가 잠깐 끊기면 ConnectionError가
         # 그대로 위로 새서 500이 되던 것과 별개로, Render 무료 인스턴스에서 헬스체크가
         # 5초 타임아웃으로 반복 실패하는 원인 중 하나였다(느린/끊긴 업스트림 호출이
@@ -595,8 +610,7 @@ def get_terrain_tile(z: int, x: int, y: int) -> Response:
         raise HTTPException(status_code=502, detail=f"terrain tile upstream failed: {e}")
     if resp.status_code != 200:
         raise HTTPException(status_code=resp.status_code, detail="terrain tile fetch failed")
-    if len(_IMAGERY_CACHE) < _IMAGERY_CACHE_MAX_ENTRIES:
-        _IMAGERY_CACHE[cache_key] = resp.content
+    _remember_tile(cache_key, resp.content)
     return Response(content=resp.content, media_type="image/png", headers=_IMAGE_HEADERS)
 
 
@@ -624,13 +638,54 @@ ESRI_FALLBACK_MAX_ZOOM_STEPS = 3
 # Render 엣지 자체가 요청 "개수"에 429를 걸어 소용없었음. 결론: 타일 트래픽을 우리
 # 백엔드에 태우는 구조 자체가 무료 인스턴스와 안 맞는다 — Esri 직결(아래 MapExplorer.tsx)
 # 이 더 빠르고 안정적이다. V-World 재도전은 우리 백엔드가 한국 리전에 있을 때만 재검토.
+# 타일 캐시. 40KB짜리 PNG라 칸수 × 40KB가 그대로 상주 메모리다.
+#
+# 예전 상한 4000은 최악 160MB인데, 이 서버는 RAM이 908MB고 이미 OOM으로 죽은 적이
+# 있다. 게다가 옛 코드는 가득 차면 **더 이상 캐시하지 않고** 오래된 것도 안 버려서,
+# 한 지역을 보고 나면 그 뒤로는 캐시가 사실상 꺼진 채로 돌았다. 1200칸(≈48MB)으로
+# 줄이고 오래된 것부터 버린다.
 _IMAGERY_CACHE: dict[tuple, bytes] = {}
-_IMAGERY_CACHE_MAX_ENTRIES = 4000
+_IMAGERY_CACHE_MAX_ENTRIES = 1200
+
+
+def _remember_tile(key: tuple, payload: bytes) -> None:
+    if key in _IMAGERY_CACHE:
+        return
+    if len(_IMAGERY_CACHE) >= _IMAGERY_CACHE_MAX_ENTRIES:
+        _IMAGERY_CACHE.pop(next(iter(_IMAGERY_CACHE)), None)
+    _IMAGERY_CACHE[key] = payload
 
 
 # 이미 압축된 본문임을 밝혀 GZipMiddleware를 건너뛰게 한다. identity는 "인코딩 없음"을
 # 뜻하는 정규 값이라 브라우저가 그대로 읽는다.
 _IMAGE_HEADERS = {"Cache-Control": "public, max-age=86400", "Content-Encoding": "identity"}
+
+# 타일 프록시용 공유 비동기 클라이언트.
+#
+# **왜 async인가**: FastAPI는 `def`(동기) 엔드포인트를 스레드풀에서 돌리는데 그 한도가
+# 40이다. 지도는 한 화면에 지형 타일을 수백 장 부르고, 각 요청이 업스트림 S3를
+# 기다리며(타임아웃 5초) 스레드를 붙잡는다. 40칸이 그걸로 차면 **그 뒤에 들어온
+# 모든 요청이 줄을 선다** — 경보 실행이 201초 걸린 실체가 이것이다(2026-09-20 화면
+# 실측). 흰 타일과 공중에 뜬 건물도 같은 원인이다: 지형 타일이 늦거나 실패하면
+# MapLibre가 고도를 못 읽는다.
+#
+# `async def`로 두면 대기 시간이 이벤트 루프로 가므로 스레드를 전혀 쓰지 않고,
+# 수백 개가 동시에 떠 있어도 다른 요청을 막지 않는다.
+_TILE_CLIENT: "httpx.AsyncClient | None" = None
+
+
+def _tile_client() -> "httpx.AsyncClient":
+    global _TILE_CLIENT
+    if _TILE_CLIENT is None:
+        # 연결을 재사용한다 — 타일마다 TLS 핸드셰이크를 새로 하면 그게 또 지연이다.
+        _TILE_CLIENT = httpx.AsyncClient(
+            timeout=httpx.Timeout(5.0),
+            limits=httpx.Limits(max_connections=64, max_keepalive_connections=32),
+        )
+    return _TILE_CLIENT
+
+
+
 
 VWORLD_BUILDING_LAYER = "LT_C_SPBD"  # 건물통합정보(국토교통부) — 브이월드 Data API 2.0
 VWORLD_ROAD_LAYER = "LT_L_MOCTLINK"  # 국가교통정보센터 표준노드링크(§2.6이 원래 지정한 소스)
