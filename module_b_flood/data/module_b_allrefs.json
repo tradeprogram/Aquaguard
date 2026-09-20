@@ -1,0 +1,48 @@
+{
+  "eval_domain": "HAND<15m 계곡, 공통50m",
+  "areas_km2": {
+    "SAR": 6.8,
+    "HAND_FIM": 31.6,
+    "SFINCS": 9.33,
+    "ANUGA": 11.26
+  },
+  "vs_SAR": {
+    "SFINCS": {
+      "IoU": 0.326,
+      "F1": 0.492,
+      "POD": 0.584,
+      "FAR": 0.575,
+      "precision": 0.425
+    },
+    "ANUGA": {
+      "IoU": 0.296,
+      "F1": 0.457,
+      "POD": 0.607,
+      "FAR": 0.633,
+      "precision": 0.367
+    }
+  },
+  "vs_HAND_FIM": {
+    "SFINCS": {
+      "IoU": 0.269,
+      "F1": 0.424,
+      "POD": 0.275,
+      "FAR": 0.07,
+      "precision": 0.93
+    },
+    "ANUGA": {
+      "IoU": 0.273,
+      "F1": 0.429,
+      "POD": 0.291,
+      "FAR": 0.184,
+      "precision": 0.816
+    }
+  },
+  "SFINCS_vs_ANUGA(모델간 일치)": {
+    "IoU": 0.775,
+    "F1": 0.873,
+    "POD": 0.799,
+    "FAR": 0.037,
+    "precision": 0.963
+  }
+}
