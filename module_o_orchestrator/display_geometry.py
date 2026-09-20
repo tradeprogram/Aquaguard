@@ -37,7 +37,9 @@ SIMPLIFY_TOLERANCE_M = 2.0
 
 # 침수심 구간. 예전에는 4단(0.3/1/2/5)이라 이 지역 침수심 중앙값이 5.7m·최대 15.5m인
 # 탓에 대부분이 맨 위 한 칸에 몰려 단색 덩어리로 보였다. 10단으로 늘려 색이 이어지게 한다.
-DISPLAY_DEPTH_BANDS_M: tuple[float, ...] = (0.3, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 8.0, 10.0, 12.0)
+DISPLAY_DEPTH_BANDS_M: tuple[float, ...] = (
+    0.3, 0.6, 1.0, 1.5, 2.0, 2.5, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 10.0, 12.0, 14.0,
+)
 
 
 def chaikin(ring: list[tuple[float, float]], iterations: int = CHAIKIN_ITERATIONS
@@ -164,43 +166,57 @@ def flood_display_featurecollection(depth_path: str,
         transform = Affine(transform.a / upsample, transform.b, transform.c,
                            transform.d, transform.e / upsample, transform.f)
 
-    # 구간을 "그 구간만"이 아니라 **누적**(depth >= lo)으로 만든다.
+    # 구간은 "그 구간만"이 아니라 **누적**(depth >= lo)으로 만들고, 화면에서는 얕은
+    # 것부터 깊은 것 순으로 겹쳐 그린다(깊은 쪽이 위를 덮는다).
     #
-    # 배타 구간으로 자르면 이웃한 두 구간이 경계선을 공유하는데, 각자 안쪽으로 깎이면서
-    # 그 사이에 틈이 벌어진다 — 화면에서 색 띠 사이로 지형이 비친다. 누적으로 만들면
-    # 구간들이 서로 포개져서(깊은 쪽이 얕은 쪽 안에 들어감) 틈이 생길 수가 없고,
-    # 얕은 것부터 깊은 것 순으로 쌓아 그리면 등수심선을 따라 층이 진 수면이 된다.
-    # 바깥 경계(band 0)가 곧 침수 범위이므로, 정확도가 중요한 건 그 하나뿐이다.
+    # 배타 구간으로 잘라 두면 이웃한 둘이 경계선을 공유하는데, 각자 안쪽으로 깎이면서
+    # 그 사이에 틈이 벌어진다 — 색 띠 사이로 지형이 비친다. 누적끼리 차집합을 내서
+    # 배타로 되돌리는 방법도 써 봤지만(틈은 없어진다) 가느다란 띠가 잔뜩 생겨
+    # 폴리곤이 87개에서 3,120개로, 전송량이 1.4MB에서 3.4MB로 늘었다. 평면으로 그리는
+    # 한 겹침은 문제가 되지 않으므로(위가 아래를 덮는다) 누적 그대로 둔다.
+    from shapely.ops import unary_union
+
+    cumulative: list[Any] = []
+    for lo in edges:
+        mask = ((depth >= lo) & footprint).astype("uint8")
+        parts = []
+        if mask.any():
+            for geom, value in shapes(mask, mask=mask > 0, transform=transform):
+                if value != 1:
+                    continue
+                poly = shape(geom)
+                if poly.area < min_part_area_m2:
+                    continue  # 보간이 만든 티끌
+                smoothed = smooth_geometry(mapping(poly))
+                if smoothed is not None:
+                    parts.append(shape(smoothed))
+        cumulative.append(unary_union(parts) if parts else None)
+
     features: list[dict[str, Any]] = []
     for i, lo in enumerate(edges):
-        # 발자국으로 자르는 이유: 쌍선형 보간은 젖은 셀 중심과 마른 셀 중심 사이를
-        # 이어버려서 침수 범위가 원본보다 13.7% 넓어진다(2026-09-20 실측). 안쪽
-        # 등수심선을 매끄럽게 하려고 넣은 보간이 바깥 범위까지 바꾸면 그건 다른 예측이다.
-        mask = ((depth >= lo) & footprint).astype("uint8")
-        if not mask.any():
+        current = cumulative[i]
+        if current is None or current.is_empty:
             continue
-        values = depth[mask.astype(bool)]
         hi = edges[i + 1] if i + 1 < len(edges) else float("inf")
+        values = depth[((depth >= lo) & (depth < hi) & footprint)]
         props = {
             "flooded": 1,
             "depth_thr_m": thr,
             "depth_min_m": round(lo, 2),
             "depth_max_m": round(min(hi, observed_max), 2),
-            "depth_p90_m": round(float(np.percentile(values, 90)), 2),
+            "depth_p90_m": round(float(np.percentile(values, 90)), 2) if values.size else round(lo, 2),
             "band": i,
             "band_count": len(edges),
+            # 누적이다 — 이 폴리곤은 "깊이 lo 이상인 곳 전부"이지 "lo~hi 구간만"이 아니다.
+            # 화면은 band 오름차순으로 겹쳐 그려야 색이 맞는다.
             "cumulative": True,
         }
-        for geom, value in shapes(mask, mask=mask > 0, transform=transform):
-            if value != 1:
+        geoms = current.geoms if current.geom_type == "MultiPolygon" else [current]
+        for part in geoms:
+            if part.is_empty:
                 continue
-            poly = shape(geom)
-            if poly.area < min_part_area_m2:
-                continue  # 보간이 만든 티끌
-            smoothed = smooth_geometry(mapping(poly))
-            if smoothed is None:
-                continue
-            features.append({"type": "Feature", "geometry": smoothed, "properties": dict(props)})
+            features.append({"type": "Feature", "geometry": mapping(part),
+                             "properties": dict(props)})
 
     return {
         "type": "FeatureCollection",
