@@ -77,14 +77,22 @@ const SOUTH_KOREA_BOUNDS: [[number, number], [number, number]] = [
 // 어림한 게 아니라 실제 행정경계(data/vector/adm_sigungu_5179.geojson·
 // adm_sido_5179.geojson)를 4326으로 재투영한 total_bounds.
 // 2026-09-05: 서울 AOI를 시 전역(605km², 43개 시군구가 bbox에 걸림)에서 강남구·서초구
-// (84km², 건물 42,381건)로 좁혔다. 전역 bbox는 데모가 실제로 다루는 범위보다 훨씬 넓어
-// 노출자산·경로 같은 파이프라인을 붙이기에 무거웠다. 기존 서울 정적 타일은 이 범위의
-// 상위집합이라 그대로 동작한다(범위 밖 타일은 이제 서빙되지 않는다).
+// (84km²)로 좁혔다. 전역 bbox는 데모가 실제로 다루는 범위보다 훨씬 넓어 노출자산·경로
+// 같은 파이프라인을 붙이기에 무거웠다.
+// 2026-09-20: 다시 강남구만으로 좁혔다(39km²). 서초는 산청·강남과 똑같은 "모형 없는
+// 지역"이라 화면에 새로 보여주는 게 없는데 정적 타일만 그만큼 더 들고 있었다.
+//
+// 이 bbox는 소스의 `bounds`로 그대로 들어가므로 MapLibre는 범위 밖 타일을 아예
+// 요청하지 않는다 — 좁히면 그 바깥 타일은 디스크에만 남는 죽은 파일이 된다.
+// 실제로 그래서 시 전역 시절 타일 411MB가 서빙되지 않은 채 남아 있었고, 이번에
+// 강남 범위 밖 444MB를 전부 지웠다(범위를 다시 넓히려면 scripts/fetch_aoi_satellite.py와
+// ui/scripts/build_vector_tiles.mjs로 재생성해야 한다).
 const AOI_KEYS = ["sancheong", "seoul"] as const;
 type AOIKey = (typeof AOI_KEYS)[number];
 const AOI_BOUNDS: Record<AOIKey, [number, number, number, number]> = {
   sancheong: [127.688782, 35.219031, 128.114735, 35.576211],
-  seoul: [126.979849, 37.428340, 127.124207, 37.535823],
+  // 강남구 total_bounds(data/vector/adm_sigungu_5179.geojson을 4326으로 재투영)
+  seoul: [127.008577, 37.456219, 127.124207, 37.535823],
 };
 
 function getActiveAOI(lng: number, lat: number): AOIKey | null {
@@ -319,7 +327,6 @@ function frameLabel(iso: string | null | undefined): string {
 const TEST_LOCATIONS: { label: string; center: [number, number]; zoom: number; regionKey: RegionKey }[] = [
   { label: "산청 상능마을", center: INITIAL_CENTER, zoom: 12.5, regionKey: "sancheong" },
   { label: "서울 강남", center: [127.0276, 37.4979], zoom: 16, regionKey: "gangnam" },
-  { label: "서울 서초", center: [127.0044, 37.4907], zoom: 14, regionKey: "seocho" },
 ];
 
 // EvacuationPanel(§6)에서 선택한 대피 경로 — 카카오/네이버 실경로 API 붙기 전까지는
@@ -1461,7 +1468,7 @@ export default function MapExplorer({
     source?.setData(blockedRoads ?? { type: "FeatureCollection", features: [] });
   }, [mapReady, blockedRoads]);
 
-  // 현재 지역 대피소 전체를 지도에 상시 표시한다(산청 8 / 강남 15 / 서초 20).
+  // 현재 지역 대피소 전체를 지도에 상시 표시한다(산청 8 / 강남 15).
   useEffect(() => {
     if (!mapReady) return;
     const source = mapRef.current?.getSource("shelters") as GeoJSONSource | undefined;
@@ -1733,7 +1740,7 @@ export default function MapExplorer({
               </div>
             </div>
           ) : (
-            // 서울(강남·서초)은 건물·도로·대피소는 다 있는데 재해 모형이 없다. 빈 지도만
+            // 서울 강남은 건물·도로·대피소는 다 있는데 재해 모형이 없다. 빈 지도만
             // 보여주면 "고장난 건가"로 읽히므로, 무엇이 있고 무엇이 없는지를 그 자리에 쓴다.
             <div className="mt-3 space-y-2">
               <p className="rounded-md bg-slate-800/60 px-2 py-1.5 text-slate-300">
