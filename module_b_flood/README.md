@@ -38,3 +38,27 @@ out = mb.run({
 ```
 
 원칙: 실데이터만 · 자체 solver 금지 · data-leakage 금지 · 예외로 죽지 않는다(§4.2).
+
+---
+
+## 추가 스크립트·산출물 (2026-09-20)
+
+재현에 필요한데 빠져 있던 엔진 구축·비교 단계를 채웠다.
+
+| 스크립트 | 하는 일 |
+|---|---|
+| `25_sfincs_build` | HydroMT-SFINCS 초기 모델 구축(광역) |
+| `28_anuga_reach` · `32_anuga_reach_v2` | ANUGA 대체엔진 구간 모형 (v2가 최종) |
+| `28b_rasterize_from_npz` | ANUGA 결과 npz → 최대침수심 래스터 |
+| `30_plot_module_b` | 침수·수위 결과 플롯 |
+
+`data/` 추가분 — `anuga_reach_*`(메타·수위 시계열), `anuga_*_maxdepth_*.tif`(ANUGA 최대
+침수심, 2엔진 교차 IoU 0.775의 실제 입력), `sfincs_reach_wse.csv`(경호교 모의수위),
+`hand_fim_meta.json`, `sar_flood_meta.json`, `module_b_validation.json`.
+
+`figures/` — `module_b_result.png`, `module_b_sfincs_result.png`.
+
+**저장소에 없는 것**: SFINCS 실행파일(Deltares freeware — 재배포 불가, 각자 다운로드),
+5m DEM·HAND 래스터, subgrid 빌드 산출물(`scripts/33`으로 재생성). 대용량이거나
+라이선스가 걸린 것들이라 의도적으로 뺐다.
+

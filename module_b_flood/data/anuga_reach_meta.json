@@ -1,0 +1,16 @@
+{
+  "engine": "ANUGA (SPEC 승인 대체, SFINCS 바이너리 로그인배포로 미확보)",
+  "mesh": "140x200 rect @ 100.0m",
+  "sim_window_tsec": [
+    21600,
+    165600
+  ],
+  "runtime_s": 1994.0,
+  "valid_경호교_WSE": {
+    "obs_peak_m": 94.12,
+    "sim_peak_m": 97.02,
+    "diff_m": 2.91
+  },
+  "maxdepth_raster": "models/anuga_reach/anuga_maxdepth_100m.tif",
+  "wet_cells_max": 3459
+}

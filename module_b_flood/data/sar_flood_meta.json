@@ -1,0 +1,19 @@
+{
+  "method": "S1 VV log-ratio + Otsu, flat(slope<5), speckle median7, exclude perm-water",
+  "pre": "2025-07-12",
+  "results": {
+    "2025-07-18": {
+      "otsu_thr_dB": -2.0,
+      "flood_px": 175734,
+      "flood_km2": 17.57,
+      "px_m": 10.0
+    },
+    "2025-07-19": {
+      "otsu_thr_dB": -2.0,
+      "flood_px": 118301,
+      "flood_km2": 11.83,
+      "px_m": 10.0
+    }
+  },
+  "note": "홍수피크 07-19 13시. S1 통과시각 불일치 가능 → 07-18/19 병행."
+}
