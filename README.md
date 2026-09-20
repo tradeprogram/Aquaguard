@@ -4,13 +4,17 @@
 
 > **처음 오셨다면 → [docs/OVERVIEW.md](docs/OVERVIEW.md)** 에 프로젝트 배경·아키텍처·데이터 출처·신뢰성 설계·현재 구현 범위가 한 문서로 정리돼 있습니다.
 >
-> 이 저장소에서 작업을 시작하는 모든 사람(사람이든 Claude Code 세션이든)은 이 README를 먼저 읽을 것. 더 상세한 전문은 **[ARCHITECTURE.md](ARCHITECTURE.md)**(§0~§14), 원본 PDF(다이어그램 포함)는 [`docs/`](docs/)에 있음. 모듈 계약 원본은 [`contracts/`](contracts/).
+> 더 상세한 기술 사양은 **[ARCHITECTURE.md](ARCHITECTURE.md)**, 모듈 간 입출력 계약은 [`contracts/`](contracts/)에 있습니다.
 
 ---
 
-## 빠른 시작 (트랙③ 프로토타입 — Module O + 대시보드, 전부 목업 모드)
+## 빠른 시작
 
-`module_o_orchestrator`가 A~H를 `contracts/`의 example.json으로 목업 호출하고, `ui/`의 Next.js 대시보드가 그 결과를 그린다. `AQUAGUARD_MOCK_MODE=0`으로 바꾸면 **설치된 모듈만** 실제 `run`으로 전환되고 아직 없는 모듈은 example.json으로 메워진다(코드 변경 없음, `module_o_orchestrator/modules_client.py` 참조) — 트랙별 진도가 달라도 real 모드를 쓸 수 있게 모듈 단위로 내려간다. 어느 모듈이 실물이고 어느 것이 예시값인지는 봉투의 `meta.module_sources`로 나오며, UI의 Provenance 배지(§7)가 이 값을 근거로 삼는다. 기본값 `1`은 전 모듈을 example로 고정하므로 §9 데모 리허설처럼 출력이 결정적이어야 할 때 쓴다.
+`module_o_orchestrator`가 A~H를 순차 호출하고, `ui/`의 Next.js 대시보드가 그 결과를 그린다.
+
+`AQUAGUARD_MOCK_MODE` 환경변수가 모듈 호출 방식을 정한다. `0`이면 설치된 모듈은 실제 `run()`으로, 아직 없는 모듈만 `contracts/`의 example.json으로 메운다 — 모듈 단위로 내려가므로 일부만 구현된 상태에서도 쓸 수 있다. 기본값 `1`은 전 모듈을 example로 고정해 출력을 결정적으로 만든다(리허설·회귀 비교용).
+
+어느 모듈이 실물이고 어느 것이 예시값인지는 응답 봉투의 `meta.module_sources`에 그대로 나오고, 화면의 Provenance 배지가 이 값을 근거로 삼는다 — 숫자만 보고 실측인지 예시인지 헷갈리지 않게 하려는 것이다.
 
 ```bash
 # 1) 백엔드 (FastAPI + Module O)
@@ -45,6 +49,122 @@ python -m pytest module_o_orchestrator/tests/ -v
 
 ---
 
+## 아키텍처
+
+산불이 지나간 사면에 비가 오는 순간부터, 무엇이 무너지고 어디가 잠기고 누가 갇히는지를
+한 줄기로 계산한다. 아래 그림의 왼쪽이 관측, 가운데가 판단, 오른쪽이 사람이 보는 화면이다.
+
+```mermaid
+flowchart LR
+    subgraph SRC["① 데이터"]
+        direction TB
+        RAIN["강우·수위<br/>기상청 API허브 · LDAPS"]
+        TERR["지형·토양<br/>DEM 5m · 토양도 · dNBR"]
+        SAT["위성<br/>Sentinel-1 SAR"]
+        VEC["벡터<br/>브이월드 건물·도로<br/>팜맵 · 행정경계 · 대피소"]
+    end
+
+    subgraph MOD["② 예측·판정 모듈"]
+        direction TB
+        A["<b>A</b> 산사태<br/>Infinite Slope FoS<br/>→ 위험 폴리곤"]
+        B["<b>B</b> 하천범람<br/>SFINCS / ANUGA<br/>→ 침수심 래스터"]
+        V["<b>V</b> 검증<br/>predicted vs observed<br/>IoU · F1"]
+        C["<b>C</b> 도로·지하차도<br/>고시 임계 규칙"]
+        D["<b>D</b> 노출자산<br/>건물·농경지 오버레이"]
+        E["<b>E</b> 대피소·경로<br/>실도로 경로 · 고립 판정"]
+        G["<b>G</b> 피해비용<br/>복구비 고시단가"]
+        H["<b>H</b> 시민신고 역검증"]
+    end
+
+    subgraph ORC["③ 오케스트레이션"]
+        direction TB
+        O["<b>O</b> Module O<br/>골든타임 집계 · 경보 상태머신<br/>A→B→C→D→E→G→H 순차 호출"]
+        ENV["§4.2 공통 봉투<br/>status · fallback_tier<br/>data · warnings"]
+    end
+
+    subgraph OUT["④ 화면"]
+        direction TB
+        API["api_server<br/>FastAPI"]
+        SNAP["사전계산 스냅샷<br/>build_demo_snapshot.py"]
+        UI["Next.js 대시보드<br/>위험현황 · 대피소 · 고립마을"]
+        MAP["MapLibre 3D 지도<br/>시간축 스크러버<br/>침수 등고선 · 위험영역"]
+    end
+
+    RAIN --> A & B & C
+    TERR --> A & B
+    SAT --> V
+    VEC --> D & E
+
+    A -- "위험 폴리곤" --> D
+    A --> E
+    B -- "침수 범위" --> D
+    B --> C & E
+    A & B -. "예측" .-> V
+    D -- "노출 건물·농경지" --> G
+    A & B & C & D & E & G & H --> O
+    O --> ENV --> API
+    API --> UI & MAP
+    SNAP -. "고정 입력은 미리 계산" .-> UI & MAP
+    V -. "정확도 지표" .-> UI
+
+    classDef src fill:#0f2942,stroke:#38bdf8,color:#e0f2fe
+    classDef mod fill:#0f2e26,stroke:#34d399,color:#d1fae5
+    classDef orc fill:#2e1f3f,stroke:#c084fc,color:#f3e8ff
+    classDef out fill:#3a2a12,stroke:#fbbf24,color:#fef3c7
+    class RAIN,TERR,SAT,VEC src
+    class A,B,V,C,D,E,G,H mod
+    class O,ENV orc
+    class API,SNAP,UI,MAP out
+```
+
+### 모듈이 하는 일
+
+| | 모듈 | 입력 | 출력 | 방식 |
+|---|---|---|---|---|
+| **A** | 산사태 예측 | 경사·토성·강우·dNBR | 붕괴확률, 위험 폴리곤 | Infinite Slope 안전율(FoS) → 시그모이드 |
+| **B** | 하천범람 예측 | 유역·강우·수위 | 범람확률, 최대침수심 | SFINCS(1순위)/ANUGA 수치모형 |
+| **V** | 검증 | A·B 예측 + Sentinel-1 관측 | IoU·F1·Recall | predicted vs observed 교차 |
+| **C** | 도로·지하차도 | 시간강우, 배수능력 | 정상/주의/경계/위험 | 고시 임계 규칙(모델 아님) |
+| **D** | 노출자산 | 위험영역 + 건물·농경지 | 노출 건물 목록, 농경지 면적 | 공간 오버레이 |
+| **E** | 대피소·경로 | 출발지, 대피소, 위험영역 | 실도로 경로, 고립 건물 군집 | 네이버 Directions + 도로망 그래프 |
+| **G** | 피해비용 | 노출자산 + 주용도 | 추정 피해액, 근거 고시 | 복구비 산정기준 단가 |
+| **H** | 시민신고 역검증 | 예측 + 시민 제보 | 신뢰도 보정치 | 예측-제보 일치 판정 |
+| **O** | 오케스트레이션 | 경보 좌표·시각 | 통합 경보 봉투 | 순차 호출 + 골든타임 집계 |
+
+### 모듈은 죽지 않는다
+
+모든 모듈이 같은 봉투로 답한다. 실패하더라도 예외를 던지는 대신 무엇이 왜 안 됐는지를
+적어 내려보낸다 — 경보 파이프라인이 모듈 하나 때문에 멈추면 안 되기 때문이다.
+
+```json
+{ "status": "ok | degraded | error",
+  "fallback_tier": 1,
+  "data": { },
+  "warnings": ["무엇을 확인하지 못했는지"] }
+```
+
+`status`가 `degraded`면 값은 나왔지만 폴백을 탔다는 뜻이고, 그 이유가 `warnings`에 남는다.
+화면은 이 값을 Provenance 배지(실측 / 예보 / 모형 / 규칙 / 가정)로 옮겨, 보고 있는 숫자가
+어디서 왔는지를 매번 밝힌다.
+
+### 값이 흐르는 경로
+
+경보 하나가 만들어지는 과정은 이렇다.
+
+1. 경보 좌표와 시각이 들어온다 (`POST /alerts/trigger`)
+2. **A**가 그 지점의 안전율로 붕괴확률과 위험 폴리곤을, **B**가 침수심 래스터를 낸다
+3. 둘의 위험영역을 합쳐 200m 격자로 만들고, 그 격자에 닿는 건물·농경지만 읽는다
+4. **C**가 지하차도 등급을, **D**가 노출자산을, **E**가 대피 경로와 고립 군집을,
+   **G**가 피해액을, **H**가 시민 제보 대조를 계산한다
+5. **O**가 전부 모아 봉투 하나로 만들고, 우리가 탐지한 시각과 실제 공식 경보 시각을
+   나란히 놓아 골든타임 차이를 집계한다
+
+입력이 고정된 재현 시나리오는 `scripts/build_demo_snapshot.py`가 이 과정을 미리 한 번
+돌려 저장해 둔다. 화면은 그 저장본을 읽어 즉시 뜨고, 저장본이 지금 코드와 같은 값인지는
+`tests/test_demo_snapshot.py`가 파이프라인을 다시 돌려 대조한다.
+
+---
+
 ## 1. 왜 만드는가 (배경)
 
 2025년 여름 한반도는 한 시즌 안에 복합재해를 겪었다. 7/16~20 기록적 집중호우(다수 지역 누적 300mm 이상)로 전국 37명 사망, 12,921명 대피, 피해 총 1조 848억원(도로침수 778곳·토사유실 197건·하천시설 붕괴 403건·건축물침수 1,857건·농경지침수 73건).
@@ -65,10 +185,6 @@ python -m pytest module_o_orchestrator/tests/ -v
 3. 위험이 임계치를 넘는 순간 사람의 판단을 기다리지 않고 대피소·경로·피해비용까지 자동 계산 (Module D/E/G)
 4. 위험도가 임계치를 넘고 시민 역검증으로 신뢰도가 보강되면, 관(지자체 재난상황실)과 시민에게 곧바로 경보 전파 (Module O — 골든타임 상태머신). 시민 모드는 지자체 담당자 승인 게이트 없이 곧바로 전파, 관공서 모드는 담당자 원클릭 승인/보류(2026-08-28 결정, §2 "시민 모드 vs 관공서 모드")
 5. 산청 실제 타임라인(신고 08:00, 경보 12:37)과 이 시스템이 있었다면 나왔을 타임라인을 비교해 "몇 시간 몇 분을 벌 수 있었는가"를 숫자로 증명 (데모 시나리오, §8)
-
-### 팀 배경
-
-국민대학교 산림환경·원격탐사 전공. 국가유산청 산불위험 예측 AI 연구(CNN 기반 멀티태스크 모델)와 산림 AI 에이전트 선행 프로젝트에서의 협업 경험을 화재-산사태 재해연쇄라는 새 문제에 적용했다. §4의 화재흉터 증폭계수, 폴백 계층, 모듈화 원칙은 모두 그 선행 프로젝트에서 검증된 패턴을 재사용한 것이다.
 
 ---
 
