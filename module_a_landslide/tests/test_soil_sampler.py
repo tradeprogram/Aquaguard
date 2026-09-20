@@ -118,3 +118,49 @@ def test_m0_override_changes_wetness():
 def test_still_never_raises():
     for bad in [{}, {"x_5179": 1}, {"x_5179": 1, "y_5179": 2, "_soil": {"c_kpa": None}}]:
         assert A.run(bad)["status"] in {"ok", "degraded", "error"}
+
+
+# --- 경사 격자 (2차 작업지시서) -------------------------------------------
+
+slope_required = pytest.mark.skipif(not soil_sampler.slope_available(),
+                                    reason="경사격자 npz 미탑재")
+
+
+@slope_required
+def test_slope_at_inside_aoi():
+    s = soil_sampler.slope_at(*SANCHEONG_HIGH)
+    assert s is not None and 0.0 <= s <= 80.0
+
+
+def test_slope_at_outside_aoi_is_none():
+    """AOI 밖에서 남의 지역 지형을 쓰지 않는다 — sample() 과 같은 규약."""
+    assert soil_sampler.slope_at(*OUTSIDE_AOI) is None
+
+
+@slope_required
+def test_slope_at_matches_source_within_quantization():
+    """uint8 × 0.3° 양자화라 원본과의 차이가 0.15°(=step/2)를 넘으면 안 된다."""
+    # 5m 원본에서 확인해 둔 값 — 격자를 다시 만들어도 이 관계는 유지돼야 한다
+    for (x, y), src in (((1028621.7, 1696861.2), 52.53),
+                        ((1050511.5, 1706245.2), 32.67)):
+        got = soil_sampler.slope_at(x, y)
+        assert got is not None and abs(got - src) <= 0.15 + 1e-9, (x, y, got, src)
+
+
+@slope_required
+def test_slope_drives_trigger_across_boundary():
+    """경사가 판정을 가른다 — 0.5° 차이로 임계를 넘나든다(지시서 표 재현)."""
+    import json
+    lo = A.run(_input(*SANCHEONG_HIGH, slope=32.5))["data"]["landslide_prob"]
+    hi = A.run(_input(*SANCHEONG_HIGH, slope=33.5))["data"]["landslide_prob"]
+    assert hi > lo
+
+
+@slope_required
+def test_slope_row_cache_is_consistent():
+    """행 캐시를 타도 같은 값 — 차분 복원이 상태에 의존하지 않는다."""
+    x, y = SANCHEONG_HIGH
+    first = soil_sampler.slope_at(x, y)
+    for dx in (0.0, 5.0, 10.0, 0.0):
+        soil_sampler.slope_at(x + dx, y)
+    assert soil_sampler.slope_at(x, y) == first

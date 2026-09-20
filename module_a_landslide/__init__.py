@@ -174,6 +174,11 @@ def run(input: dict) -> dict:  # noqa: A002 - §4.2 규약이 지정한 이름
                 "precursor_flag": precursor,
                 "hours_to_critical": htc,
                 "location": {"x_5179": norm.x_5179, "y_5179": norm.y_5179},
+                # §4.3 합의로 계약에 추가된 필수·nullable 필드. 트랙③이 임시로
+                # None 을 넣어 뒀는데(ba59c3d4), 이제 실제 폴리곤을 채운다 —
+                # risk_layers 가 사전계산 레이어에서 질의 지점 주변을 잘라 준다.
+                # 위험영역이 없으면 여전히 None 이고, 그때 Module O 가 location(점)
+                # 으로 폴백한다(orchestrator.py). 근거: 1차 작업지시서 P1-2.
                 "risk_polygon_5179": risk_poly,
             },
             warnings=warnings,

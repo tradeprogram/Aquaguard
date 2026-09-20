@@ -26,7 +26,9 @@ from typing import Any
 _DIR = Path(__file__).resolve().parent / "data" / "risk_polygons"
 
 DEFAULT_SCENARIO = "A_soilmap"   # Module A 가 실제로 쓰는 지반정수와 정합
-DEFAULT_LEVEL = "critical"       # landslide_prob >= 0.7 — Module O 트리거와 같은 임계
+# ⚠ 레이어 파일명은 생성 시점 이름이라 "warning"=P≥0.5, "critical"=P≥0.7 이다.
+# 임계를 0.5 로 재유도했으므로 **운영 임계에 해당하는 레이어는 "warning"** 이다.
+DEFAULT_LEVEL = "warning"        # P≥0.5 ⟺ FoS<1 ⟺ envelope.CRITICAL_PROB
 
 _EMPTY: dict[str, Any] = {"type": "FeatureCollection", "features": []}
 
