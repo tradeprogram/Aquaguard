@@ -63,6 +63,7 @@ export default function HomePage() {
   const [pickedOrigin, setPickedOrigin] = useState<[number, number] | null>(null);
   // §7 IsolationPanel↔MapExplorer도 형제 컴포넌트라 같은 방식으로 상태를 끌어올린다.
   const [isolatedAreas, setIsolatedAreas] = useState<GeoJSON.FeatureCollection | null>(null);
+  const [blockedRoads, setBlockedRoads] = useState<GeoJSON.FeatureCollection | null>(null);
   const [focusBbox, setFocusBbox] = useState<{ bbox: [number, number, number, number]; nonce: number } | null>(null);
   // 지도의 "산청 상능마을"/"서울 강남" 버튼이 바꾸는 현재 데모 지역 — EvacuationPanel/
   // IsolationPanel이 이 값 기준으로 대피소 목록을 고른다(lib/demoShelters.ts).
@@ -80,6 +81,7 @@ export default function HomePage() {
           setActive("evacuation");
         }}
         isolatedAreas={isolatedAreas}
+        blockedRoads={blockedRoads}
         focusBbox={focusBbox}
         onRegionSelect={(r) => {
           setRegion(r);
@@ -88,6 +90,7 @@ export default function HomePage() {
           // 것처럼 보일 수 있음.
           setEvacuationRoute(null);
           setIsolatedAreas(null);
+          setBlockedRoads(null);
         }}
       />
 
@@ -162,7 +165,10 @@ export default function HomePage() {
               {active === "isolation" && (
                 <IsolationPanel
                   region={region}
-                  onResult={(r) => setIsolatedAreas(r?.isolated_areas ?? null)}
+                  onResult={(r) => {
+                    setIsolatedAreas(r?.isolated_areas ?? null);
+                    setBlockedRoads(r?.blocked_roads ?? null);
+                  }}
                   onFocusCluster={(bbox) => {
                     // 패널이 화면을 넓게 덮고 있으면 지도가 이동해도 가려서 안 보이므로
                     // (2026-09-03 사용자 피드백 — "눌러도 아무 반응 없음"), 클릭 즉시

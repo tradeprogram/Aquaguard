@@ -383,6 +383,9 @@ interface MapExplorerProps {
   onOriginPicked?: (lonLat: [number, number]) => void;
   // §7 IsolationPanel에서 계산한 고립 건물 클러스터(hull, 단독 건물은 Point) — 마젠타로 표시.
   isolatedAreas?: GeoJSON.FeatureCollection | null;
+  // 위험영역과 겹쳐 통행 불가로 판정된 도로 구간 — 빨간 굵은 선으로 표시한다.
+  // 고립 구역(마젠타)·대피경로(시안)와 색으로 구분된다.
+  blockedRoads?: GeoJSON.FeatureCollection | null;
   // 패널에서 "고립 구역 N"을 클릭하면 그 구역으로 지도를 이동시키는 용도. nonce를
   // 넣는 이유는 같은 구역을 연달아 두 번 눌러도(같은 bbox) 매번 다시 이동해야 하는데
   // React effect는 값이 안 바뀌면 재실행을 안 하기 때문 — 클릭마다 nonce를 올려 강제한다.
@@ -397,6 +400,7 @@ export default function MapExplorer({
   pickOrigin = false,
   onOriginPicked,
   isolatedAreas = null,
+  blockedRoads = null,
   focusBbox = null,
   onRegionSelect,
 }: MapExplorerProps = {}) {
@@ -411,6 +415,9 @@ export default function MapExplorer({
   // /isolation-check를 부를 수 있다 — mount 시 한 번만 만들어지는 클로저 안에서 최신
   // 값을 읽어야 하므로 state가 아니라 ref로 들고 있는다(TEST_LOCATIONS 버튼이 갱신).
   const isolationRegionRef = useRef<RegionKey>(DEFAULT_REGION);
+  // 대피소 레이어는 지역이 바뀌면 다시 그려야 해서 ref가 아니라 state로도 들고 있다
+  // (ref 변경은 렌더를 유발하지 않아 useEffect가 안 돈다).
+  const [shelterRegion, setShelterRegion] = useState<RegionKey>(DEFAULT_REGION);
   // §7 슬라이더 연동 — 침수/토사 볼륨이 바뀔 때마다 /isolation-check를 다시 부르는데,
   // 드래그 중 매 프레임 호출하면 과하므로 디바운스 타이머를 여기 들고 있는다.
   const isolationDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -1037,9 +1044,13 @@ export default function MapExplorer({
         const hazardPolys = [debrisOuter, floodOuter].filter(
           (f): f is Feature<Polygon> => !!f && f.geometry.type === "Polygon"
         );
+        const EMPTY: GeoJSON.FeatureCollection = { type: "FeatureCollection", features: [] };
+        const setLayer = (id: string, data: GeoJSON.FeatureCollection) =>
+          (mapRef.current?.getSource(id) as GeoJSONSource | undefined)?.setData(data);
+
         if (hazardPolys.length === 0) {
-          const src = mapRef.current?.getSource("isolated-areas") as GeoJSONSource | undefined;
-          src?.setData({ type: "FeatureCollection", features: [] });
+          setLayer("isolated-areas", EMPTY);
+          setLayer("blocked-roads", EMPTY);
           setHazardIsolatedCount(null);
           return;
         }
@@ -1057,11 +1068,15 @@ export default function MapExplorer({
             hazardGeometry
           )
             .then((result) => {
-              const src = mapRef.current?.getSource("isolated-areas") as GeoJSONSource | undefined;
-              src?.setData(result.isolated_areas);
+              setLayer("isolated-areas", result.isolated_areas);
+              // 통행 불가 도로 — 슬라이더로 위험영역을 키우면 끊기는 길이 늘어난다.
+              setLayer("blocked-roads", result.blocked_roads ?? EMPTY);
               setHazardIsolatedCount(result.isolated_building_count);
             })
-            .catch(() => setHazardIsolatedCount(null));
+            .catch(() => {
+              setLayer("blocked-roads", EMPTY);
+              setHazardIsolatedCount(null);
+            });
         }, 600);
       };
 
@@ -1118,14 +1133,132 @@ export default function MapExplorer({
       // 대피 경로(§6.9) — 지금은 직선거리 근사라 "실제 도로 경로 아님"이 시각적으로도
       // 드러나게 점선으로 그린다. 실경로 API가 붙으면 LineString 좌표만 실제 폴리라인으로
       // 바뀌고 이 레이어 자체는 그대로 재사용된다.
+      // 대피경로 — 위성영상 위에서도 한눈에 잡히도록 네 겹으로 쌓는다.
+      // 예전에는 시안색 점선 한 겹(width 5)이라 지형·도로와 섞여 안 보였다.
+      //   glow   바깥 번짐 — 배경이 밝든 어둡든 선이 떠 보이게 한다
+      //   casing 짙은 테두리 — 밝은 위성영상 위에서 형태를 잡아준다
+      //   line   본선(solid) — 점선은 "잠정"처럼 읽혀서 실선으로 바꿨다
+      //   flow   그 위를 덮는 흰 파선 — 길의 방향감을 준다
+      // 폭은 줌에 따라 보간해 넓게 볼 때도 가늘어지지 않게 한다.
+      // zoom 보간은 최상위에만 올 수 있다 — ["*", ["interpolate", ...], 2] 처럼 감싸면
+      // MapLibre가 거부한다("zoom expression may only be used as input to a top-level
+      // step/interpolate"). 스타일 스펙 검증기로 확인했고, 그래서 배율을 stops에 미리
+      // 곱해 겹마다 따로 만든다.
+      const routeWidth = (scale: number): ExpressionSpecification => [
+        "interpolate", ["linear"], ["zoom"],
+        10, 4 * scale,
+        14, 8 * scale,
+        17, 14 * scale,
+      ];
       map.addSource("evacuation-route", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
+      map.addLayer({
+        id: "evacuation-route-glow",
+        type: "line",
+        source: "evacuation-route",
+        layout: { "line-cap": "round", "line-join": "round" },
+        paint: {
+          "line-color": "#22d3ee",
+          "line-width": routeWidth(3.2),
+          "line-opacity": 0.22,
+          "line-blur": 8,
+        },
+      });
+      map.addLayer({
+        id: "evacuation-route-casing",
+        type: "line",
+        source: "evacuation-route",
+        layout: { "line-cap": "round", "line-join": "round" },
+        paint: {
+          "line-color": "#083344",
+          "line-width": routeWidth(1.7),
+          "line-opacity": 0.95,
+        },
+      });
       map.addLayer({
         id: "evacuation-route-line",
         type: "line",
         source: "evacuation-route",
         layout: { "line-cap": "round", "line-join": "round" },
-        paint: { "line-color": "#22d3ee", "line-width": 5, "line-dasharray": [2, 1.5], "line-opacity": 0.9 },
+        paint: { "line-color": "#22d3ee", "line-width": routeWidth(1), "line-opacity": 1 },
       });
+      map.addLayer({
+        id: "evacuation-route-flow",
+        type: "line",
+        source: "evacuation-route",
+        layout: { "line-cap": "butt", "line-join": "round" },
+        paint: {
+          "line-color": "#ecfeff",
+          "line-width": routeWidth(0.34),
+          "line-opacity": 0.9,
+          "line-dasharray": [1.4, 2.2],
+        },
+      });
+      // 통행 불가 도로 — 위험영역과 겹쳐 도로망 그래프에서 제거된 구간이다.
+      // 대피경로(시안 점선)보다 아래, 고립 구역(마젠타)과는 색으로 구분한다.
+      // 케이싱을 먼저 깔아 배경 도로 위에서도 선이 끊겨 보이지 않게 한다.
+      map.addSource("blocked-roads", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
+      map.addLayer({
+        id: "blocked-roads-casing",
+        type: "line",
+        source: "blocked-roads",
+        layout: { "line-cap": "round", "line-join": "round" },
+        paint: { "line-color": "#450a0a", "line-width": 9, "line-opacity": 0.75 },
+      });
+      map.addLayer({
+        id: "blocked-roads-line",
+        type: "line",
+        source: "blocked-roads",
+        layout: { "line-cap": "round", "line-join": "round" },
+        paint: { "line-color": "#ef4444", "line-width": 5, "line-opacity": 0.95 },
+      });
+
+      // 대피소 — 경로를 고르기 전에도 "어디로 갈 수 있는지"가 먼저 보여야 해서
+      // 현재 지역 대피소를 전부 상시 표시한다. 글리프(텍스트) 없이 원만 겹쳐
+      // 핀처럼 보이게 만든다 — 스타일의 폰트 엔드포인트가 한글을 보장하지 않아
+      // 라벨을 심볼로 넣으면 지역에 따라 통째로 사라질 수 있다.
+      const shelterRadius = (scale: number): ExpressionSpecification => [
+        "interpolate", ["linear"], ["zoom"],
+        9, 4 * scale,
+        13, 8 * scale,
+        17, 13 * scale,
+      ];
+      map.addSource("shelters", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
+      map.addLayer({
+        id: "shelters-halo",
+        type: "circle",
+        source: "shelters",
+        paint: {
+          "circle-radius": shelterRadius(2.1),
+          "circle-color": "#22c55e",
+          "circle-opacity": 0.18,
+          "circle-blur": 0.5,
+        },
+      });
+      map.addLayer({
+        id: "shelters-dot",
+        type: "circle",
+        source: "shelters",
+        paint: {
+          "circle-radius": shelterRadius(1),
+          "circle-color": "#16a34a",
+          "circle-stroke-width": 2.5,
+          "circle-stroke-color": "#ecfdf5",
+          "circle-opacity": 0.95,
+        },
+      });
+      // 안쪽 흰 점 — 멀리서 보면 초록 원, 가까이서 보면 핀처럼 읽힌다
+      map.addLayer({
+        id: "shelters-core",
+        type: "circle",
+        source: "shelters",
+        minzoom: 12,
+        paint: {
+          "circle-radius": shelterRadius(0.34),
+          "circle-color": "#ffffff",
+          "circle-opacity": 0.95,
+        },
+      });
+
       map.addSource("evacuation-markers", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
       map.addLayer({
         id: "evacuation-markers-circle",
@@ -1186,6 +1319,32 @@ export default function MapExplorer({
       map.on("mouseleave", "isolated-areas-fill", hideIsolationPopup);
       map.on("mouseenter", "isolated-areas-points", showIsolationPopup);
       map.on("mouseleave", "isolated-areas-points", hideIsolationPopup);
+
+      // 대피소·통행 불가 도로 — 점만 찍어두면 뭔지 모르므로 올리면 이름·수용인원을
+      // 띄운다. 라벨을 심볼 레이어로 상시 노출하지 않는 이유는 스타일의 폰트
+      // 엔드포인트가 한글 글리프를 보장하지 않기 때문이다(레이어 통째로 사라질 위험).
+      const infoPopup = new Popup({ closeButton: false, closeOnClick: false, offset: 12 });
+      const showInfo = (html: string) =>
+        (e: { lngLat: { lng: number; lat: number }; features?: MapGeoJSONFeature[] }) => {
+          const p = e.features?.[0]?.properties;
+          if (!p) return;
+          map.getCanvas().style.cursor = "pointer";
+          infoPopup.setLngLat(e.lngLat).setHTML(html.replace(/\{(\w+)\}/g, (_, k) => String(p[k] ?? "—"))).addTo(map);
+        };
+      const hideInfo = () => {
+        map.getCanvas().style.cursor = "";
+        infoPopup.remove();
+      };
+      map.on("mouseenter", "shelters-dot", showInfo(
+        '<div style="font:12px sans-serif;color:#0f172a;">' +
+        '<b>{name}</b><br/>대피소 · 수용 {capacity}명</div>'
+      ));
+      map.on("mouseleave", "shelters-dot", hideInfo);
+      map.on("mouseenter", "blocked-roads-line", showInfo(
+        '<div style="font:12px sans-serif;color:#0f172a;">' +
+        '<b style="color:#b91c1c;">통행 불가</b><br/>위험영역과 겹치는 구간</div>'
+      ));
+      map.on("mouseleave", "blocked-roads-line", hideInfo);
 
       setMapReady(true);
     });
@@ -1303,6 +1462,27 @@ export default function MapExplorer({
     const areasSource = mapRef.current?.getSource("isolated-areas") as GeoJSONSource | undefined;
     areasSource?.setData(isolatedAreas ?? { type: "FeatureCollection", features: [] });
   }, [mapReady, isolatedAreas]);
+
+  useEffect(() => {
+    if (!mapReady) return;
+    const source = mapRef.current?.getSource("blocked-roads") as GeoJSONSource | undefined;
+    source?.setData(blockedRoads ?? { type: "FeatureCollection", features: [] });
+  }, [mapReady, blockedRoads]);
+
+  // 현재 지역 대피소 전체를 지도에 상시 표시한다(산청 8 / 강남 15 / 서초 20).
+  useEffect(() => {
+    if (!mapReady) return;
+    const source = mapRef.current?.getSource("shelters") as GeoJSONSource | undefined;
+    if (!source) return;
+    source.setData({
+      type: "FeatureCollection",
+      features: DEMO_REGIONS[shelterRegion].shelters.map((s) => ({
+        type: "Feature",
+        geometry: { type: "Point", coordinates: [s.lon, s.lat] },
+        properties: { shelter_id: s.id, name: s.name, capacity: s.capacity },
+      })),
+    });
+  }, [mapReady, shelterRegion]);
 
   // Module B의 실제 침수 폴리곤을 받아 3D로 세운다. 경보가 아직 등록되지 않았거나
   // (트리거 전) 침수심 래스터가 없는 AOI면 404/빈 배열이 오는데, 그건 오류가 아니라
@@ -1451,6 +1631,7 @@ export default function MapExplorer({
                     onClick={() => {
                       flyTo(loc.center, loc.zoom);
                       isolationRegionRef.current = loc.regionKey;
+                      setShelterRegion(loc.regionKey);
                       onRegionSelect?.(loc.regionKey);
                     }}
                     className="flex-1 rounded-md border border-slate-700 px-2 py-1 text-xs text-slate-300 hover:border-sky-600 hover:text-sky-300"

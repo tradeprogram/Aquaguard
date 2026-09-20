@@ -194,6 +194,9 @@ export interface IsolationCheckResult {
   isolated_areas: GeoJSON.FeatureCollection;
   isolated_buildings: GeoJSON.FeatureCollection;
   isolated_building_count: number;
+  // 위험영역과 겹쳐 도로망 그래프에서 제거된 구간 — 지도에 빨간색으로 그린다.
+  // 고립 판정의 부산물이지만 "어느 길이 끊기는가"는 그 자체로 대피 정보다.
+  blocked_roads: GeoJSON.FeatureCollection;
   warnings: string[];
 }
 
