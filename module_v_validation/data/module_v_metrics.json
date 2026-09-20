@@ -1,0 +1,19 @@
+{
+  "iou": 0.0038,
+  "f1": 0.0076,
+  "pod": 0.0056,
+  "far": 0.9883,
+  "precision": 0.0117,
+  "auprc": 0.0106,
+  "base_rate": 0.0097,
+  "params": {
+    "speckle": 7,
+    "change_dB": -3.0,
+    "slope_min": 15.0,
+    "pol": "VH",
+    "pre": "2025-07-12",
+    "post": "2025-07-25",
+    "prob_scenario": "B_weathered"
+  },
+  "note": "SAR 변화는 강우후 토양수분·식생위상 혼입으로 노이즈 큼. observed=proxy."
+}
