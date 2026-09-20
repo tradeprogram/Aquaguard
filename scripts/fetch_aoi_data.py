@@ -29,11 +29,13 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 import time
 from pathlib import Path
 
 import geopandas as gpd
 import requests
+from dotenv import load_dotenv
 from shapely.geometry import box
 from shapely.ops import unary_union
 
@@ -47,7 +49,18 @@ LANDCOVER_PATH = r"C:\Users\user\AppData\Local\Temp\claude\C--aquaguard\9b9367ba
 # 메타데이터 조회 하나에 60초 넘게 걸리고 robocopy도 두 번이나 멈췄다 — 대신 파이썬
 # 순수 청크 복사(8MB 단위 read/write)로 로컬에 옮긴 뒤 그 사본을 쓴다.
 
-VWORLD_API_KEY = "762921C3-C162-3D9D-A9E7-8B83E6641A2D"
+# 키를 소스에 박으면 저장소가 공개되는 순간 그대로 유출된다 — 이 파일의 옛 키가
+# 실제로 그렇게 노출돼 폐기·재발급했다. api_server.py 와 같은 방식으로 저장소
+# 루트 .env 에서 읽는다(.env 는 .gitignore 대상). 없으면 조용히 빈 키로 401을
+# 받는 대신 무엇을 어디에 넣어야 하는지 알려주고 멈춘다.
+load_dotenv(REPO_ROOT / ".env")
+VWORLD_API_KEY = os.environ.get("VWORLD_API_KEY")
+if not VWORLD_API_KEY:
+    raise SystemExit(
+        "VWORLD_API_KEY 가 없습니다. 저장소 루트 .env 에 VWORLD_API_KEY=... 를 넣거나 "
+        "환경변수로 지정하세요. 키 발급: https://www.vworld.kr/dev/apiKey_i001.do "
+        "(활용API: 2D데이터 API, 서비스URL: localhost)"
+    )
 VWORLD_URL = "http://api.vworld.kr/req/data"
 VWORLD_PAGE_SIZE = 1000
 TILE_DEG = 0.027  # 위도 35~38°N 범위에서 대략 7~7.5km² — 10km² 한도에 여유
