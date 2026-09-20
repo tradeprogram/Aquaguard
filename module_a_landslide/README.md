@@ -140,7 +140,36 @@ module_a_landslide/
   forecast.py       예보 시간강우 → hours_to_critical 전진적분 (a-htc)
   parameters.py     정밀토양도 → 지반정수 룩업 로더
   data/             문헌 출처 지반정수(가상값 없음) + 토양 코드사전
+    validation_andong/  안동 사전검증 산출물(방법론 검증 — 산청 참값 확보 전 단계)
+  scripts/          데이터 준비·검증 파이프라인 01~15 (아래 §5-1)
   tests/            계약 6 + 물리 9 + 예보 11 = 26 passed
   README.md         이 문서
   DATA_SOURCES.md   출처·이중검증·라이선스
 ```
+
+### 5-1. scripts/ — 재현 파이프라인
+
+지반정수·지형·강우·산불 입력을 만드는 단계다. 대용량 원시자료(정밀토양도, 5m DEM,
+Sentinel 원본)는 저장소에 없으므로 각 스크립트 상단의 경로를 자기 환경에 맞춰야 한다.
+
+| 스크립트 | 하는 일 |
+|---|---|
+| `01_extract_soil_codes` | 정밀토양도 속성 → 코드사전 88개 분류 |
+| `02_build_fos_parameter_table` | 코드 → 지반정수 번들(`data/fos_parameter_bundle.json`) |
+| `03_sample_soil_at_points` | 좌표에서 토성·토심·배수 샘플링 |
+| `04_fos_validation_auc` | 안동 인벤토리 대비 FoS AUC |
+| `05_fos_upslope_buffer` | 발생부 편향 보정용 상류사면 버퍼 집계 |
+| `06_plot_validation` | 검증 그림 |
+| `07_dem_slope_validation` · `08_plot_dem_comparison` | DEM/경사 정밀도 대조 |
+| `09_kma_rainfall_client` | 기상청 API허브 ASOS 시간강우 (키는 `.env`) |
+| `10_plot_sancheong_goldentime` | 산청 골든타임 강우 그림 |
+| `11_sentinel2_dnbr` | Sentinel-2 → dNBR (Copernicus/PC 직접 취득, GEE 미사용) |
+| `12_sentinel1_acquire` | Sentinel-1 GRD 취득 |
+| `13_clip_dem_5m` · `14_sancheong_slope` | 산청 DEM 클립 → 경사 |
+| `15_sancheong_soil_grid` | 산청 지반정수 격자(`c_kpa`·`phi_deg`·`gamma`·`z_m`·`m0`) |
+
+**API 키는 전부 `.env`에서 읽는다 — 소스에 박지 말 것.**
+
+`data/validation_andong/`은 **안동** 사전검증 산출물이다. 산청 발생부 참값을 못 구한
+상태에서 방법론 자체(토양 샘플링 → FoS → AUC)가 도는지 먼저 확인한 단계이며,
+산청 결과와 섞어 읽으면 안 된다.
