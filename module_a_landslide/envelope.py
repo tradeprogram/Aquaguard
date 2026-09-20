@@ -95,5 +95,7 @@ def error_envelope(x, y, warnings: list[str]) -> dict[str, Any]:
     return envelope("error", 3, {
         "landslide_prob": 0.0, "confidence_interval": [0.0, 1.0], "source": "observed",
         "amplification_factor": 1.0, "precursor_flag": False, "hours_to_critical": None,
-        "location": {"x_5179": x, "y_5179": y}, "risk_polygon_5179": None,
+        "location": {"x_5179": x, "y_5179": y},
+        # 계약 required. 위치조차 특정 못 하는 error 봉투에서는 위험영역도 낼 수 없다.
+        "risk_polygon_5179": None,
     }, warnings)
