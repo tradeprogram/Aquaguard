@@ -29,6 +29,7 @@ from google.genai import types as genai_types
 from pydantic import BaseModel
 
 import module_e_routing
+from module_e_routing import closures as road_closures
 from module_e_routing import isolation as module_e_isolation
 from module_o_orchestrator import geo
 from module_o_orchestrator.modules_client import module_sources
@@ -1130,12 +1131,14 @@ def evacuation_route(req: EvacuationRouteRequest) -> dict:
         }
     )
     flood = _sancheong_flood_shape()
+    active_closures = road_closures.active(road_closures.load(), road_closures.today_kst())
     shelter_lonlat = {s.shelter_id: (s.lon, s.lat) for s in req.shelter_candidates}
     for r in results:
         r["route_lonlat"] = [
             list(module_e_routing.point_5179_to_lonlat(x, y)) for x, y in r["route_5179"]["coordinates"]
         ]
         _apply_flood_to_route(r, flood, shelter_lonlat.get(r["shelter_id"]), warnings)
+        _apply_closures_to_route(r, active_closures, warnings)
 
     return {"results": results, "warnings": warnings}
 
@@ -1198,6 +1201,55 @@ def _apply_flood_to_route(result: dict, flood, shelter_lonlat, warnings: list) -
         warnings.append(f"{result['shelter_id']} 통행 불가 — {why}")
 
 
+# 통제 구간과 경로가 이 거리 안에서 이만큼 넘게 겹쳐야 '통과'로 본다. 통제 구간은 도로
+# 중심선을 손으로 옮겨 적은 것이라 몇 m 어긋나고, 교차로에서 직각으로 스치는 경로는
+# 겹침이 둘레 폭(16m) 정도라 통과가 아니다.
+CLOSURE_SNAP_M = 8.0
+CLOSURE_MIN_OVERLAP_M = 20.0
+
+
+def _apply_closures_to_route(result: dict, closure_features: list, warnings: list) -> None:
+    """경로가 복구·통제 구간을 지나면 표시하고 도달 불가로 돌린다(현장조사 반영 ③).
+
+    네이버 Directions는 통제 구간을 모르고, 우회 조건도 받지 않는다 — 그래서 겹침만
+    검사해 알리고, 사용자가 다른 대피소를 고르게 한다."""
+    result["route_closed"] = False
+    result["closed_route_m"] = 0
+    coords = result.get("route_lonlat") or []
+    if len(coords) < 2 or not closure_features:
+        return
+    import shapely.geometry as sg
+
+    line = sg.LineString(coords)
+    mid_lat = coords[len(coords) // 2][1]
+    m_per_deg = 111320.0 * math.cos(math.radians(mid_lat))
+    for feature in closure_features:
+        zone = sg.shape(feature["geometry"]).buffer(CLOSURE_SNAP_M / m_per_deg)
+        overlap_m = line.intersection(zone).length * m_per_deg
+        if overlap_m > CLOSURE_MIN_OVERLAP_M:
+            result["route_closed"] = True
+            result["closed_route_m"] = max(result["closed_route_m"], round(overlap_m))
+            result["time_feasible"] = False
+            result["time_margin_min"] = None
+            warnings.append(f"{result['shelter_id']} 경로가 통제 구간을 지남 — {feature['properties']['reason']}")
+
+
+@app.get("/road-closures")
+def road_closures_endpoint(on: str | None = None) -> dict:
+    """그날 유효한 복구·통제 구간(data/road_closures.geojson). 기본은 오늘(KST)."""
+    from datetime import date as _date
+
+    try:
+        day = _date.fromisoformat(on) if on else road_closures.today_kst()
+    except ValueError:
+        raise HTTPException(status_code=400, detail="on은 YYYY-MM-DD")
+    try:
+        features = road_closures.active(road_closures.load(), day)
+    except road_closures.ClosureError as e:
+        raise HTTPException(status_code=500, detail=f"통제 구간 파일 오류: {e}")
+    return {"type": "FeatureCollection", "features": features, "on": day.isoformat()}
+
+
 class IsolationCheckRequest(BaseModel):
     bbox: tuple[float, float, float, float]  # (minLon, minLat, maxLon, maxLat)
     shelter_candidates: list[dict[str, float]]  # [{"lon": ..., "lat": ...}, ...]
@@ -1212,7 +1264,9 @@ def isolation_check(req: IsolationCheckRequest) -> dict:
     """
     try:
         shelters_lonlat = [(s["lon"], s["lat"]) for s in req.shelter_candidates]
-        return module_e_isolation.check_isolation(req.bbox, shelters_lonlat, req.hazard_polygon)
+        active_closures = road_closures.active(road_closures.load(), road_closures.today_kst())
+        return module_e_isolation.check_isolation(req.bbox, shelters_lonlat, req.hazard_polygon,
+                                                  closures=active_closures)
     except RuntimeError as e:
         raise HTTPException(status_code=503, detail=str(e))
 

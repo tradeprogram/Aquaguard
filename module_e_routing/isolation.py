@@ -489,6 +489,32 @@ def evaluate(ctx: IsolationContext, shelters: list[tuple[float, float]], hazard,
     }
 
 
+def closed_edges_for(ctx: IsolationContext, closure_features: list[dict]) -> list[tuple[tuple, dict]]:
+    """통제 구간 → [(엣지, 통제 속성)]. link_ids는 그 링크만 정확히, Polygon은 교차하는 엣지 전부.
+
+    선 기하로 교차 검사하지 않는 이유: 교차로에서 만나는 다른 도로까지 끊긴다."""
+    if not closure_features:
+        return []
+    by_link: dict[str, list[tuple]] = {}
+    for u, v, data in ctx.graph.edges(data=True):
+        by_link.setdefault(str(data.get("link_id")), []).append((u, v))
+    out: list[tuple[tuple, dict]] = []
+    seen: set[tuple] = set()
+    for feature in closure_features:
+        props = feature.get("properties") or {}
+        hits: list[tuple] = []
+        for link_id in props.get("link_ids") or []:
+            hits.extend(by_link.get(str(link_id), []))
+        if (feature.get("geometry") or {}).get("type") in ("Polygon", "MultiPolygon") and ctx.edge_tree is not None:
+            zone = shapely.geometry.shape(feature["geometry"])
+            hits.extend(ctx.edges[k] for k in ctx.edge_tree.query(zone, predicate="intersects"))
+        for edge in hits:
+            if edge not in seen:
+                seen.add(edge)
+                out.append((edge, props))
+    return out
+
+
 def _points(ctx: IsolationContext, idx: list[int]) -> list[tuple[float, float]]:
     return [(float(ctx.centroids[k][0]), float(ctx.centroids[k][1])) for k in idx]
 
@@ -507,11 +533,15 @@ def check_isolation(
     bbox: tuple[float, float, float, float],
     shelter_candidates_lonlat: list[tuple[float, float]],
     hazard_polygon: dict[str, Any] | None = None,
+    closures: list[dict] | None = None,
 ) -> dict[str, Any]:
     """§7 /isolation-check의 핵심 로직.
 
+    closures: 그 시점에 유효한 통제 구간(module_e_routing.closures.active 결과). 위험과 별개로
+    도로망에서 끊고, 침수로 끊긴 길(blocked_roads)과 따로 closed_roads로 보고한다.
+
     반환: {isolated_areas, isolated_buildings, isolated_building_count,
-           blocked_roads, rescue_limited_buildings, rescue_limited_count, warnings}
+           blocked_roads, closed_roads, rescue_limited_buildings, rescue_limited_count, warnings}
     """
     warnings: list[str] = []
     road_features = fetch_roads(bbox)
@@ -520,19 +550,30 @@ def check_isolation(
                 "isolated_buildings": {"type": "FeatureCollection", "features": []},
                 "isolated_building_count": 0,
                 "blocked_roads": {"type": "FeatureCollection", "features": []},
+                "closed_roads": {"type": "FeatureCollection", "features": []},
                 "rescue_limited_buildings": {"type": "FeatureCollection", "features": []},
                 "rescue_limited_count": 0,
                 "warnings": ["해당 영역에 도로 데이터 없음"]}
 
     hazard = hazard_shape(hazard_polygon)
     ctx = build_context(road_features, fetch_buildings(bbox))
-    ev = evaluate(ctx, shelter_candidates_lonlat, hazard)
+    closed = closed_edges_for(ctx, closures or [])
+    closed_set = {edge for edge, _ in closed}
+    ev = evaluate(ctx, shelter_candidates_lonlat, hazard, list(closed_set))
+    closed_roads = {"type": "FeatureCollection", "features": [
+        f for edge, props in closed
+        for f in blocked_road_features([edge], ctx.graph, kind="closed_road",
+                                       extra={"closure_id": props.get("id"), "reason": props.get("reason")})["features"]
+    ]}
+    if closures:
+        reasons = sorted({c["properties"]["reason"] for c in closures})
+        warnings.append(f"통제 구간 {len(closures)}곳 반영(사유: {', '.join(reasons)})")
 
     # 위험영역 안에 있는 대피소는 후보에서 뺀다 — 물에 잠기는 곳으로 대피시킬 수 없다.
     excluded = len(shelter_candidates_lonlat) - len(ev["usable_shelters"])
     if excluded:
         warnings.append(f"위험영역 안에 든 대피소 {excluded}곳은 후보에서 제외")
-    removed_edges = ev["removed_edges"]
+    removed_edges = [e for e in ev["removed_edges"] if e not in closed_set]
     blocked_roads = blocked_road_features(removed_edges, ctx.graph)
     if removed_edges:
         warnings.append(f"위험지역과 겹치는 도로 {len(removed_edges)}개 구간 제거")
@@ -593,6 +634,7 @@ def check_isolation(
         # 위험영역과 겹쳐 그래프에서 제거된 도로 구간. 고립 판정의 부산물이지만
         # "어느 도로가 끊기는가"는 그 자체로 대피 의사결정 정보라 함께 내보낸다.
         "blocked_roads": blocked_roads,
+        "closed_roads": closed_roads,
         "rescue_limited_buildings": _point_fc(rescue_points, kind="rescue_limited"),
         "rescue_limited_count": len(rescue_points),
         "warnings": warnings,

@@ -369,9 +369,18 @@ def _flood_hazard(flood_display: dict):
     return feats[0]["geometry"] if feats else None
 
 
+# 재현하는 사건의 날짜. 통제 구간은 이날 유효한 것만 쓴다 — 지금 진행 중인 복구 공사는
+# 2025년 7월 사건 당시에는 없었다.
+EVENT_DATE = "2025-07-19"
+
+
 def build_isolation(verbose: bool = True, flood_hazard: dict | None = None) -> dict:
+    from datetime import date
+
+    from module_e_routing import closures as road_closures
     from module_e_routing import isolation as iso
 
+    event_closures = road_closures.active(road_closures.load(), date.fromisoformat(EVENT_DATE))
     regions = _read_demo_regions()
     out: dict = {}
     for region in ISOLATION_REGIONS:
@@ -390,7 +399,7 @@ def build_isolation(verbose: bool = True, flood_hazard: dict | None = None) -> d
         for scenario, hazard in scenarios:
             t0 = time.perf_counter()
             try:
-                result = iso.check_isolation(info["bbox"], info["shelters"], hazard)
+                result = iso.check_isolation(info["bbox"], info["shelters"], hazard, closures=event_closures)
             except Exception as exc:  # noqa: BLE001 - 한 조합이 실패해도 나머지는 굽는다
                 print(f"  [경고] 고립 {region}:{scenario} 실패 — {exc}")
                 continue
