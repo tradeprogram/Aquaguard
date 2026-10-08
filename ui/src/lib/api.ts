@@ -234,7 +234,15 @@ export interface AlertTimeline {
     alert_sent?: string | null;
     official_warning?: string | null;
     report_start?: string | null;
+    // 진입로가 끊기기 전에 대피를 끝내려면 가장 먼저 경보가 나가야 했던 시각(현장조사 반영 ①).
+    isolation_deadline?: string | null;
   };
+  // 마을(고립 군집)별 진입로 단절 예상 시각과 대피 시한 — 사후 재현 저장본에서만 계산한다.
+  isolation_timing?: IsolationTiming;
+  // 침수 모형이 계산한 범위와 그 밖. 빈 곳이 안전한 곳으로 읽히지 않게 회색으로 덮는다.
+  flood_coverage?: FloodCoverage | null;
+  // 시간별 수위가 없는 영역(예: 덕천강 상류)의 최대 범위 — 프레임과 무관하게 늘 그린다.
+  flood_static?: GeoJSON.FeatureCollection | null;
   // 침수 시간축. SFINCS는 "최대" 침수심 한 장만 내지만 같은 모의가 경호교 시간별
   // 수위도 남겼고, 깊이(t) ≥ b ⟺ 최대깊이 ≥ b + 수위강하(t) 이므로 등고선 한 벌로
   // 모든 시각을 그릴 수 있다. available이 false면 최대 범위 고정으로 떨어진다.
@@ -250,6 +258,8 @@ export interface AlertTimeline {
     // 프레임 hour -> 첨두 대비 수위강하(m). 값이 없는 시각은 수위 자료가 없는 것이다.
     stage_drop_by_hour?: Record<string, number>;
     gauge?: string;
+    // 승용차가 지나갈 수 없는 수심 — 시각별 침수를 고르는 기준(정책 module_e_v1).
+    impassable_depth_m?: number;
     한계?: string[];
   };
   // flood_series가 없을 때만 true — 그때는 "최대 범위"로만 표기하고 시간에 따라
@@ -260,6 +270,35 @@ export interface AlertTimeline {
   // "배포가 뒤처짐 / 서버가 죽음 / 요청 자체 문제"를 구분해 만든다(backendDiagnosis).
   // 상태코드만 띄우면 2026-09-06 때처럼 진단이 헛돈다.
   httpStatus?: number;
+}
+
+export interface IsolationTimingProps {
+  cluster_id: number;
+  building_count: number;
+  centroid: [number, number];
+  // 늘 끊긴 군집(저수위에도 끊겨 있던 곳)은 이번 홍수의 단절 시각이 없어 null이다.
+  cut_time: string | null;
+  evacuate_by: string | null;
+  persistent: boolean;
+  persistent_count: number;
+}
+
+export interface IsolationTiming {
+  available: boolean;
+  reason?: string;
+  reference_time?: string;
+  low_water_time?: string;
+  lead_hours?: number;
+  clusters?: GeoJSON.FeatureCollection<GeoJSON.Polygon | GeoJSON.Point, IsolationTimingProps>;
+  earliest_evacuate_by?: string | null;
+  한계?: string[];
+}
+
+export interface FloodCoverage {
+  covered: GeoJSON.Geometry;
+  uncovered: GeoJSON.Geometry;
+  covered_ratio: number;
+  domains: { id: string; name: string; available: boolean; status: string; note?: string; footprint: GeoJSON.Polygon | null }[];
 }
 
 // FastAPI가 등록한 라우트 문자열 그대로 — /health의 routes와 대조해야 해서 경로
@@ -284,6 +323,9 @@ export async function getAlertTimeline(alertId: string): Promise<AlertTimeline> 
       markers?: AlertTimeline["markers"];
       flood_series?: AlertTimeline["flood_series"];
       risk_display?: GeoJSON.FeatureCollection;
+      isolation_timing?: IsolationTiming;
+      flood_coverage?: FloodCoverage | null;
+      flood_static?: GeoJSON.FeatureCollection | null;
       meta?: Record<string, unknown>;
     }>("timeline.json");
     if (cached?.risk_display?.features?.length) {
@@ -297,6 +339,9 @@ export async function getAlertTimeline(alertId: string): Promise<AlertTimeline> 
         risk: cached.risk_display,
         flood_series: cached.flood_series,
         flood_is_max: !cached.flood_series?.available,
+        isolation_timing: cached.isolation_timing,
+        flood_coverage: cached.flood_coverage,
+        flood_static: cached.flood_static,
       };
     }
   }
@@ -338,6 +383,11 @@ export interface EvacuationRouteResult {
   // 실제 침수범위(Module B)와 겹치는 경로/대피소 — 겹치면 time_feasible이 false로 온다.
   route_flooded?: boolean;
   flooded_route_m?: number;
+  // 복구·통제 구간을 지나는 경로 — 네이버는 통제 구간을 모르니 겹침만 검사해 알린다.
+  route_closed?: boolean;
+  closed_route_m?: number;
+  // 대피소가 침수 계산 범위 안인가. false는 "안 잠김"이 아니라 "계산하지 않음", null은 모름.
+  in_flood_coverage?: boolean | null;
   modes: { car: { eta_min: number; source: string }; walk: { eta_min: number; source: string } };
 }
 
@@ -362,7 +412,24 @@ export interface IsolationCheckResult {
   // 위험영역과 겹쳐 도로망 그래프에서 제거된 구간 — 지도에 빨간색으로 그린다.
   // 고립 판정의 부산물이지만 "어느 길이 끊기는가"는 그 자체로 대피 정보다.
   blocked_roads: GeoJSON.FeatureCollection;
+  // 복구·통제 구간으로 끊긴 도로 — 침수로 끊긴 길(blocked_roads)과 따로 온다.
+  closed_roads?: GeoJSON.FeatureCollection;
+  // 주민은 대피소까지 갈 수 있지만 구조차량이 들어가기 어려운 건물(높이 제한·현장 보정 기록 기준).
+  rescue_limited_buildings?: GeoJSON.FeatureCollection;
+  rescue_limited_count?: number;
   warnings: string[];
+}
+
+// 그날 유효한 복구·통제 구간. 실패하면 빈 목록 — 통제 구간이 안 보이는 것이 지도 전체가
+// 멈추는 것보다 낫고, 범례가 "등록된 통제 구간 없음"과 "불러오지 못함"을 구분해 쓴다.
+export async function getRoadClosures(): Promise<GeoJSON.FeatureCollection | null> {
+  try {
+    const res = await fetch(`${API_BASE}/road-closures`, { cache: "no-store" });
+    if (!res.ok) return null;
+    return (await res.json()) as GeoJSON.FeatureCollection;
+  } catch {
+    return null;
+  }
 }
 
 export async function checkIsolation(

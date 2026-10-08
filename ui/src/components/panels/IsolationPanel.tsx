@@ -1,7 +1,14 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { checkIsolation, getSnapshotIsolation, type IsolationCheckResult } from "@/lib/api";
+import booleanPointInPolygon from "@turf/boolean-point-in-polygon";
+import {
+  checkIsolation,
+  getSnapshotIsolation,
+  type IsolationCheckResult,
+  type IsolationTiming,
+  type IsolationTimingProps,
+} from "@/lib/api";
 import { diagnoseFailure } from "@/lib/backendDiagnosis";
 import { DEMO_REGIONS, DEFAULT_REGION, type RegionKey } from "@/lib/demoShelters";
 
@@ -52,6 +59,30 @@ export function isolationCacheKey(region: RegionKey, scenario: IsolationScenario
   return `${region}:${name}`;
 }
 
+// "7/19 11:00" — 대피 시한은 날짜까지 보여야 한다. 시각만 쓰면 전날 일로도 읽힌다.
+function mdhm(iso: string | null | undefined): string {
+  const m = iso ? /^\d{4}-(\d{2})-(\d{2})T(\d{2}):(\d{2})/.exec(iso) : null;
+  return m ? `${Number(m[1])}/${Number(m[2])} ${m[3]}:${m[4]}` : "—";
+}
+
+// 고립 구역(정적 침수 판정)에 시각 판정 군집(기준 시각 침수 판정)을 짝짓는다. 두 판정의 위험
+// 범위가 달라 군집이 1:1로 같지 않다 — 고립 구역의 중심점을 품은 시각 판정 군집을 쓴다.
+function timingFor(
+  centroid: [number, number] | undefined,
+  timing: IsolationTiming | undefined
+): IsolationTimingProps | null {
+  if (!centroid) return null;
+  for (const f of timing?.clusters?.features ?? []) {
+    const g = f.geometry;
+    const hit =
+      g.type === "Polygon"
+        ? booleanPointInPolygon(centroid, g)
+        : Math.hypot(g.coordinates[0] - centroid[0], g.coordinates[1] - centroid[1]) < 0.0015;
+    if (hit) return f.properties;
+  }
+  return null;
+}
+
 // 실제 침수범위로 계산한 사전계산본이 있는 지역 — 그 범위가 산청 AOI(경호강 일대)뿐이라서다.
 const FLOOD_SCENARIO_REGIONS: RegionKey[] = ["sancheong_all"];
 
@@ -63,8 +94,16 @@ export default function IsolationPanel({
   onShownChange,
   onResult,
   onFocusCluster,
+  timing,
+  alertSent,
+  officialWarning,
 }: {
   region?: RegionKey;
+  // 마을별 진입로 단절 예상 시각·대피 시한(사후 재현 저장본) — 침수 반영 시나리오에서만 쓴다.
+  timing?: IsolationTiming;
+  // 우리 경보 발송 시각·공식 경보 시각 — "어느 마을에 경보가 늦었나"를 세는 기준.
+  alertSent?: string | null;
+  officialWarning?: string | null;
   // 계산 결과 보관소(page.tsx 소유) — 패널 언마운트를 견딘다.
   cache?: IsolationCache;
   onCache?: (key: IsolationCacheKey, result: IsolationCheckResult) => void;
@@ -141,6 +180,14 @@ export default function IsolationPanel({
   }, [activeKey, result, onResult]);
 
   const clusters = result?.isolated_areas.features ?? [];
+  // 경보보다 대피 시한이 이른 마을 — 진입로가 끊기기 전에 대피를 끝내려면 그보다 먼저
+  // 경보가 나갔어야 한다(현장조사 반영 ①). 늘 끊긴 군집은 시한이 없어 세지 않는다.
+  const timed = (timing?.clusters?.features ?? []).filter((f) => !f.properties.persistent && f.properties.evacuate_by);
+  const beforeAlert = alertSent ? timed.filter((f) => (f.properties.evacuate_by as string) < alertSent) : [];
+  const beforeOfficial = officialWarning
+    ? timed.filter((f) => (f.properties.evacuate_by as string) < officialWarning)
+    : [];
+  const showTiming = floodApplied && Boolean(timing?.available);
   const cached = (scenario: IsolationScenario) => Boolean(cache?.[isolationCacheKey(region, scenario)]);
 
   return (
@@ -221,6 +268,17 @@ export default function IsolationPanel({
                 ? "실제 침수(Module B, 수심 0.3m 이상)에 잠기는 도로를 끊었을 때 — 대피소 도달 가능 경로 0개인 건물"
                 : scenarioApplied ? "마을 진입로 두절 가정 — 대피소 도달 가능 경로 0개인 건물" : "위험지역 없음 — 그래도 도로 데이터 자체의 연결 공백으로 일부는 고립으로 잡힐 수 있음"}
             </p>
+            {(result.rescue_limited_count ?? 0) > 0 && (
+              <p className="mt-2 text-xs text-orange-200">
+                구조차량 진입 곤란 {result.rescue_limited_count}채 — 주민은 대피소까지 갈 수 있지만 높이
+                제한이나 현장에서 확인한 좁은 길 때문에 구조차량이 들어가기 어렵다
+              </p>
+            )}
+            {(result.closed_roads?.features.length ?? 0) > 0 && (
+              <p className="mt-2 text-xs text-orange-300">
+                통제 구간 {result.closed_roads?.features.length}개 구간 반영 — 지도의 주황 점선
+              </p>
+            )}
             {result.warnings.length > 0 && (
               <ul className="mt-2 space-y-0.5 text-[11px] text-amber-300/80">
                 {result.warnings.map((w, i) => (
@@ -230,6 +288,24 @@ export default function IsolationPanel({
             )}
           </div>
 
+          {showTiming && (
+            <div className="rounded-xl border border-fuchsia-500/30 bg-fuchsia-950/30 p-3">
+              <p className="text-sm font-semibold text-fuchsia-100">
+                우리 경보({mdhm(alertSent)})보다 먼저 대피해야 했던 마을 {beforeAlert.length}곳 · 약{" "}
+                {beforeAlert.reduce((n, f) => n + f.properties.building_count, 0)}채
+              </p>
+              <p className="mt-1 text-xs text-slate-300">
+                진입로가 끊기기 {timing?.lead_hours ?? 1}시간 전을 대피 시한으로 보면, 한 번에 내는 경보로는 이
+                마을들에 늦는다. 대피 시한이 있는 {timed.length}곳 가운데 {beforeOfficial.length}곳은 공식
+                경보({mdhm(officialWarning)}) 전에 시한이 지난다.
+              </p>
+              <p className="mt-1 text-[11px] text-slate-400">
+                사후 재현의 시각별 침수(준정적 근사)로 계산한 시각이다. 저수위에도 끊겨 있던 군집은
+                &lsquo;평상시 수위에도 끊김&rsquo;으로 따로 두고 시한을 매기지 않는다.
+              </p>
+            </div>
+          )}
+
           <div className="space-y-2">
             {clusters
               .slice()
@@ -237,6 +313,9 @@ export default function IsolationPanel({
               .slice(0, 8)
               .map((f, i) => {
                 const bbox = f.properties?.bbox as [number, number, number, number] | undefined;
+                const when = showTiming
+                  ? timingFor(f.properties?.centroid as [number, number] | undefined, timing)
+                  : null;
                 return (
                   <button
                     key={i}
@@ -251,6 +330,17 @@ export default function IsolationPanel({
                       </span>
                     </div>
                     <p className="mt-1 text-xs text-slate-300">약 {f.properties?.building_count}채 · 대피소 도달 가능 경로 0개</p>
+                    {when &&
+                      (when.persistent ? (
+                        <p className="mt-1 text-xs text-slate-400">
+                          평상시 수위에도 끊김 — 이번 홍수의 단절이 아니라 하천 본류가 늘 물로 남는 근사의 영향
+                        </p>
+                      ) : (
+                        <p className="mt-1 text-xs text-fuchsia-100">
+                          진입로 단절 예상 {mdhm(when.cut_time)} ·{" "}
+                          <span className="font-semibold">{mdhm(when.evacuate_by)}까지 대피</span>
+                        </p>
+                      ))}
                     <p className="mt-1 text-[11px] text-fuchsia-400/70">지도에서 위치 보기 →</p>
                   </button>
                 );

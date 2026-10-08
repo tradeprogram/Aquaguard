@@ -59,6 +59,9 @@ export default function EvacuationPanel({
   const [backendResults, setBackendResults] = useState<Record<string, EvacuationRouteResult> | null>(null);
   const [backendLoading, setBackendLoading] = useState(false);
   const [backendError, setBackendError] = useState<string | null>(null);
+  // 서버가 경로와 함께 보낸 경고(침수·통제 구간 통과 등). 예전에는 받아놓고 버려서,
+  // 경로가 왜 '도달 불가'인지 화면에서 알 수 없었다.
+  const [backendWarnings, setBackendWarnings] = useState<string[]>([]);
 
   useEffect(() => {
     if (!mapPickedOrigin) return;
@@ -87,6 +90,7 @@ export default function EvacuationPanel({
       // eslint-disable-next-line react-hooks/set-state-in-effect
       setBackendResults(null);
       setBackendError(null);
+      setBackendWarnings([]);
       return;
     }
     let cancelled = false;
@@ -97,11 +101,14 @@ export default function EvacuationPanel({
       SHELTERS.map((s) => ({ shelter_id: s.id, lon: s.lon, lat: s.lat, capacity: s.capacity })),
       TIME_BUDGET_MIN / 60
     )
-      .then(({ results }) => {
+      .then(({ results, warnings }) => {
         if (cancelled) return;
         const byId: Record<string, EvacuationRouteResult> = {};
         for (const r of results) byId[r.shelter_id] = r;
         setBackendResults(byId);
+        // 침수 계산 범위 밖은 대피소마다 배지로 따로 보여주므로 목록에서는 뺀다 — 가까운
+        // 대피소가 대부분 범위 밖인 지역에서는 같은 문장이 열 줄 넘게 반복된다.
+        setBackendWarnings((warnings ?? []).filter((w) => !w.includes("침수 계산 범위 밖")));
       })
       .catch(() => {
         if (cancelled) return;
@@ -157,6 +164,9 @@ export default function EvacuationPanel({
         real: !backend.fallback_used,
         routeLonlat: backend.route_lonlat,
         floodedM: backend.route_flooded ? (backend.flooded_route_m ?? 0) : null,
+        closedM: backend.route_closed ? (backend.closed_route_m ?? 0) : null,
+        // false는 "안 잠김"이 아니라 "침수 여부를 계산하지 않음", null은 범위를 모름.
+        inCoverage: backend.in_flood_coverage ?? null,
       };
     }
     const distanceKm = haversineKm(origin, [s.lon, s.lat]);
@@ -165,8 +175,9 @@ export default function EvacuationPanel({
     return { ...s, carMin, walkMin, feasible: carMin <= TIME_BUDGET_MIN, distanceKm, real: false as const };
   }).sort((a, b) => {
     // 침수 구간을 지나는 대피소는 아무리 가까워도 뒤로 — 통행 불가 길을 1순위로 안내하면 안 된다.
-    const fa = "floodedM" in a && a.floodedM !== null ? 1 : 0;
-    const fb = "floodedM" in b && b.floodedM !== null ? 1 : 0;
+    // 통제 구간을 지나는 길도 같은 이유로 뒤로 보낸다.
+    const fa = ("floodedM" in a && a.floodedM !== null) || ("closedM" in a && a.closedM !== null) ? 1 : 0;
+    const fb = ("floodedM" in b && b.floodedM !== null) || ("closedM" in b && b.closedM !== null) ? 1 : 0;
     return fa - fb || a.carMin - b.carMin;
   });
 
@@ -275,6 +286,22 @@ export default function EvacuationPanel({
                     근사
                   </span>
                 )}
+                {"closedM" in s && s.closedM !== null && (
+                  <span
+                    className="rounded-full bg-orange-900/60 px-2 py-0.5 text-[10px] font-medium text-orange-200"
+                    title="경로가 복구·통제 구간을 지난다 — 네이버 경로는 통제 구간을 모른다"
+                  >
+                    통제 구간 통과
+                  </span>
+                )}
+                {"inCoverage" in s && s.inCoverage === false && (
+                  <span
+                    className="rounded-full bg-slate-800 px-2 py-0.5 text-[10px] font-medium text-slate-300"
+                    title="침수 모형이 이 대피소 주변을 계산하지 않았다 — 안 잠긴다는 뜻이 아니다"
+                  >
+                    침수 판정 범위 밖
+                  </span>
+                )}
                 <span
                   className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${
                     s.feasible ? "bg-emerald-900/60 text-emerald-300" : "bg-red-900/60 text-red-300"
@@ -300,7 +327,14 @@ export default function EvacuationPanel({
                 🌊 통행 불가 — {s.floodedM > 0 ? `경로 중 약 ${s.floodedM}m가 침수 구간(수심 0.3m 이상)을 지납니다` : "이 대피소가 침수범위 안에 있습니다"}
               </p>
             )}
-            {!s.feasible && !("floodedM" in s && s.floodedM !== null) && (
+            {"closedM" in s && s.closedM !== null && (
+              <p className="mt-2 text-xs font-medium text-orange-200">
+                통행 불가 — 경로 중 약 {s.closedM}m가 복구·통제 구간입니다. 다른 대피소를 고르세요
+              </p>
+            )}
+            {!s.feasible &&
+              !("floodedM" in s && s.floodedM !== null) &&
+              !("closedM" in s && s.closedM !== null) && (
               <p className="mt-2 text-xs font-medium text-red-300">
                 ⚠ 제한시간 내 도달 불가 — 더 가까운 대피소나 안전지대로 즉시 이동하세요
               </p>
@@ -311,6 +345,14 @@ export default function EvacuationPanel({
           <p className="text-center text-[11px] text-slate-500">
             가까운 {MAX_VISIBLE_SHELTERS}곳만 표시 — 이 지역에 대피소 {ALL_SHELTERS.length}곳 있음
           </p>
+        )}
+        {origin && backendWarnings.length > 0 && (
+          <ul className="space-y-0.5 rounded-xl border border-white/10 bg-white/5 p-3 text-[11px] text-amber-300/80">
+            {backendWarnings.slice(0, 5).map((w, i) => (
+              <li key={i}>⚠ {w}</li>
+            ))}
+            {backendWarnings.length > 5 && <li className="text-slate-500">외 {backendWarnings.length - 5}건</li>}
+          </ul>
         )}
       </div>
     </div>

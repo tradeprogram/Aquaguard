@@ -22,6 +22,7 @@ import {
   getAlertGeojson,
   getAlertTimeline,
   getBoundaries,
+  getRoadClosures,
   getVWorldBuildings,
   getVWorldRivers,
   getVWorldRoads,
@@ -31,6 +32,7 @@ import {
   type AdminLevel,
   type AdminSearchResult,
   type AlertTimeline,
+  type IsolationTimingProps,
 } from "@/lib/api";
 import { diagnoseFailure } from "@/lib/backendDiagnosis";
 import { DEFAULT_REGION, DEMO_REGIONS, type RegionKey } from "@/lib/demoShelters";
@@ -366,6 +368,28 @@ const RISK_CRIT_NEW = "#f87171";
 const RISK_CRIT_RECENT = "#dc2626";
 const RISK_CRIT_OLD = "#7f1d1d";
 
+// 팝업 HTML에 도로명·통제 사유처럼 바깥에서 온 글자를 넣을 때 쓴다.
+function escapeHtml(v: unknown): string {
+  return String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
+}
+
+// 고립 군집 → 지도에 올릴 피처. 시각 비교를 필터 식에서 하려고 epoch ms를 속성에 단다.
+type TimingFeature = Feature<Polygon | GeoJSON.Point, IsolationTimingProps & { evacuate_by_ms: number; cut_ms: number }>;
+
+function timingFeatures(t: AlertTimeline | null): TimingFeature[] {
+  const feats = t?.isolation_timing?.clusters?.features ?? [];
+  return feats
+    .filter((f) => !f.properties.persistent && f.properties.evacuate_by && f.properties.cut_time)
+    .map((f) => ({
+      ...f,
+      properties: {
+        ...f.properties,
+        evacuate_by_ms: Date.parse(f.properties.evacuate_by as string),
+        cut_ms: Date.parse(f.properties.cut_time as string),
+      },
+    })) as TimingFeature[];
+}
+
 function hhmm(iso: string | null | undefined): string {
   if (!iso) return "—";
   const m = /T(\d{2}):(\d{2})/.exec(iso);
@@ -427,6 +451,9 @@ interface MapExplorerProps {
   onRegionSelect?: (region: RegionKey) => void;
   // 데모 트리거로 경보가 새로 생기면 올라가는 값 — 침수 폴리곤과 시간축을 다시 받는다.
   alertNonce?: number;
+  // 시간축을 받으면 부모에 알린다 — 고립마을 패널이 마을별 대피 시한을 같은 데이터로
+  // 보여주게 한다(따로 받으면 1.5MB를 두 번 받는다).
+  onTimeline?: (timeline: AlertTimeline | null) => void;
 }
 
 export default function MapExplorer({
@@ -438,6 +465,7 @@ export default function MapExplorer({
   focusBbox = null,
   onRegionSelect,
   alertNonce = 0,
+  onTimeline,
 }: MapExplorerProps = {}) {
   const mapContainer = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
@@ -455,6 +483,11 @@ export default function MapExplorer({
   // §7 — 시간 스크러버를 드래그하면 위험영역이 프레임마다 바뀌는데 매 프레임
   // /isolation-check를 부르면 과하므로 디바운스 타이머를 여기 들고 있는다.
   const isolationDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // 고립 구역 팝업이 "진입로 단절 예상 / 대피 시한"을 찾아 쓰는 군집 목록. 팝업 핸들러는
+  // 지도 초기화 때 한 번 등록되므로 state가 아니라 ref로 최신값을 넘긴다.
+  const isolationTimingRef = useRef<TimingFeature[]>([]);
+  // 복구·통제 구간(현장조사 반영 ③). undefined는 아직 받는 중, null은 서버가 답하지 않은 것.
+  const [closures, setClosures] = useState<FeatureCollection | null | undefined>(undefined);
 
   const [mapReady, setMapReady] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
@@ -1098,6 +1131,23 @@ export default function MapExplorer({
       // api_server의 /alerts/{id}/geojson이 4326으로 재투영). 높이는 그 구간의 실제
       // 침수심 90분위(depth_p90_m)이고, 색은 구간(band)으로 정한다 — what-if 볼륨과
       // 섞이면 안 되므로 소스·레이어를 따로 둔다.
+      // 침수 계산 범위 밖(현장조사 반영 ⑤) — 침수 래스터는 nodata=0이라 "안 잠김"과 "계산
+      // 안 함"이 같은 값이다. 아무 표시가 없으면 사람들은 그곳을 안전하다고 읽는다. 결과
+      // 레이어보다 아래에 옅게 깔아, 위에 올라오는 것들을 가리지 않게 한다.
+      map.addSource("flood-uncovered", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
+      map.addLayer({
+        id: "flood-uncovered-fill",
+        type: "fill",
+        source: "flood-uncovered",
+        paint: { "fill-color": "#0f172a", "fill-opacity": 0.38 },
+      });
+      map.addLayer({
+        id: "flood-uncovered-line",
+        type: "line",
+        source: "flood-uncovered",
+        paint: { "line-color": "#94a3b8", "line-width": 1.5, "line-opacity": 0.7, "line-dasharray": [3, 2] },
+      });
+
       map.addSource("flood-model", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
       map.addLayer({
         id: "flood-model-3d",
@@ -1269,6 +1319,23 @@ export default function MapExplorer({
         layout: { "line-cap": "round", "line-join": "round" },
         paint: { "line-color": "#ef4444", "line-width": 5, "line-opacity": 0.95 },
       });
+      // 복구·통제 구간(현장조사 반영 ③) — 침수로 끊긴 빨강과 원인이 달라 색과 선을 다르게
+      // 둔다. 주황 점선: "물 때문"이 아니라 "공사·통제 때문"에 막힌 길.
+      map.addSource("closed-roads", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
+      map.addLayer({
+        id: "closed-roads-casing",
+        type: "line",
+        source: "closed-roads",
+        layout: { "line-cap": "round", "line-join": "round" },
+        paint: { "line-color": "#431407", "line-width": 9, "line-opacity": 0.7 },
+      });
+      map.addLayer({
+        id: "closed-roads-line",
+        type: "line",
+        source: "closed-roads",
+        layout: { "line-join": "round" },
+        paint: { "line-color": "#fb923c", "line-width": 4.5, "line-dasharray": [1.6, 1.1] },
+      });
 
       // 대피소 — 경로를 고르기 전에도 "어디로 갈 수 있는지"가 먼저 보여야 해서
       // 현재 지역 대피소를 전부 상시 표시한다. 글리프(텍스트) 없이 원만 겹쳐
@@ -1356,6 +1423,38 @@ export default function MapExplorer({
         filter: ["==", ["geometry-type"], "Point"],
         paint: { "circle-radius": 6, "circle-color": "#d946ef", "circle-stroke-width": 1.5, "circle-stroke-color": "#0f172a" },
       });
+      // 대피 시한이 지났지만 아직 진입로가 끊기지 않은 마을(현장조사 반영 ①). 시간축이 그
+      // 구간(시한 ≤ 지금 < 단절)에 있을 때만 보이게 프레임마다 필터를 바꾼다. 고립 구역의
+      // 채운 마젠타와 겹치지 않게 테두리만 밝은 마젠타 점선으로 그린다.
+      map.addSource("isolation-deadline", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
+      map.addLayer({
+        id: "isolation-deadline-fill",
+        type: "fill",
+        source: "isolation-deadline",
+        filter: ["==", ["geometry-type"], "Polygon"],
+        paint: { "fill-color": "#f0abfc", "fill-opacity": 0.12 },
+      });
+      map.addLayer({
+        id: "isolation-deadline-line",
+        type: "line",
+        source: "isolation-deadline",
+        filter: ["==", ["geometry-type"], "Polygon"],
+        layout: { "line-join": "round" },
+        paint: { "line-color": "#f0abfc", "line-width": 3, "line-dasharray": [2, 1.2] },
+      });
+      map.addLayer({
+        id: "isolation-deadline-points",
+        type: "circle",
+        source: "isolation-deadline",
+        filter: ["==", ["geometry-type"], "Point"],
+        paint: {
+          "circle-radius": 9,
+          "circle-color": "rgba(0,0,0,0)",
+          "circle-stroke-width": 2.5,
+          "circle-stroke-color": "#f0abfc",
+        },
+      });
+
       // 고립 구역을 클릭하면 몇 채인지 팝업으로 바로 보여준다 — 지도 위 도형만 봐서는
       // "이게 뭔지" 알 길이 없다는 문제(2026-09-03 피드백)를 직접 해결하는 부분.
       const isolationPopup = new Popup({ closeButton: false, closeOnClick: false, offset: 10 });
@@ -1364,9 +1463,20 @@ export default function MapExplorer({
         const count = feature?.properties?.building_count;
         if (count == null) return;
         map.getCanvas().style.cursor = "pointer";
+        // 이 구역이 사후 재현에서 언제 끊기는 곳인지 — 커서 위치를 품은 시각 판정 군집을 찾는다.
+        const at: [number, number] = [e.lngLat.lng, e.lngLat.lat];
+        const timing = isolationTimingRef.current.find((t) =>
+          t.geometry.type === "Polygon"
+            ? booleanPointInPolygon(at, t.geometry)
+            : Math.hypot(t.geometry.coordinates[0] - at[0], t.geometry.coordinates[1] - at[1]) < 0.0015
+        );
+        const when = timing
+          ? `<br/><span style="color:#a21caf;">진입로 단절 예상 ${hhmm(timing.properties.cut_time)}` +
+            ` · ${hhmm(timing.properties.evacuate_by)}까지 대피</span>`
+          : "";
         isolationPopup
           .setLngLat(e.lngLat)
-          .setHTML(`<div style="font:12px sans-serif;color:#1e1b2e;">고립 구역 · 약 ${count}채<br/>대피소 도달 가능 경로 0개</div>`)
+          .setHTML(`<div style="font:12px sans-serif;color:#1e1b2e;">고립 구역 · 약 ${count}채<br/>대피소 도달 가능 경로 0개${when}</div>`)
           .addTo(map);
       };
       const hideIsolationPopup = () => {
@@ -1377,6 +1487,23 @@ export default function MapExplorer({
       map.on("mouseleave", "isolated-areas-fill", hideIsolationPopup);
       map.on("mouseenter", "isolated-areas-points", showIsolationPopup);
       map.on("mouseleave", "isolated-areas-points", hideIsolationPopup);
+      const deadlinePopup = (e: { lngLat: { lng: number; lat: number }; features?: MapGeoJSONFeature[] }) => {
+        const p = e.features?.[0]?.properties;
+        if (!p) return;
+        map.getCanvas().style.cursor = "pointer";
+        isolationPopup
+          .setLngLat(e.lngLat)
+          .setHTML(
+            `<div style="font:12px sans-serif;color:#1e1b2e;"><b style="color:#a21caf;">지금 대피해야 할 마을</b>` +
+            `<br/>약 ${escapeHtml(p.building_count)}채 · 진입로 단절 예상 ${hhmm(p.cut_time)}` +
+            `<br/>대피 시한 ${hhmm(p.evacuate_by)} — 길이 끊기기 전에 움직여야 한다</div>`
+          )
+          .addTo(map);
+      };
+      map.on("mouseenter", "isolation-deadline-fill", deadlinePopup);
+      map.on("mouseleave", "isolation-deadline-fill", hideIsolationPopup);
+      map.on("mouseenter", "isolation-deadline-points", deadlinePopup);
+      map.on("mouseleave", "isolation-deadline-points", hideIsolationPopup);
 
       // 대피소·통행 불가 도로 — 점만 찍어두면 뭔지 모르므로 올리면 이름·수용인원을
       // 띄운다. 라벨을 심볼 레이어로 상시 노출하지 않는 이유는 스타일의 폰트
@@ -1398,11 +1525,40 @@ export default function MapExplorer({
         '<b>{name}</b><br/>대피소 · 수용 {capacity}명</div>'
       ));
       map.on("mouseleave", "shelters-dot", hideInfo);
-      map.on("mouseenter", "blocked-roads-line", showInfo(
-        '<div style="font:12px sans-serif;color:#0f172a;">' +
-        '<b style="color:#b91c1c;">통행 불가</b><br/>위험영역과 겹치는 구간</div>'
-      ));
+      // 끊긴 도로가 어느 길인지, 다리인지 — "통행 불가"만 적힌 빨간 선으로는 담당자가
+      // 판단할 수 없다(현장조사 반영 ②). 교량은 상판 높이 자료가 없다는 것까지 적는다.
+      map.on("mouseenter", "blocked-roads-line", (e) => {
+        const p = e.features?.[0]?.properties;
+        if (!p) return;
+        map.getCanvas().style.cursor = "pointer";
+        const kind = [p.rd_type_h, p.rd_rank_h].filter(Boolean).map(escapeHtml).join(" · ");
+        const bridge = p.rd_type_h === "교량"
+          ? '<br/><span style="color:#64748b;">상판 높이 자료가 없어 침수 범위와 겹치면 통행 불가로 처리</span>'
+          : "";
+        infoPopup
+          .setLngLat(e.lngLat)
+          .setHTML(
+            `<div style="font:12px sans-serif;color:#0f172a;"><b style="color:#b91c1c;">통행 불가</b>` +
+            ` · ${escapeHtml(p.road_name || "이름 없는 도로")}` +
+            `${kind ? `<br/>${kind}` : ""}<br/>위험영역과 겹치는 구간${bridge}</div>`
+          )
+          .addTo(map);
+      });
       map.on("mouseleave", "blocked-roads-line", hideInfo);
+      map.on("mouseenter", "closed-roads-line", (e) => {
+        const p = e.features?.[0]?.properties;
+        if (!p) return;
+        map.getCanvas().style.cursor = "pointer";
+        const period = p.end ? `${escapeHtml(p.start)} ~ ${escapeHtml(p.end)}` : `${escapeHtml(p.start)}부터`;
+        infoPopup
+          .setLngLat(e.lngLat)
+          .setHTML(
+            `<div style="font:12px sans-serif;color:#0f172a;"><b style="color:#c2410c;">통제 구간</b>` +
+            ` · ${escapeHtml(p.reason)}<br/>${period} · 출처 ${escapeHtml(p.source)}</div>`
+          )
+          .addTo(map);
+      });
+      map.on("mouseleave", "closed-roads-line", hideInfo);
 
       setMapReady(true);
     });
@@ -1523,6 +1679,7 @@ export default function MapExplorer({
       .then((t) => {
         if (cancelled) return;
         setTimeline(t);
+        onTimeline?.(t);
         if (t.httpStatus !== undefined) {
           // 서버가 200을 안 줬다 — 왜인지는 /health가 알고 있다.
           diagnoseFailure("시간축 조회", TIMELINE_ROUTE).then((msg) => {
@@ -1540,6 +1697,7 @@ export default function MapExplorer({
       .catch(() => {
         if (cancelled) return;
         setTimeline(null);
+        onTimeline?.(null);
         diagnoseFailure("시간축 조회", TIMELINE_ROUTE).then((msg) => {
           if (!cancelled) setTimelineError(msg);
         });
@@ -1547,6 +1705,7 @@ export default function MapExplorer({
     return () => {
       cancelled = true;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- onTimeline은 부모가 매 렌더 새로 만드는 콜백이라 넣으면 시간축을 계속 다시 받는다
   }, [alertNonce]);
 
   const frames = timeline?.frames ?? [];
@@ -1590,11 +1749,15 @@ export default function MapExplorer({
     currentFrame && floodSeries?.available
       ? floodSeries.stage_drop_by_hour?.[String(currentFrame.hour)]
       : undefined;
-  const floodAtFrame: Feature<Polygon | MultiPolygon>[] =
+  // 승용차가 지나갈 수 없는 수심 — 정책 한 곳(module_e_v1)에서 저장본으로 온다.
+  const impassableDepth = floodSeries?.impassable_depth_m ?? 0.3;
+  // 시간별 수위가 없는 영역(예: 덕천강 상류)은 최대 범위를 프레임과 무관하게 덧붙인다.
+  const floodStatic = (timeline?.flood_static?.features ?? []) as Feature<Polygon | MultiPolygon>[];
+  const floodAtFrameSeries: Feature<Polygon | MultiPolygon>[] =
     floodDrop === undefined
       ? []
       : ((floodSeries?.contours?.features ?? []) as Feature<Polygon | MultiPolygon>[])
-          .filter((f) => Number(f.properties?.level_m) >= floodDrop + 0.3)
+          .filter((f) => Number(f.properties?.level_m) >= floodDrop + impassableDepth)
           .map((f) => ({
             ...f,
             properties: {
@@ -1602,6 +1765,8 @@ export default function MapExplorer({
               depth_min_m: Number((Number(f.properties?.level_m) - floodDrop).toFixed(2)),
             },
           }));
+  const floodAtFrame: Feature<Polygon | MultiPolygon>[] =
+    floodDrop === undefined ? floodAtFrameSeries : [...floodAtFrameSeries, ...floodStatic];
   // 이 시각의 최심 — 화면에 쓰는 숫자도 프레임을 따라 움직여야 한다.
   const frameMaxDepth = floodAtFrame.length
     ? Math.max(...floodAtFrame.map((f) => Number(f.properties?.depth_min_m) || 0))
@@ -1693,6 +1858,64 @@ export default function MapExplorer({
     }, 900);
     return () => clearInterval(id);
   }, [playing, frames.length]);
+
+  // 대피 시한이 지났지만 아직 끊기지 않은 마을 — 지금 프레임 시각 기준.
+  const frameMs = currentFrame ? Date.parse(currentFrame.time) : null;
+  const deadlineVillages =
+    frameMs === null
+      ? []
+      : timingFeatures(timeline).filter(
+          (f) => f.properties.evacuate_by_ms <= frameMs && frameMs < f.properties.cut_ms
+        );
+
+  // 시각 판정 군집·침수 계산 범위는 시간축을 받을 때 한 번만 올린다.
+  useEffect(() => {
+    if (!mapReady) return;
+    const map = mapRef.current;
+    const timing = timingFeatures(timeline);
+    isolationTimingRef.current = timing;
+    (map?.getSource("isolation-deadline") as GeoJSONSource | undefined)?.setData({
+      type: "FeatureCollection",
+      features: timing,
+    } as FeatureCollection);
+    const uncovered = timeline?.flood_coverage?.uncovered;
+    (map?.getSource("flood-uncovered") as GeoJSONSource | undefined)?.setData({
+      type: "FeatureCollection",
+      features: uncovered && hasHazardAoi ? [{ type: "Feature", geometry: uncovered, properties: {} }] : [],
+    } as FeatureCollection);
+  }, [mapReady, timeline, hasHazardAoi]);
+
+  // 대피 시한 강조는 프레임마다 필터만 바꾼다(데이터는 그대로).
+  useEffect(() => {
+    if (!mapReady) return;
+    const map = mapRef.current;
+    if (!map) return;
+    const inWindow: ExpressionSpecification =
+      frameMs === null
+        ? ["==", 1, 0]
+        : ["all", ["<=", ["get", "evacuate_by_ms"], frameMs], ["<", frameMs, ["get", "cut_ms"]]];
+    map.setFilter("isolation-deadline-fill", ["all", ["==", ["geometry-type"], "Polygon"], inWindow]);
+    map.setFilter("isolation-deadline-line", ["all", ["==", ["geometry-type"], "Polygon"], inWindow]);
+    map.setFilter("isolation-deadline-points", ["all", ["==", ["geometry-type"], "Point"], inWindow]);
+  }, [mapReady, frameMs]);
+
+  // 복구·통제 구간은 날짜에 따라 바뀌는 운영 정보라 화면을 열 때 한 번 받는다. 지도 준비와
+  // 묶지 않는다 — WebGL이 없어 지도가 안 떠도 범례는 통제 구간 유무를 말해야 한다.
+  useEffect(() => {
+    let cancelled = false;
+    getRoadClosures().then((fc) => {
+      if (!cancelled) setClosures(fc);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  useEffect(() => {
+    if (!mapReady) return;
+    (mapRef.current?.getSource("closed-roads") as GeoJSONSource | undefined)?.setData(
+      closures ?? { type: "FeatureCollection", features: [] }
+    );
+  }, [mapReady, closures]);
 
   // 위에서 고른 위험영역을 지도에 올린다. 계산은 이미 끝났고 여기서는 밀어넣기만 한다.
   useEffect(() => {
@@ -2086,9 +2309,67 @@ export default function MapExplorer({
                 </p>
               </div>
               <div className="flex items-start gap-2">
+                <span
+                  className="mt-1.5 h-0 w-3 shrink-0 border-t-[3px] border-dashed"
+                  style={{ borderColor: "#fb923c" }}
+                />
+                <p className="text-slate-200">
+                  통제 구간{" "}
+                  <span className="text-slate-500">
+                    {closures === undefined
+                      ? "· 불러오는 중"
+                      : closures === null
+                      ? "· 통제 구간 목록을 불러오지 못했습니다"
+                      : closures.features.length === 0
+                        ? "· 현재 등록된 통제 구간 없음"
+                        : `· 복구 공사 등으로 막힌 길 ${closures.features.length}곳`}
+                  </span>
+                </p>
+              </div>
+              {timeline?.isolation_timing?.available && (
+                <div className="flex items-start gap-2">
+                  <span
+                    className="mt-0.5 h-3 w-3 shrink-0 rounded-sm border-2 border-dashed"
+                    style={{ borderColor: "#f0abfc" }}
+                  />
+                  <div>
+                    <p className="text-slate-200">대피 시한이 지난 마을</p>
+                    <p className="text-slate-500">
+                      진입로가 끊기기 {timeline.isolation_timing.lead_hours ?? 1}시간 전부터, 끊길 때까지
+                      표시합니다. 길이 닫히기 전에 움직여야 하는 곳입니다.
+                    </p>
+                  </div>
+                </div>
+              )}
+              <div className="flex items-start gap-2">
                 <span className="mt-0.5 h-3 w-3 shrink-0 rounded-full bg-emerald-400" />
                 <p className="text-slate-200">대피소 {DEMO_REGIONS[shelterRegion].shelters.length}곳</p>
               </div>
+              {timeline?.flood_coverage && (
+                <div className="flex items-start gap-2">
+                  <span
+                    className="mt-0.5 h-3 w-3 shrink-0 rounded-sm border border-dashed border-slate-400"
+                    style={{ background: "rgba(15,23,42,0.6)" }}
+                  />
+                  <div>
+                    <p className="text-slate-200">침수 계산 범위 밖</p>
+                    <p className="text-slate-500">
+                      침수가 없다는 뜻이 아니라 <span className="text-slate-300">계산하지 않은 곳</span>
+                      입니다. 침수 모형은 산청군의{" "}
+                      {Math.round(timeline.flood_coverage.covered_ratio * 100)}%만 덮습니다.
+                    </p>
+                    {timeline.flood_coverage.domains.some((d) => !d.available) && (
+                      <p className="mt-0.5 text-slate-500">
+                        계산 예정:{" "}
+                        {timeline.flood_coverage.domains
+                          .filter((d) => !d.available)
+                          .map((d) => d.name)
+                          .join(", ")}
+                      </p>
+                    )}
+                  </div>
+                </div>
+              )}
             </div>
           ) : (
             // 서울 강남은 건물·도로·대피소는 다 있는데 재해 모형이 없다. 빈 지도만
@@ -2119,6 +2400,12 @@ export default function MapExplorer({
           {hazardIsolatedCount !== null && (
             <p className="mt-2 rounded-md bg-fuchsia-950/50 px-2 py-1.5 text-fuchsia-300">
               §7 고립 위험 건물 약 <span className="font-bold">{hazardIsolatedCount}</span>개 (대피소 도달 불가)
+            </p>
+          )}
+          {deadlineVillages.length > 0 && (
+            <p className="mt-2 rounded-md bg-fuchsia-950/40 px-2 py-1.5 text-fuchsia-200">
+              지금 대피해야 할 마을 <span className="font-bold">{deadlineVillages.length}</span>곳 · 약{" "}
+              {deadlineVillages.reduce((n, f) => n + f.properties.building_count, 0)}채 (진입로 단절 전)
             </p>
           )}
         </div>
@@ -2297,6 +2584,16 @@ export default function MapExplorer({
                   🏛 공식 경보{" "}
                   <span className="font-mono text-slate-300">{hhmm(timeline.markers.official_warning)}</span>
                 </span>
+                {timeline.markers.isolation_deadline && (
+                  <span
+                    className="flex items-center gap-1"
+                    title="진입로가 끊기기 전에 대피를 끝내려면 가장 먼저 경보가 나가야 했던 마을의 대피 시한"
+                  >
+                    <span className="inline-block h-2 w-2 rounded-full bg-fuchsia-300" />
+                    고립 대비 시한{" "}
+                    <span className="font-mono text-fuchsia-200">{hhmm(timeline.markers.isolation_deadline)}</span>
+                  </span>
+                )}
               </div>
             </div>
 

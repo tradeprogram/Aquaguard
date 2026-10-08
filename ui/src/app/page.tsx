@@ -15,6 +15,7 @@ import ModelPerformancePanel from "@/components/panels/ModelPerformancePanel";
 import ApprovePanel from "@/components/panels/ApprovePanel";
 import ValidationPanel from "@/components/panels/ValidationPanel";
 import { DEFAULT_REGION, type RegionKey } from "@/lib/demoShelters";
+import type { AlertTimeline } from "@/lib/api";
 
 type PanelKey = "dashboard" | "evacuation" | "isolation" | "whatif" | "performance" | "validation" | "approve";
 type Mode = "citizen" | "gov";
@@ -78,11 +79,14 @@ export default function HomePage() {
   const [region, setRegion] = useState<RegionKey>(DEFAULT_REGION);
   // 데모를 돌리면 경보가 새로 생기므로 지도의 침수 폴리곤·시간축을 다시 받게 한다.
   const [alertNonce, setAlertNonce] = useState(0);
+  // 지도가 받은 시간축 — 고립마을 패널이 마을별 대피 시한을 같은 데이터로 보여준다.
+  const [timeline, setTimeline] = useState<AlertTimeline | null>(null);
 
   return (
     <div className="relative h-full w-full">
       <MapExplorer
         alertNonce={alertNonce}
+        onTimeline={setTimeline}
         route={evacuationRoute}
         pickOrigin={pickingOrigin}
         onOriginPicked={(coord) => {
@@ -176,6 +180,9 @@ export default function HomePage() {
               {active === "isolation" && (
                 <IsolationPanel
                   region={region}
+                  timing={timeline?.isolation_timing}
+                  alertSent={timeline?.markers?.alert_sent}
+                  officialWarning={timeline?.markers?.official_warning}
                   cache={isolationCache}
                   onCache={(key, r) => setIsolationCache((prev) => ({ ...prev, [key]: r }))}
                   shown={isolationShown}
