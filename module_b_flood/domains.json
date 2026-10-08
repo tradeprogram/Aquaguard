@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "description": "침수 모형 영역 목록. 래스터 파일이 있는 영역만 '계산됨'으로 본다. 앞에 적힌 영역이 우선한다 — 두 영역이 겹치면 겹친 곳은 앞 영역의 결과만 쓴다.",
+  "domains": [
+    {
+      "id": "gyeongho_reach",
+      "name": "경호강 구간 (고읍교~수산교)",
+      "status": "computed",
+      "raster": "module_b_flood/data/sfincs_maxdepth_50m.tif",
+      "stage_series": {"gauge": "경호교", "csv": "module_b_flood/data/sfincs_reach_wse.csv"},
+      "footprint_5179": null,
+      "built_by": "module_b_flood/scripts/33_sfincs_build_reach.py",
+      "note": "유입 고읍교 유량 · 하류 수산교 수위 경계. 경호교 수위계로 검증(RMSE 1.42m)."
+    },
+    {
+      "id": "deokcheon_upper",
+      "name": "덕천강 상류 (시천·삼장)",
+      "status": "planned",
+      "raster": "module_b_flood/data/sfincs_deokcheon_maxdepth_50m.tif",
+      "stage_series": null,
+      "footprint_5179": [1016100, 1690550, 1035250, 1711800],
+      "built_by": "module_b_flood/scripts/33d_sfincs_build_deokcheon.py",
+      "note": "G: 드라이브 입력으로 실행한 뒤 래스터가 생기면 자동 반영된다. 수위 관측소가 없어 시간 변화 없이 최대 범위만 표시하고, 검증할 참값도 없다."
+    }
+  ]
+}

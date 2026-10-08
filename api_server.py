@@ -343,6 +343,10 @@ def get_alert_timeline(alert_id: str) -> dict:
             "isolation_deadline": (isolation_timing or {}).get("earliest_evacuate_by"),
         },
         "isolation_timing": isolation_timing or {"available": False},
+        # 침수 모형이 계산한 범위와 그 밖. 빈 곳이 안전한 곳으로 읽히지 않게 화면이 회색으로 덮는다.
+        "flood_coverage": (snapshot or {}).get("flood_coverage") if same_alert else None,
+        # 시간별 수위가 없는 영역의 최대 범위 — 프레임과 무관하게 늘 그린다.
+        "flood_static": (snapshot or {}).get("flood_static") if same_alert else None,
         # 침수 시간축. 있으면 UI가 프레임마다 등고선을 골라 그린다(없으면 최대 범위 고정).
         "flood_series": (snapshot or {}).get("flood_series") or {"available": False},
         "flood_is_max": not ((snapshot or {}).get("flood_series") or {}).get("available"),
@@ -1136,6 +1140,7 @@ def evacuation_route(req: EvacuationRouteRequest) -> dict:
         }
     )
     flood = _sancheong_flood_shape()
+    covered = _flood_covered_shape()
     active_closures = road_closures.active(road_closures.load(), road_closures.today_kst())
     shelter_lonlat = {s.shelter_id: (s.lon, s.lat) for s in req.shelter_candidates}
     for r in results:
@@ -1144,6 +1149,7 @@ def evacuation_route(req: EvacuationRouteRequest) -> dict:
         ]
         _apply_flood_to_route(r, flood, shelter_lonlat.get(r["shelter_id"]), warnings)
         _apply_closures_to_route(r, active_closures, warnings)
+        _apply_coverage_to_route(r, covered, shelter_lonlat.get(r["shelter_id"]), warnings)
 
     return {"results": results, "warnings": warnings}
 
@@ -1167,11 +1173,48 @@ def _sancheong_flood_shape():
             feats = _json.load(f).get("flood_display", {}).get("features", [])
         band0 = [ft for ft in feats if (ft.get("properties") or {}).get("band") == 0]
         if band0:
-            shape = _sg.shape(band0[0]["geometry"]).buffer(0)
+            # 침수 모형 영역이 여럿이면 영역마다 band 0이 하나씩 있다 — 전부 합친다.
+            from shapely.ops import unary_union as _union
+
+            shape = _union([_sg.shape(ft["geometry"]).buffer(0) for ft in band0])
     except Exception:  # noqa: BLE001 - 침수 반영은 부가 정보라 실패해도 경로 응답은 막지 않는다
         shape = None
     _FLOOD_SHAPE_CACHE["shape"] = shape
     return shape
+
+
+def _flood_covered_shape():
+    """침수 모형이 계산한 범위(lon/lat). 저장본 flood_coverage.covered를 처음 한 번만 읽는다.
+    저장본이 없거나 범위가 없으면 None — 그러면 계산 범위 표시는 '모름'(null)으로 남는다."""
+    if "covered" in _FLOOD_SHAPE_CACHE:
+        return _FLOOD_SHAPE_CACHE["covered"]
+    shape = None
+    try:
+        import shapely.geometry as _sg
+
+        geom = (_demo_snapshot() or {}).get("flood_coverage", {}).get("covered")
+        if geom:
+            shape = _sg.shape(geom)
+    except Exception:  # noqa: BLE001 - 계산 범위 표시는 부가 정보라 실패해도 경로 응답은 막지 않는다
+        shape = None
+    _FLOOD_SHAPE_CACHE["covered"] = shape
+    return shape
+
+
+def _apply_coverage_to_route(result: dict, covered, shelter_lonlat, warnings: list) -> None:
+    """대피소가 침수 계산 범위 안인지 적는다(현장조사 반영 ⑤).
+
+    범위 밖 대피소는 "안 잠김"이 아니라 "침수 여부를 계산하지 않음"이다. 갈 수 없다는 뜻은
+    아니므로 time_feasible은 건드리지 않는다. 범위를 모르면 None(화면이 아무 표시도 안 한다)."""
+    if covered is None or not shelter_lonlat:
+        result["in_flood_coverage"] = None
+        return
+    import shapely.geometry as sg
+
+    inside = bool(covered.contains(sg.Point(*shelter_lonlat)))
+    result["in_flood_coverage"] = inside
+    if not inside:
+        warnings.append(f"{result['shelter_id']}: 침수 계산 범위 밖 — 이 대피소의 침수 여부는 계산하지 않았다")
 
 
 def _apply_flood_to_route(result: dict, flood, shelter_lonlat, warnings: list) -> None:

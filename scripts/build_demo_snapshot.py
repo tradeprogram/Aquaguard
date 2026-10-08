@@ -66,7 +66,6 @@ def build(verbose: bool = True) -> dict:
     os.environ["AQUAGUARD_MOCK_MODE"] = "0"
 
     from module_o_orchestrator import display_geometry, geo
-    from module_o_orchestrator.exposure_layers import flood_depth_raster, resolve_aoi
     from module_o_orchestrator.orchestrator import run as run_orchestrator
 
     payload = demo_input()
@@ -94,25 +93,61 @@ def build(verbose: bool = True) -> dict:
         print(f"  파이프라인 {pipeline_s:.1f}s  status={envelope.get('status')}")
 
     # 표시용 침수 — 계산에 쓰인 것과 별개다(display_geometry 참고).
-    location = payload.get("trigger_location") or {}
-    aoi = resolve_aoi(location.get("x_5179"), location.get("y_5179"))
-    raster_path, raster_warning = flood_depth_raster(aoi)
+    #
+    # 침수 모형 영역이 여럿일 수 있다(module_b_flood/domains.json — 경호강 구간, 덕천강 상류).
+    # 래스터가 있는 영역만 쓰고, 두 영역이 겹치면 겹친 곳은 앞에 적힌 영역의 결과만 쓴다 —
+    # 경호강 구간은 수위계로 검증됐고, 덕천강 상류 모형은 검증할 참값이 없다.
+    from shapely.geometry import box as _box, mapping as _mapping, shape as _shape
+    from shapely.ops import unary_union as _union
+
+    from module_b_flood import domains as flood_domains
+    from module_e_routing import policy as e_policy
+
+    available = [d for d in flood_domains.load_domains() if d.available]
+    series_domains = [d for d in available if d.stage_series]
+    if len(series_domains) > 1:
+        raise RuntimeError("시간축 침수는 영역 1개만 지원한다 — module_b_flood/domains.json의 stage_series 확인")
+
+    def _lonlat_box(d):
+        poly = geo.geometry_5179_to_lonlat(_mapping(_box(*flood_domains.footprint_5179(d))))
+        return _shape(poly)
+
+    def _clip(features, taken):
+        """앞 영역이 이미 덮은 곳(taken)을 뺀다. 다 빠진 피처는 버린다."""
+        if taken is None:
+            return features
+        out = []
+        for f in features:
+            g = _shape(f["geometry"]).difference(taken)
+            if not g.is_empty:
+                out.append({**f, "geometry": _mapping(g)})
+        return out
 
     flood_display = {"type": "FeatureCollection", "features": []}
-    flood_stats: dict = {"available": False, "reason": raster_warning}
-    if raster_path:
-        t0 = time.perf_counter()
-        fc_5179 = display_geometry.flood_display_featurecollection(raster_path)
-        flood_display = {
-            "type": "FeatureCollection",
-            "features": [
-                {**f, "properties": {**f["properties"], "kind": "inundation"}}
-                for f in geo.featurecollection_5179_to_lonlat(fc_5179)
-            ],
-        }
+    flood_static = {"type": "FeatureCollection", "features": []}
+    flood_stats: dict = {"available": False, "reason": "침수 모형 래스터가 있는 영역이 없다"}
+    taken = None
+    taken_by: dict[str, object] = {}
+    t0 = time.perf_counter()
+    for d in available:
+        fc_5179 = display_geometry.flood_display_featurecollection(str(d.raster))
+        feats = [
+            {**f, "properties": {**f["properties"], "kind": "inundation", "domain": d.id,
+                                 "time_varying": bool(d.stage_series)}}
+            for f in geo.featurecollection_5179_to_lonlat(fc_5179)
+        ]
+        feats = _clip(feats, taken)
+        flood_display["features"].extend(feats)
+        if not d.stage_series:
+            flood_static["features"].extend(feats)
+        taken_by[d.id] = taken
+        box_d = _lonlat_box(d)
+        taken = box_d if taken is None else _union([taken, box_d])
+    if available:
         flood_stats = {
             "available": True,
-            "source_raster": Path(raster_path).name,
+            "domains": [d.id for d in available],
+            "source_raster": [d.raster.name for d in available],
             "source_resolution_m": 50,
             "display_resolution_m": 50 / display_geometry.UPSAMPLE,
             "bands": list(display_geometry.DISPLAY_DEPTH_BANDS_M),
@@ -121,7 +156,7 @@ def build(verbose: bool = True) -> dict:
             "build_seconds": round(time.perf_counter() - t0, 2),
         }
         if verbose:
-            print(f"  표시용 침수 {flood_stats['polygons']}개 폴리곤 "
+            print(f"  표시용 침수 {flood_stats['polygons']}개 폴리곤 · 영역 {len(available)} "
                   f"{flood_stats['build_seconds']}s")
 
     # 시간축 침수 — 등고선 한 벌 + 시각별 수위강하.
@@ -129,15 +164,18 @@ def build(verbose: bool = True) -> dict:
     # SFINCS는 "최대" 침수심 한 장만 내지만 같은 모의가 경호교 시간별 수위도 남겼다.
     # 깊이(t) ≥ b ⟺ 최대깊이 ≥ b + 수위강하(t) 이므로, 등고선을 한 벌만 보내 두면
     # 화면이 시각마다 골라 쓰고 색만 다시 매길 수 있다(display_geometry 참고).
+    # 수위 곡선이 있는 영역만 이렇게 하고, 나머지 영역은 flood_static(최대 범위 고정)으로 간다.
     flood_series: dict = {"available": False}
-    if raster_path:
+    impassable_m = float(e_policy.load().value("flood_impassable_depth_m"))
+    if series_domains:
+        d = series_domains[0]
         t0 = time.perf_counter()
-        contours_5179 = display_geometry.flood_contours(raster_path)
+        contours_5179 = display_geometry.flood_contours(str(d.raster))
         contours = {
             "type": "FeatureCollection",
-            "features": geo.featurecollection_5179_to_lonlat(contours_5179),
+            "features": _clip(geo.featurecollection_5179_to_lonlat(contours_5179), taken_by.get(d.id)),
         }
-        wse_csv = REPO_ROOT / "module_b_flood" / "data" / "sfincs_reach_wse.csv"
+        wse_csv = REPO_ROOT / d.stage_series["csv"]
         stage_by_time = (
             display_geometry.reach_stage_series(str(wse_csv)) if wse_csv.exists() else {}
         )
@@ -157,6 +195,7 @@ def build(verbose: bool = True) -> dict:
                     drop_by_hour[str(frame["hour"])] = round(peak - stage, 3)
             flood_series = {
                 "available": True,
+                "domain": d.id,
                 "contours": contours,
                 "levels": contours_5179["levels"],
                 "observed_max_m": contours_5179["observed_max_m"],
@@ -164,7 +203,9 @@ def build(verbose: bool = True) -> dict:
                 # ISO+09:00 로 맞춰 둔다 — 화면이 프레임 시각과 직접 빼서 쓴다.
                 "peak_time": peak_time.replace(" ", "T") + "+09:00",
                 "stage_drop_by_hour": drop_by_hour,
-                "gauge": "경호교",
+                "gauge": d.stage_series["gauge"],
+                # 화면이 시각별 침수를 고를 때 쓰는 통행 불가 수심 — 정책 한 곳에서 온다.
+                "impassable_depth_m": impassable_m,
                 "build_seconds": round(time.perf_counter() - t0, 2),
                 "한계": [
                     "SFINCS를 시각마다 다시 돌린 것이 아니다 — 최대침수심 한 장에 "
@@ -177,6 +218,23 @@ def build(verbose: bool = True) -> dict:
             if verbose:
                 print(f"  시간축 침수 등고선 {len(contours['features'])}개 · "
                       f"{len(drop_by_hour)}시각 {flood_series['build_seconds']}s")
+
+    # 침수 계산 범위 — 산청군 가운데 어디까지 계산했고 어디는 안 했는가(현장조사 반영 ⑤).
+    cov = flood_domains.coverage(flood_domains.county_5179(SANCHEONG_SGG_CODE))
+    flood_coverage = {
+        "covered": geo.geometry_5179_to_lonlat(_mapping(cov["covered"])),
+        "uncovered": geo.geometry_5179_to_lonlat(_mapping(cov["uncovered"])),
+        "covered_ratio": round(cov["covered_ratio"], 4),
+        "domains": [
+            {**{k: v for k, v in d.items() if k != "footprint_5179"},
+             "footprint": (geo.geometry_5179_to_lonlat(_mapping(_box(*d["footprint_5179"])))
+                           if d["footprint_5179"] else None)}
+            for d in cov["domains"]
+        ],
+    }
+    if verbose:
+        print(f"  침수 계산 범위 산청군의 {cov['covered_ratio'] * 100:.0f}% "
+              f"(계산 예정 {sum(1 for d in cov['domains'] if not d['available'])}개 영역)")
 
     # 표시용 산사태 위험영역 — 5m 격자에서 나온 20~75m 조각이라 각이 그대로 보인다.
     risk_display = {"type": "FeatureCollection", "features": []}
@@ -205,7 +263,8 @@ def build(verbose: bool = True) -> dict:
     except ImportError:
         pass
 
-    isolation = build_isolation(verbose=verbose, flood_hazard=_flood_hazard(flood_display))
+    isolation = build_isolation(verbose=verbose, flood_hazard=_flood_hazard(flood_display),
+                                coverage_ratio=flood_coverage["covered_ratio"])
     isolation_timing = build_isolation_timing(frames, flood_series, risk_display, verbose=verbose)
 
     return {
@@ -222,6 +281,8 @@ def build(verbose: bool = True) -> dict:
         "flood_display": flood_display,
         "flood_display_meta": flood_stats,
         "flood_series": flood_series,
+        "flood_static": flood_static,
+        "flood_coverage": flood_coverage,
         "isolation": isolation,
         "isolation_timing": isolation_timing,
         "risk_display": risk_display,
@@ -289,6 +350,8 @@ def write_ui_copies(snapshot: dict, verbose: bool = True) -> None:
                           "flood_series": snapshot["flood_series"],
                           "risk_display": snapshot["risk_display"],
                           "isolation_timing": snapshot.get("isolation_timing") or {"available": False},
+                          "flood_coverage": snapshot.get("flood_coverage"),
+                          "flood_static": snapshot.get("flood_static"),
                           "meta": meta},
     }
     for name, payload in parts.items():
@@ -371,7 +434,15 @@ def _flood_hazard(flood_display: dict):
     이유: 계산에 쓰인 원본 기하는 5179 격자 폴리곤 수백 개라 lon/lat 변환·병합이 이쪽이 이미 돼 있다.
     """
     feats = [f for f in (flood_display or {}).get("features", []) if (f.get("properties") or {}).get("band") == 0]
-    return feats[0]["geometry"] if feats else None
+    if not feats:
+        return None
+    if len(feats) == 1:
+        return feats[0]["geometry"]  # 영역 1개면 예전과 같은 입력 — 고립 2,445동이 유지된다
+    from shapely.geometry import mapping, shape
+    from shapely.ops import unary_union
+
+    # 침수 모형 영역이 여럿이면 영역마다 band 0이 하나씩 있다.
+    return mapping(unary_union([shape(f["geometry"]) for f in feats]))
 
 
 def _hazards_by_hour(frames: list, flood_series: dict, risk_display: dict, impassable_m: float):
@@ -491,12 +562,15 @@ def build_isolation_timing(frames: list, flood_series: dict, risk_display: dict,
     }
 
 
+SANCHEONG_SGG_CODE = "38570"
+
 # 재현하는 사건의 날짜. 통제 구간은 이날 유효한 것만 쓴다 — 지금 진행 중인 복구 공사는
 # 2025년 7월 사건 당시에는 없었다.
 EVENT_DATE = "2025-07-19"
 
 
-def build_isolation(verbose: bool = True, flood_hazard: dict | None = None) -> dict:
+def build_isolation(verbose: bool = True, flood_hazard: dict | None = None,
+                    coverage_ratio: float | None = None) -> dict:
     from datetime import date
 
     from module_e_routing import closures as road_closures
@@ -529,6 +603,10 @@ def build_isolation(verbose: bool = True, flood_hazard: dict | None = None) -> d
             # 진행 중이라 bbox가 바뀔 텐데, 그때 이 저장본을 그대로 쓰면 화면이
             # **다른 범위**의 고립 결과를 보여주게 된다. 화면은 자기 bbox와 대조해
             # 안 맞으면 저장본을 버리고 실제로 계산한다.
+            if scenario == "flood" and coverage_ratio is not None:
+                result["warnings"].append(
+                    f"침수 반영 고립은 침수 계산 범위(산청군의 약 {coverage_ratio * 100:.0f}%) 안에서만 "
+                    f"판정한다 — 범위 밖은 침수 여부를 계산하지 않았다")
             out[f"{region}:{scenario}"] = {
                 "bbox": list(info["bbox"]),
                 "shelter_count": len(info["shelters"]),
