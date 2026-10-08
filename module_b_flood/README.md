@@ -41,6 +41,37 @@ out = mb.run({
 
 ---
 
+## 침수 모형 영역 (2026-10-08)
+
+`domains.json`이 침수 모형 영역 목록이다. 침수 래스터는 nodata=0이라 "안 잠김"과 "계산 안 함"이
+같은 값이어서, 어디까지 계산했는지를 래스터 밖에서 따로 둔다(`domains.py`).
+
+| id | 영역 | 상태 | 시간축 |
+|---|---|---|---|
+| `gyeongho_reach` | 경호강 구간(고읍교~수산교) | 계산됨 | 경호교 수위 → 시각별 침수 |
+| `deokcheon_upper` | 덕천강 상류(시천·삼장) | 계획 | 수위 관측소 없음 → 최대 범위만 |
+
+- 래스터 파일이 있는 영역만 '계산됨'이다. 저장본(`scripts/build_demo_snapshot.py`)은 계산된
+  영역을 모두 읽어 지도·고립 판정·계산 범위에 반영한다.
+- 두 영역이 겹치면 **목록 앞쪽이 우선**이다. 경호강 구간은 수위계로 검증됐고(RMSE 1.42m),
+  덕천강 상류는 검증할 참값이 없다. 뒤 영역의 표시 폴리곤은 앞 영역 사각형 밖으로 잘린다.
+- 시간축(수위 곡선)이 있는 영역은 1개만 지원한다.
+- 실시간 경보 경로(오케스트레이터 → Module B·D)는 여전히 경호강 래스터 1장만 쓴다.
+
+### 덕천강 상류 모형 실행 (G: 드라이브 PC)
+입력(DEM 5m, Manning, 유역평균 강우)이 G: 드라이브에 있어 그 PC에서 돌린다.
+
+1. `python module_b_flood/scripts/33d_sfincs_build_deokcheon.py --dry-run` — 격자와 입력 확인
+2. `set AQUAGUARD_SFINCS_ROOT=C:\sfincs_deokcheon` (ASCII 경로 — netCDF 한글경로 버그)
+3. `conda run -n sfincs python module_b_flood/scripts/33d_sfincs_build_deokcheon.py` — 모형 빌드
+4. 빌드 폴더에서 `sfincs.exe` 실행 → `sfincs_map.nc`
+5. `python module_b_flood/scripts/33d_sfincs_build_deokcheon.py --postprocess %AQUAGUARD_SFINCS_ROOT%\sfincs_map.nc`
+   → `module_b_flood/data/sfincs_deokcheon_maxdepth_50m.tif`
+6. `domains.json`의 `deokcheon_upper.status`를 `"computed"`로 고친다.
+7. `python scripts/build_demo_snapshot.py` — 저장본을 다시 만든다.
+
+격자: 시천면 ∪ 삼장면 경계 + 1km, 50m, 383×425. 강우 강제·outflow 경계라 수위 관측소 검증은 없다.
+
 ## 추가 스크립트·산출물 (2026-09-20)
 
 재현에 필요한데 빠져 있던 엔진 구축·비교 단계를 채웠다.

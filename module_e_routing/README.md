@@ -13,6 +13,10 @@
 - `isolation.py` — 고립마을 탐지(§7). VWorld 도로망으로 networkx 그래프를 만들고
  위험폴리곤과 겹치는 도로를 제거한 뒤, 대피소 역방향 도달가능성으로 고립 건물을
  찾는다. `api_server.py`의 `POST /isolation-check`가 감싸서 씀.
+ 그래프·건물 매핑은 `build_context()`로 한 번만 만들고 위험 도형마다 `evaluate()`로 판정한다.
+ `isolation_timeline()`은 시각별 위험으로 다시 판정해 마을별 진입로 단절 시각을 낸다.
+- `closures.py` — 복구·통제 구간(`data/road_closures.geojson`) 읽기·검증·날짜 필터.
+- `policy.py` — 정책값(`policies/module_e.json`): 대피 시한 여유, 통행 불가 수심, 구조차량 높이.
 
 ## 필요한 환경변수 (`.env`, git-ignore됨)
 
@@ -33,8 +37,9 @@
 
 `fallback_used: true`, `route_confidence: "low"`면 네이버 API 호출이 실패했거나
 `NAVER_CLIENT_ID`/`SECRET`이 없는 것이다 — 하버사인 직선거리 ÷ 30km/h(자동차)
-가정속도로 대체 계산된다. 도보 시간은 애초에 공개 API가 도보 길찾기를 안 줘서
-항상 직선거리 ÷ 4km/h 근사다(이건 키가 있어도 그대로).
+가정속도로 대체 계산된다. 도보 시간은 공개 API가 도보 길찾기를 주지 않아 **네이버
+차량 경로의 길이 ÷ 4km/h**로 낸다(`modes.walk.source = "road_path@walk_speed"`).
+네이버 호출이 실패했을 때만 직선거리 ÷ 4km/h로 떨어진다.
 
 ## 산청군 전체 시나리오 (2026-09-21)
 
@@ -55,6 +60,66 @@ UI의 "산청군 전체" 버튼(`ui/src/lib/demoShelters.ts`의 `sancheong_all`)
 - 대피경로: `/evacuation-route`가 네이버 경로가 침수 구간과 겹치는지 검사해 `route_flooded`·`flooded_route_m`을 붙이고
  `time_feasible`을 false로 돌린다(UI는 통행 불가 표시 + 목록 뒤로). **우회는 못 한다** — 네이버 Directions는 "이 구역 피해서"를
  받지 않으므로 겹치면 그 대피소를 후보에서 내릴 뿐이고, 침수를 피하는 다른 길을 찾아주지는 않는다. 침수범위는 스냅샷에서 읽는다.
+
+## 현장조사 반영 (2026-10-08)
+
+산청읍 송경천 현장조사(2026-09-25)의 "시스템에 반영할 점"을 넣었다.
+계획·변경 기록은 `docs/rse/specs/plan-field-survey-reflections.md`에 있다.
+
+### ① 마을별 진입로 단절 시각과 대피 시한
+`scripts/build_demo_snapshot.py`가 사후 재현의 시각마다(37시각) 그 시각의 침수와 그때까지
+도달한 산사태 위험영역으로 고립을 다시 판정한다. 침수가 가장 넓은 시각(기준 시각)에 고립된
+마을마다, 그 고립이 시작된 시각을 진입로 단절 시각으로 두고, 그보다
+`evacuate_lead_before_cut_hours`(1시간, 팀 결정) 앞을 대피 시한으로 둔다.
+
+- **늘 끊긴 마을(persistent)에는 시한을 매기지 않는다.** 저수위 시각(앞선 수위 정점 이후,
+  기준 시각 전까지 가장 낮은 시각 — 홍수 사이의 골)에도 끊겨 있던 마을이다. 시각별 침수는
+  최대침수심에서 수위강하를 빼는 근사라 본류가 최저 수위에도 물로 남고, 본류를 건너는 길은
+  하루 종일 끊긴 것으로 계산된다.
+- 창에서 가장 낮은 시각을 저수위로 쓰지 않는 이유: 구간 모형이 7/18 00:00 빈 하도에서 시작해
+  첫 몇 시각의 수위가 낮게 나온다(초기화 구간).
+- 결과는 경보 봉투가 아니라 저장본의 `isolation_timing`과 `timeline.json`에 있다. 실시간
+  경로에는 시각별 침수가 없다.
+- 2025년 7월 재현: 이번 홍수로 끊긴 마을 56곳(7/19 04:00~13:00), 그중 13곳(915동)은 대피
+  시한이 경보 발송(09:05)보다 이르다.
+
+### ② 끊긴 도로 속성과 구조차량 진입
+- 끊긴 도로(`blocked_roads`)에 `link_id`, `road_name`, `rd_type_h`(교량·터널), `rd_rank_h`가 붙는다.
+- **구조차량 판정은 높이 제한과 현장 보정 기록만 쓴다.** 표준노드링크에는 도로 폭·차로 수가
+  없고, `rest_veh_h = "이륜차"`는 이륜차 통행 **금지**(150개 중 140개가 고속국도)라 구조차량과
+  무관하다. 높이 제한(`rest_h`)이 `rescue_vehicle_height_m`(3.8m, 가정값)보다 낮은 링크나,
+  `data/road_overrides.json`에 `vehicle_passable: false`로 적은 링크만 구조차량 통행 불가로 본다.
+  산청의 높이 제한은 모두 4.0m 이상이라 지금은 걸리는 링크가 없다.
+- 주민은 대피소까지 갈 수 있지만 구조차량이 못 들어가는 건물은 `rescue_limited_buildings`로 나온다.
+- **마을안길은 도로망에 없다.** 도로명주소 도로 레이어(`LT_L_SPRD`)에는 있지만 도로명만 있고
+  폭이 없다. 그 길로만 드나드는 마을은 가장 가까운 시·군도 링크 기준으로 판정된다(팀 결정으로
+  이번에는 넣지 않음).
+
+`data/road_overrides.json` 형식:
+```json
+{"links": [{"link_id": "3940041103", "vehicle_passable": false, "two_way": false,
+            "note": "차 한 대 폭, 교행 불가", "source": "현장조사", "observed": "2026-09-25"}]}
+```
+
+### ③ 복구·통제 구간
+`data/road_closures.geojson`에 적은 통제 구간을 고립 판정에서 끊고(`closed_roads`로 침수와
+따로 보고), 대피 경로가 그 구간을 20m 넘게 따라가면 `route_closed`로 표시한다. 지도에는
+`GET /road-closures`로 그날 유효한 것만 그린다. 사후 재현은 사건일(2025-07-19)에 유효했던
+통제만 쓴다.
+
+```json
+{"type": "Feature",
+ "geometry": {"type": "LineString", "coordinates": [[127.87, 35.41], [127.871, 35.411]]},
+ "properties": {"id": "c1", "reason": "송경천 재해복구사업", "start": "2026-09-01", "end": null,
+                "source": "산청군 공지", "link_ids": ["3940041103"]}}
+```
+- 선 통제에는 `link_ids`가 반드시 있어야 한다. 선 기하만으로 판정하면 교차로에서 다른 도로까지
+  끊긴다. 면 통제(Polygon)는 그 안을 지나는 도로를 모두 끊는다.
+- 날짜는 `YYYY-MM-DD`이고, `end`가 없으면 계속 유효하다.
+
+### ⑤ 침수 계산 범위
+`/evacuation-route` 결과에 `in_flood_coverage`가 붙는다. `false`는 "안 잠김"이 아니라
+"이 대피소 주변은 침수를 계산하지 않음"이다. 범위는 `module_b_flood/domains.json`에서 온다.
 
 ## 알려진 한계 (2026-09-09 기준)
 

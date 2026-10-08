@@ -37,9 +37,9 @@
         "uvicorn",
         "api_server:app",
         "--port",
-        "8011"
+        "8010"
       ],
-      "port": 8011
+      "port": 8010
     }
   ]
 }
