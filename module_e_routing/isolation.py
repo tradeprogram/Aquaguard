@@ -208,20 +208,20 @@ def remove_hazard_edges(graph: nx.Graph, hazard_polygon: dict[str, Any] | None) 
     엣지 전체를 STRtree(공간 인덱스)에 넣고 위험 도형으로 한 번에 질의한다 — 군 전체
     (엣지 약 10만 개)에서도 엣지마다 교차 검사를 반복하지 않는다.
     """
-    hazard_shape = _hazard_shape(hazard_polygon)
-    if hazard_shape is None:
+    shape = hazard_shape(hazard_polygon)
+    if shape is None:
         return []
     edges = list(graph.edges())
     if not edges:
         return []
     segments = shapely.linestrings([[u, v] for u, v in edges])
-    hit = shapely.STRtree(segments).query(hazard_shape, predicate="intersects")
+    hit = shapely.STRtree(segments).query(shape, predicate="intersects")
     to_remove = [edges[k] for k in hit]
     graph.remove_edges_from(to_remove)
     return to_remove
 
 
-def _hazard_shape(hazard_polygon: dict[str, Any] | None):
+def hazard_shape(hazard_polygon: dict[str, Any] | None):
     """GeoJSON(Geometry | Feature | FeatureCollection) → 단일 shapely 도형. 실패하면 None."""
     if not isinstance(hazard_polygon, dict) or not hazard_polygon.get("type"):
         return None
@@ -399,9 +399,9 @@ def check_isolation(
                 "warnings": ["해당 영역에 도로 데이터 없음"]}
 
     # 위험영역 안에 있는 대피소는 후보에서 뺀다 — 물에 잠기는 곳으로 대피시킬 수 없다.
-    hazard_shape = _hazard_shape(hazard_polygon)
-    if hazard_shape is not None:
-        usable = [s for s in shelter_candidates_lonlat if not hazard_shape.contains(shapely.geometry.Point(*s))]
+    hazard = hazard_shape(hazard_polygon)
+    if hazard is not None:
+        usable = [s for s in shelter_candidates_lonlat if not hazard.contains(shapely.geometry.Point(*s))]
         if len(usable) != len(shelter_candidates_lonlat):
             warnings.append(f"위험영역 안에 든 대피소 {len(shelter_candidates_lonlat) - len(usable)}곳은 후보에서 제외")
         shelter_candidates_lonlat = usable
@@ -417,7 +417,7 @@ def check_isolation(
     if not reachable:
         warnings.append("대피소 근처에서 도로 그래프를 찾지 못함 — 도달가능성 계산 불가")
 
-    centroids, touches = _building_centroids(fetch_buildings(bbox), hazard_shape)
+    centroids, touches = _building_centroids(fetch_buildings(bbox), hazard)
     # 위험영역(침수)에 조금이라도 겹치는 건물은 도로 연결 여부와 무관하게 "대피소 도달 불가"로 센다 —
     # 건물 자체가 물에 잠기는데, 도로 데이터가 성겨서 가장 가까운 노드가 멀리 있는 마른 도로에
     # 이어져 있다는 이유로 안전해 보이면 안 된다(2026-09-21 산청 실측: 침수 건물 805채 중 179채가

@@ -73,17 +73,16 @@ def _shelter_blocked_by_risk(shelter: dict[str, Any], risk_polygons: list[dict[s
     """
     import shapely.geometry
 
+    # GeoJSON → shapely 변환은 고립 판정과 같은 함수를 쓴다. Module B의 침수범위는
+    # FeatureCollection으로 오는데, 예전에는 shapely.geometry.shape()에 바로 넘겨
+    # 예외가 났고 그게 조용히 삼켜져 침수범위가 대피소를 한 번도 걸러내지 못했다.
+    from .isolation import hazard_shape
+
+    point = shapely.geometry.Point(shelter["x_5179"], shelter["y_5179"])
     for risk in risk_polygons:
-        geom = risk.get("geometry_5179")
-        if not geom or not geom.get("type"):
-            continue
-        try:
-            polygon = shapely.geometry.shape(geom)
-            point = shapely.geometry.Point(shelter["x_5179"], shelter["y_5179"])
-            if polygon.contains(point):
-                return True
-        except Exception:
-            continue
+        shape = hazard_shape(risk.get("geometry_5179"))
+        if shape is not None and shape.contains(point):
+            return True
     return False
 
 
