@@ -206,6 +206,7 @@ def build(verbose: bool = True) -> dict:
         pass
 
     isolation = build_isolation(verbose=verbose, flood_hazard=_flood_hazard(flood_display))
+    isolation_timing = build_isolation_timing(frames, flood_series, risk_display, verbose=verbose)
 
     return {
         "schema": 1,
@@ -222,6 +223,7 @@ def build(verbose: bool = True) -> dict:
         "flood_display_meta": flood_stats,
         "flood_series": flood_series,
         "isolation": isolation,
+        "isolation_timing": isolation_timing,
         "risk_display": risk_display,
         "정직성": [
             "envelope 은 orchestrator.run() 이 낸 값 그대로다 — 손으로 고친 값이 없다.",
@@ -269,6 +271,8 @@ def write_ui_copies(snapshot: dict, verbose: bool = True) -> None:
         "alert_sent": agent.get("alert_sent"),
         "official_warning": actual.get("warning_escalated"),
         "report_start": actual.get("report_start"),
+        # 진입로가 끊기기 전에 대피를 끝내려면 가장 먼저 경보가 나가야 했던 시각.
+        "isolation_deadline": (snapshot.get("isolation_timing") or {}).get("earliest_evacuate_by"),
     }
     envelope = json.loads(json.dumps(snapshot["envelope"]))
     envelope["meta"] = {**envelope.get("meta", {}), "served_from": "snapshot", **{
@@ -284,6 +288,7 @@ def write_ui_copies(snapshot: dict, verbose: bool = True) -> None:
                           "markers": markers,
                           "flood_series": snapshot["flood_series"],
                           "risk_display": snapshot["risk_display"],
+                          "isolation_timing": snapshot.get("isolation_timing") or {"available": False},
                           "meta": meta},
     }
     for name, payload in parts.items():
@@ -367,6 +372,123 @@ def _flood_hazard(flood_display: dict):
     """
     feats = [f for f in (flood_display or {}).get("features", []) if (f.get("properties") or {}).get("band") == 0]
     return feats[0]["geometry"] if feats else None
+
+
+def _hazards_by_hour(frames: list, flood_series: dict, risk_display: dict, impassable_m: float):
+    """시각 → 그 시각의 위험(GeoJSON FC). 화면의 시각별 고립 판정(MapExplorer
+    scheduleIsolationCheck)과 같은 정의다: 그 시각의 침수(수심 ≥ 통행 불가 수심) + 그때까지
+    도달한 산사태 위험영역. 수위 자료가 없는 시각은 빼고, 시각 → ISO 문자열도 함께 돌려준다."""
+    drops = flood_series.get("stage_drop_by_hour") or {}
+    contours = (flood_series.get("contours") or {}).get("features") or []
+    levels = sorted({float(f["properties"]["level_m"]) for f in contours})
+    risks = (risk_display or {}).get("features") or []
+    hazards, time_of = {}, {}
+    for frame in frames:
+        hour = frame["hour"]
+        if str(hour) not in drops:
+            continue
+        need = drops[str(hour)] + impassable_m
+        level = next((x for x in levels if x >= need - 1e-9), None)
+        parts = []
+        if level is not None:
+            parts += [f["geometry"] for f in contours if abs(float(f["properties"]["level_m"]) - level) < 1e-9]
+        parts += [f["geometry"] for f in risks
+                  if f["properties"].get("arrival_hour") is not None and f["properties"]["arrival_hour"] <= hour]
+        hazards[hour] = ({"type": "FeatureCollection",
+                          "features": [{"type": "Feature", "geometry": g, "properties": {}} for g in parts]}
+                         if parts else None)
+        time_of[hour] = frame["time"]
+    return hazards, time_of
+
+
+def build_isolation_timing(frames: list, flood_series: dict, risk_display: dict, verbose: bool = True) -> dict:
+    """마을(고립 군집)별 진입로 단절 예상 시각과 대피 시한(현장조사 반영 ①).
+
+    시각별 위험으로 고립을 다시 판정해, 침수가 가장 넓은 시각(기준 시각)에 고립된 군집마다
+    그 고립 구간이 시작된 시각을 구하고, 정책의 여유 시간만큼 앞을 대피 시한으로 둔다.
+    경보 봉투에는 넣지 않는다 — 실시간 경로에는 시각별 침수가 없고, 봉투는 실시간 재실행과
+    대조된다(tests/test_demo_snapshot.py)."""
+    from datetime import date, datetime, timedelta
+
+    from module_e_routing import closures as road_closures
+    from module_e_routing import isolation as iso
+    from module_e_routing import policy
+
+    if not flood_series.get("available"):
+        return {"available": False, "reason": "시각별 침수 없음"}
+    info = _read_demo_regions().get("sancheong_all")
+    if not info or len(info["shelters"]) != EXPECTED_SHELTERS["sancheong_all"]:
+        return {"available": False, "reason": "산청군 전체 대피소 목록을 읽지 못함"}
+
+    pol = policy.load()
+    lead = float(pol.value("evacuate_lead_before_cut_hours"))
+    impassable = float(pol.value("flood_impassable_depth_m"))
+    hazards, time_of = _hazards_by_hour(frames, flood_series, risk_display, impassable)
+    if not hazards:
+        return {"available": False, "reason": "수위 자료가 있는 시각 없음"}
+    drops = flood_series["stage_drop_by_hour"]
+    reference = min(hazards, key=lambda h: (drops[str(h)], -h))
+    # 저수위 시각 = 앞선 수위 정점 이후, 기준 시각 전까지 수위가 가장 낮은 시각(홍수 사이의 골).
+    # 이때도 끊겨 있던 건물은 이번 홍수가 끊은 게 아니다 — 본류가 최저 수위에도 물로 남는
+    # 근사라 본류를 건너는 길은 늘 끊긴 것으로 나온다.
+    #
+    # '창 안에서 가장 낮은 시각'으로 잡으면 안 된다. 구간 모형은 7/18 00:00 빈 하도에서 시작해
+    # 첫 몇 시각의 수위가 낮게 나오는데(모형 초기화), 그 시각을 저수위로 잡으면 7/18 새벽의
+    # 앞선 홍수로 끊긴 길이 이번 홍수의 단절로 세어져 탐지보다 31시간 이른 시한이 나왔다.
+    before = sorted(h for h in hazards if h <= reference)
+    first_crest = next(
+        (before[i] for i in range(1, len(before) - 1)
+         if drops[str(before[i])] <= drops[str(before[i - 1])] and drops[str(before[i])] <= drops[str(before[i + 1])]),
+        before[0],
+    )
+    low_water = max((h for h in before if h >= first_crest), key=lambda h: (drops[str(h)], h))
+    event_closures = road_closures.active(road_closures.load(), date.fromisoformat(EVENT_DATE))
+
+    t0 = time.perf_counter()
+    timeline = iso.isolation_timeline(info["bbox"], info["shelters"], hazards, reference_hour=reference,
+                                      low_water_hour=low_water, closures=event_closures)
+    features = []
+    for cluster_id, c in enumerate(timeline["clusters"]):
+        cut = datetime.fromisoformat(time_of[c["cut_hour"]])
+        features.append({"type": "Feature", "geometry": c["geometry"], "properties": {
+            "cluster_id": cluster_id,
+            "building_count": c["building_count"],
+            "centroid": list(c["centroid"]),
+            # 늘 끊긴 군집은 이번 홍수의 단절 시각이 없다 — 시한을 지어내지 않는다.
+            "cut_time": None if c["persistent"] else cut.isoformat(),
+            "evacuate_by": None if c["persistent"] else (cut - timedelta(hours=lead)).isoformat(),
+            "persistent": c["persistent"],
+            "persistent_count": c["persistent_count"],
+        }})
+    deadlines = [f["properties"]["evacuate_by"] for f in features if not f["properties"]["persistent"]]
+    if verbose:
+        print(f"  고립 시각 판정 {len(hazards)}시각 · 기준 {time_of[reference][5:16]} · 저수위 "
+              f"{time_of[low_water][5:16]} · 군집 {len(features)} "
+              f"(늘 끊김 {sum(1 for f in features if f['properties']['persistent'])}) "
+              f"{time.perf_counter() - t0:.1f}s")
+    return {
+        "available": True,
+        "region": "sancheong_all",
+        "reference_time": time_of[reference],
+        "low_water_time": time_of[low_water],
+        "lead_hours": lead,
+        "lead_policy": "module_e_v1/evacuate_lead_before_cut_hours",
+        "impassable_depth_m": impassable,
+        "clusters": {"type": "FeatureCollection", "features": features},
+        "isolated_by_time": {time_of[h]: n for h, n in timeline["isolated_count_by_hour"].items()},
+        "earliest_evacuate_by": min(deadlines) if deadlines else None,
+        "한계": [
+            "시각별 침수는 최대침수심에서 경호교 수위강하를 뺀 준정적 근사다 — 단절 시각도 근사다.",
+            "하천 본류는 최저 수위에도 침수로 잡혀, 본류를 건너는 교량은 늘 끊긴 것으로 처리된다"
+            "(상판 높이 자료 없음).",
+            "등수심선이 0.5m 간격이라, 수위가 조금만 올라도 침수 범위가 한 단계 넓어진다 — 단절 시각이 "
+            "한 시각 정도 앞당겨질 수 있다(화면의 시각별 침수도 같은 기준이다).",
+            "저수위 시각에도 끊겨 있던 군집은 '늘 끊김'으로 두고 대피 시한을 매기지 않는다 — 이번 "
+            "홍수가 끊은 것이 아니라 위 근사에서 본류가 늘 물로 남기 때문이다.",
+            "사후 재현에서 계산한 시각이다. 실시간 경보에는 아직 쓰지 않는다.",
+            "마을안길은 도로망에 없어, 그 길로만 드나드는 마을은 가장 가까운 시·군도 기준으로 판정된다.",
+        ],
+    }
 
 
 # 재현하는 사건의 날짜. 통제 구간은 이날 유효한 것만 쓴다 — 지금 진행 중인 복구 공사는

@@ -639,3 +639,76 @@ def check_isolation(
         "rescue_limited_count": len(rescue_points),
         "warnings": warnings,
     }
+
+
+def isolation_timeline(
+    bbox: tuple[float, float, float, float],
+    shelter_candidates_lonlat: list[tuple[float, float]],
+    hazards_by_hour: dict[int, dict[str, Any] | None],
+    reference_hour: int,
+    low_water_hour: int | None = None,
+    closures: list[dict] | None = None,
+) -> dict[str, Any]:
+    """시각별 위험으로 고립을 다시 판정해 군집별 진입로 단절 시각을 낸다(현장조사 반영 ①).
+
+    건물의 단절 구간 = 기준 시각(침수가 가장 넓은 시각)에 고립된 건물에 대해, 기준 시각부터
+    거꾸로 거슬러 올라가며 계속 고립이던 구간. 그 구간이 low_water_hour(창 안의 저수위
+    시각, 없으면 자료의 첫 시각)까지 이어지면 '늘 끊긴' 건물(persistent)이다 — 이번 홍수가
+    끊은 것이 아니므로 대피 시한을 매기지 않는다.
+
+    군집의 단절 시각 = 늘 끊긴 건물을 뺀 구성 건물들의 구간 시작 중 가장 이른 값. 마을의
+    일부라도 먼저 끊기면 그때가 마을 대피의 기준이다. 구성 건물이 모두 늘 끊긴 건물이면
+    군집도 persistent다.
+
+    그래프·건물 매핑은 한 번만 만든다(build_context). 시각마다 다시 만들면 군 전체에서
+    시각당 8초가 걸린다.
+
+    반환: {hours, reference_hour, low_water_hour, isolated_count_by_hour,
+           clusters: [{geometry, building_count, centroid, bbox, cut_hour, persistent, persistent_count}]}
+    """
+    ctx = build_context(fetch_roads(bbox), fetch_buildings(bbox))
+    closed = [edge for edge, _ in closed_edges_for(ctx, closures or [])]
+    hours = sorted(hazards_by_hour)
+    flags: dict[int, set[int]] = {}
+    for hour in hours:
+        ev = evaluate(ctx, shelter_candidates_lonlat, hazard_shape(hazards_by_hour[hour]), closed)
+        flags[hour] = set(ev["isolated_idx"]) | set(ev["direct_idx"])
+
+    boundary = hours.index(low_water_hour) if low_water_hour is not None else 0
+    ref_pos = hours.index(reference_hour)
+    start_of: dict[int, int] = {}
+    persistent: set[int] = set()
+    for k in flags[reference_hour]:
+        pos = ref_pos
+        while pos - 1 >= 0 and k in flags[hours[pos - 1]]:
+            pos -= 1
+        start_of[k] = hours[pos]
+        if pos <= boundary:
+            persistent.add(k)
+
+    idx = sorted(flags[reference_hour])
+    points = _points(ctx, idx)
+    # 건물 기록 두 개가 무게중심을 공유할 수 있어(같은 건물의 중복 등록) 점 하나에 여러 건물을 단다.
+    by_point: dict[tuple[float, float], list[int]] = {}
+    for point, k in zip(points, idx):
+        by_point.setdefault(point, []).append(k)
+    clusters = []
+    for c in cluster_isolated_buildings(points):
+        members = [k for p in set(c["member_points"]) for k in by_point[p]]
+        event = [k for k in members if k not in persistent]
+        clusters.append({
+            "geometry": c["geometry"],
+            "building_count": c["building_count"],
+            "centroid": c["centroid"],
+            "bbox": c["bbox"],
+            "cut_hour": min(start_of[k] for k in (event or members)),
+            "persistent": not event,
+            "persistent_count": len(members) - len(event),
+        })
+    return {
+        "hours": hours,
+        "reference_hour": reference_hour,
+        "low_water_hour": low_water_hour,
+        "isolated_count_by_hour": {h: len(flags[h]) for h in hours},
+        "clusters": clusters,
+    }

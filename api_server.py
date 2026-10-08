@@ -322,6 +322,9 @@ def get_alert_timeline(alert_id: str) -> dict:
 
     timeline = alert.envelope["data"]["timeline_actual"] if alert else {}
     agent = alert.envelope["data"]["timeline_agent"] if alert else {}
+    # 마을별 진입로 단절·대피 시한 — 사전계산 저장본에만 있다(시각별 침수가 실시간 경로에 없다).
+    same_alert = bool(snapshot and snapshot.get("alert_id") == alert_id)
+    isolation_timing = (snapshot or {}).get("isolation_timing") if same_alert else None
     return {
         "available": True,
         "scenario": scenario,
@@ -337,7 +340,9 @@ def get_alert_timeline(alert_id: str) -> dict:
             "alert_sent": agent.get("alert_sent"),
             "official_warning": timeline.get("warning_escalated"),
             "report_start": timeline.get("report_start"),
+            "isolation_deadline": (isolation_timing or {}).get("earliest_evacuate_by"),
         },
+        "isolation_timing": isolation_timing or {"available": False},
         # 침수 시간축. 있으면 UI가 프레임마다 등고선을 골라 그린다(없으면 최대 범위 고정).
         "flood_series": (snapshot or {}).get("flood_series") or {"available": False},
         "flood_is_max": not ((snapshot or {}).get("flood_series") or {}).get("available"),

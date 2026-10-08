@@ -387,3 +387,32 @@ def test_chat_context_does_not_claim_mock_when_modules_are_real() -> None:
         assert "목업" not in context and "예시값" not in context
     else:
         assert "예시값" in context
+
+
+def test_isolation_deadline_is_lead_before_cut(snapshot: dict) -> None:
+    """대피 시한 = 진입로 단절 시각 − 정책의 여유 시간. 늘 끊긴 군집에는 시한을 매기지 않는다.
+
+    늘 끊긴 군집(저수위에도 끊겨 있던 곳)에 시한을 매기면, 시각별 침수 근사가 본류를 늘
+    물로 남기는 탓에 탐지보다 하루 이른 시한이 나온다 — 이번 홍수가 끊은 길이 아니다.
+    """
+    from datetime import datetime, timedelta
+
+    from module_e_routing import policy
+
+    t = snapshot["isolation_timing"]
+    assert t["available"]
+    assert t["lead_hours"] == policy.load().value("evacuate_lead_before_cut_hours")
+    frame_times = {fr["time"] for fr in snapshot["frames"]}
+    assert t["reference_time"] in frame_times and t["low_water_time"] in frame_times
+    assert t["low_water_time"] < t["reference_time"]
+    deadlines = []
+    for f in t["clusters"]["features"]:
+        p = f["properties"]
+        if p["persistent"]:
+            assert p["cut_time"] is None and p["evacuate_by"] is None
+            continue
+        cut, by = datetime.fromisoformat(p["cut_time"]), datetime.fromisoformat(p["evacuate_by"])
+        assert cut - by == timedelta(hours=t["lead_hours"])
+        assert p["cut_time"] > t["low_water_time"]  # 이번 홍수의 상승기에 끊긴 것만 시한이 있다
+        deadlines.append(p["evacuate_by"])
+    assert t["earliest_evacuate_by"] == (min(deadlines) if deadlines else None)
