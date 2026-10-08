@@ -9,7 +9,8 @@
 |---|---|---|
 | `use_type_vocabulary.json` | **D + G 공유** | 건축물 용도 어휘 7종과 원본 속성값 매핑 |
 | `module_d.json` | D | 점 버퍼 반경, min_risk_prob, 속성키 후보, 면적 반올림 |
-| `policy.schema.json` | 전부 | 위 두 파일의 구조 검증용 |
+| `module_e.json` | E | 대피 시한 여유(진입로 단절 1시간 전, 팀 결정), 통행 불가 수심, 구조차량 높이 |
+| `policy.schema.json` | 전부 | 위 파일들의 구조 검증용 |
 
 ## 왜 최상위에 두는가
 

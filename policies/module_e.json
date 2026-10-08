@@ -1,0 +1,49 @@
+{
+  "policy_version": "module_e_v1",
+  "description": "Module E(대피 경로·고립 판정) 정책값. 현장조사(2026-09-25, 산청읍 송경천 일대) 반영 사항을 포함한다.",
+  "rows": [
+    {
+      "id": "evacuate_lead_before_cut_hours",
+      "value": 1.0,
+      "unit": "h",
+      "status": "TEAM_DECISION",
+      "source": {
+        "agency": null,
+        "document": "팀 합의 — 현장조사 반영 사항 ① 고립 예상 마을의 경보를 앞당긴다",
+        "clause": null,
+        "url": null,
+        "retrieved": "2026-10-08",
+        "effective": "2026-10-08"
+      },
+      "note": "진입로 단절 예상 시각보다 이만큼 앞을 대피 시한으로 본다. 고령 주민의 준비·이동 시간을 고려한 값이다. 단절 시각은 시각별 침수의 준정적 근사에서 나오므로 시한도 근사다."
+    },
+    {
+      "id": "flood_impassable_depth_m",
+      "value": 0.3,
+      "unit": "m",
+      "status": "ASSUMPTION",
+      "source": {
+        "agency": null,
+        "document": null,
+        "clause": null,
+        "url": null,
+        "retrieved": "2026-10-08"
+      },
+      "note": "승용차가 지나갈 수 없는 수심의 가정값. 고립 판정, 대피 경로, 화면의 시각별 침수 표시가 모두 이 값을 쓴다. 전에는 build_demo_snapshot.py와 MapExplorer.tsx에 따로 적혀 있었다."
+    },
+    {
+      "id": "rescue_vehicle_height_m",
+      "value": 3.8,
+      "unit": "m",
+      "status": "PLACEHOLDER",
+      "source": {
+        "agency": null,
+        "document": null,
+        "clause": null,
+        "url": null,
+        "retrieved": "2026-10-08"
+      },
+      "note": "대형 구조·소방차 높이의 보수적 가정값이며 공식 근거는 아직 확인하지 않았다. 표준노드링크의 높이 제한(rest_h)이 이보다 낮은 링크는 구조차량 통행 불가로 본다. 산청의 높이 제한은 모두 4.0m 이상이라 지금은 걸리는 링크가 없다 — 지하차도가 많은 도시로 넓힐 때 의미가 생긴다."
+    }
+  ]
+}
