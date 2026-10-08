@@ -21,6 +21,7 @@ import json
 import math
 import os
 from pathlib import Path
+from dataclasses import dataclass
 from typing import Any
 
 import networkx as nx
@@ -132,14 +133,19 @@ def _dedupe(features: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return out
 
 
+def cache_file(layer: str, bbox: tuple[float, float, float, float]) -> Path:
+    """VWorld 응답 캐시 파일 경로. 테스트가 캐시 유무로 건너뛸지 정할 때도 쓴다."""
+    key = hashlib.md5(f"{layer}|{tuple(round(v, 5) for v in bbox)}".encode()).hexdigest()[:16]
+    return FEATURE_CACHE_DIR / f"{layer}_{key}.json"
+
+
 def _fetch_tiled_cached(layer: str, bbox: tuple[float, float, float, float]) -> list[dict[str, Any]]:
     """bbox를 타일로 쪼개 VWorld에서 받고 결과를 디스크에 캐시한다(§7.3 — 같은 bbox 재요청은
     API를 다시 안 부른다). 캐시를 비우려면 data/cache/isolation/ 폴더를 지우면 된다."""
-    key = hashlib.md5(f"{layer}|{tuple(round(v, 5) for v in bbox)}".encode()).hexdigest()[:16]
-    cache_file = FEATURE_CACHE_DIR / f"{layer}_{key}.json"
-    if cache_file.exists():
+    path = cache_file(layer, bbox)
+    if path.exists():
         try:
-            return json.loads(cache_file.read_text(encoding="utf-8"))
+            return json.loads(path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             pass
     features: list[dict[str, Any]] = []
@@ -148,7 +154,7 @@ def _fetch_tiled_cached(layer: str, bbox: tuple[float, float, float, float]) -> 
     features = _dedupe(features)
     try:
         FEATURE_CACHE_DIR.mkdir(parents=True, exist_ok=True)
-        cache_file.write_text(json.dumps(features), encoding="utf-8")
+        path.write_text(json.dumps(features), encoding="utf-8")
     except OSError:
         pass
     return features
@@ -192,7 +198,12 @@ def build_road_graph(road_features: list[dict[str, Any]]) -> nx.Graph:
             if na == nb:
                 continue
             weight = _haversine_m(*na, *nb)
-            graph.add_edge(na, nb, weight=weight, link_id=props.get("link_id"), rd_type_h=props.get("rd_type_h"))
+            graph.add_edge(
+                na, nb, weight=weight,
+                link_id=props.get("link_id"), road_name=props.get("road_name"),
+                rd_type_h=props.get("rd_type_h"), rd_rank_h=props.get("rd_rank_h"),
+                rest_h=props.get("rest_h"),
+            )
     return graph
 
 
@@ -243,19 +254,29 @@ def hazard_shape(hazard_polygon: dict[str, Any] | None):
         return None
 
 
-def blocked_road_features(removed_edges: list[tuple]) -> dict[str, Any]:
-    """제거된 엣지 → GeoJSON FeatureCollection(lon/lat). 지도에서 빨간 도로로 그린다."""
-    return {
-        "type": "FeatureCollection",
-        "features": [
-            {
-                "type": "Feature",
-                "geometry": {"type": "LineString", "coordinates": [list(u), list(v)]},
-                "properties": {"kind": "blocked_road"},
-            }
-            for u, v in removed_edges
-        ],
-    }
+ROAD_ATTRS = ("link_id", "road_name", "rd_type_h", "rd_rank_h")
+
+
+def blocked_road_features(removed_edges: list[tuple], graph: nx.Graph | None = None,
+                          kind: str = "blocked_road", extra: dict | None = None) -> dict[str, Any]:
+    """제거된 엣지 → GeoJSON FeatureCollection(lon/lat). 지도에서 빨간 도로로 그린다.
+
+    graph를 주면 도로명·교량 여부·등급을 함께 싣는다 — "통행 불가"만 적힌 빨간 선으로는
+    담당자가 어느 길인지, 다리인지 알 수 없다(현장조사 반영 ②)."""
+    features = []
+    for u, v in removed_edges:
+        props: dict[str, Any] = {"kind": kind}
+        if graph is not None and graph.has_edge(u, v):
+            data = graph.edges[u, v]
+            props.update({k: data.get(k) for k in ROAD_ATTRS})
+        if extra:
+            props.update(extra)
+        features.append({
+            "type": "Feature",
+            "geometry": {"type": "LineString", "coordinates": [list(u), list(v)]},
+            "properties": props,
+        })
+    return {"type": "FeatureCollection", "features": features}
 
 
 class _NodeIndex:
@@ -279,66 +300,20 @@ class _NodeIndex:
         return nearest, np.hypot(dx, dy)
 
 
-def reachable_from_shelters(graph: nx.Graph, shelter_lonlat: list[tuple[float, float]]) -> set[tuple[float, float]]:
-    """대피소 각각에서 BFS로 도달 가능한 노드를 모두 합친다 — "최소 1곳 대피소라도 갈 수 있는 노드 집합"."""
+def reachable_from_shelters(graph: nx.Graph, shelter_lonlat: list[tuple[float, float]],
+                            index: "_NodeIndex | None" = None) -> set[tuple[float, float]]:
+    """대피소 각각에서 BFS로 도달 가능한 노드를 모두 합친다 — "최소 1곳 대피소라도 갈 수 있는 노드 집합".
+
+    graph는 엣지를 숨긴 읽기 전용 뷰(nx.restricted_view)여도 된다. 노드 집합은 그대로라
+    같은 노드 색인(index)을 재사용할 수 있다."""
     reachable: set[tuple[float, float]] = set()
     if not shelter_lonlat or graph.number_of_nodes() == 0:
         return reachable
-    nodes, _ = _NodeIndex(graph).nearest(np.array(shelter_lonlat, dtype=float))
+    nodes, _ = (index or _NodeIndex(graph)).nearest(np.array(shelter_lonlat, dtype=float))
     for node in set(nodes):
         if node not in reachable:
             reachable |= nx.node_connected_component(graph, node)
     return reachable
-
-
-def _building_centroids(building_features: list[dict[str, Any]], hazard_shape=None) -> tuple[np.ndarray, np.ndarray]:
-    """건물 무게중심 (N,2)와, 건물 윤곽이 hazard_shape와 조금이라도 겹치는지(N,) 불리언을 돌려준다.
-    중심점만 보면 건물 일부만 물에 걸친 가장자리 건물이 빠진다(2026-09-21 산청 87채)."""
-    pts, touch = [], []
-    for feature in building_features:
-        geometry = feature.get("geometry")
-        if not geometry:
-            continue
-        try:
-            shape = shapely.geometry.shape(geometry)
-            c = shape.centroid
-            hit = bool(hazard_shape is not None and shape.intersects(hazard_shape))
-        except Exception:
-            continue
-        pts.append((c.x, c.y))
-        touch.append(hit)
-    return np.array(pts, dtype=float).reshape(-1, 2), np.array(touch, dtype=bool)
-
-
-def find_isolated_buildings(
-    centroids: np.ndarray,
-    graph: nx.Graph,
-    reachable: set[tuple[float, float]],
-    baseline_reachable: set[tuple[float, float]] | None = None,
-) -> tuple[list[tuple[float, float]], dict[str, int]]:
-    """건물 무게중심 -> 최근접 도로 노드 매핑, 그 노드가 도달가능집합 밖이면 고립.
-
-    - 최근접 노드가 ISOLATION_MAX_SNAP_M보다 멀면 도로 데이터 밖 건물이라 판정에서 뺀다.
-    - baseline_reachable(위험 적용 전 도달가능집합)이 주어지면, 위험이 없어도 원래
-      대피소와 안 이어져 있던 건물(데이터 끊김/외딴 도로망)은 위험 때문에 고립된 게
-      아니므로 뺀다. 반환: (고립 건물 좌표, 통계 {unmapped, preexisting}).
-    """
-    stats = {"unmapped": 0, "preexisting": 0}
-    if len(centroids) == 0:
-        return [], stats
-    nodes, dist_m = _NodeIndex(graph).nearest(centroids)
-    isolated: list[tuple[float, float]] = []
-    for k, node in enumerate(nodes):
-        if dist_m[k] > ISOLATION_MAX_SNAP_M:
-            stats["unmapped"] += 1
-            continue
-        if node in reachable:
-            continue
-        if baseline_reachable is not None and node not in baseline_reachable:
-            stats["preexisting"] += 1
-            continue
-        isolated.append((float(centroids[k][0]), float(centroids[k][1])))
-    return isolated, stats
 
 
 def cluster_isolated_buildings(points: list[tuple[float, float]]) -> list[dict[str, Any]]:
@@ -379,6 +354,155 @@ def cluster_isolated_buildings(points: list[tuple[float, float]]) -> list[dict[s
     return clusters
 
 
+ROAD_OVERRIDES_PATH = Path(__file__).resolve().parent.parent / "data" / "road_overrides.json"
+
+# 구조차량 판정의 한계 — 응답마다 붙여, 0동이 "구조차량은 어디든 들어간다"로 읽히지 않게 한다.
+RESCUE_LIMIT_NOTE = (
+    "구조차량 판정은 높이 제한과 현장 보정 기록만 쓴다 — 도로 데이터에 폭 정보가 없고 "
+    "마을안길은 도로망에 없다"
+)
+
+
+def load_road_overrides() -> dict[str, dict]:
+    """현장 보정 기록 {link_id: {vehicle_passable, two_way, note, source, observed}}. 파일이 없으면 빈 dict.
+
+    지도에서는 큰길과 똑같은 선 하나로 그려지지만 실제로는 차 한 대 폭이라 교행이 안 되는
+    길이 있다(현장조사 2026-09-25). 도로 데이터에 폭이 없으니 현장에서 본 것을 여기 적는다.
+    """
+    if not ROAD_OVERRIDES_PATH.exists():
+        return {}
+    doc = json.loads(ROAD_OVERRIDES_PATH.read_text(encoding="utf-8"))
+    return {str(r["link_id"]): r for r in doc.get("links", [])}
+
+
+@dataclass
+class IsolationContext:
+    """그래프·건물 매핑처럼 위험과 무관한 것. 한 번만 만들고 위험 도형마다 evaluate()로 판정한다.
+
+    시각별 판정(37시각)에서 이걸 매번 다시 만들면 군 전체에서 시각당 8초가 걸린다."""
+
+    graph: nx.Graph
+    index: _NodeIndex
+    edges: list
+    edge_tree: Any
+    building_tree: Any
+    centroids: np.ndarray
+    node_of: list
+    dist_m: np.ndarray
+    vehicle_blocked: list
+    override_links: set
+
+
+def build_context(road_features: list[dict[str, Any]], building_features: list[dict[str, Any]]) -> IsolationContext:
+    from . import policy
+
+    graph = build_road_graph(road_features)
+    edges = list(graph.edges())
+    edge_tree = shapely.STRtree(shapely.linestrings([[u, v] for u, v in edges])) if edges else None
+
+    shapes = []
+    for feature in building_features:
+        geometry = feature.get("geometry")
+        if not geometry:
+            continue
+        try:
+            shapes.append(shapely.geometry.shape(geometry))
+        except Exception:
+            continue
+    building_tree = shapely.STRtree(shapes) if shapes else None
+    centroids = np.array([(g.centroid.x, g.centroid.y) for g in shapes], dtype=float).reshape(-1, 2)
+    index = _NodeIndex(graph)
+    node_of, dist_m = index.nearest(centroids)
+
+    # 구조차량 통행 불가 엣지. rest_veh_h("이륜차")는 쓰지 않는다 — 이륜차 통행 **금지**(고속국도)라
+    # 구조차량과 무관하다. 높이 제한(cm)이 구조차량 높이보다 낮거나, 현장에서 통행 불가로 적은 링크만.
+    height_cm = float(policy.load().value("rescue_vehicle_height_m")) * 100
+    overrides = load_road_overrides()
+    vehicle_blocked, override_links = [], set()
+    for u, v, data in graph.edges(data=True):
+        override = overrides.get(str(data.get("link_id")))
+        try:
+            rest_cm = float(data.get("rest_h") or 0)
+        except (TypeError, ValueError):
+            rest_cm = 0.0
+        if override is not None and override.get("vehicle_passable") is False:
+            vehicle_blocked.append((u, v))
+            override_links.add(str(data.get("link_id")))
+        elif 0 < rest_cm < height_cm:
+            vehicle_blocked.append((u, v))
+    return IsolationContext(graph, index, edges, edge_tree, building_tree, centroids, node_of,
+                            dist_m if len(node_of) else np.array([]), vehicle_blocked, override_links)
+
+
+def evaluate(ctx: IsolationContext, shelters: list[tuple[float, float]], hazard,
+             closed_edges: list[tuple] | tuple = ()) -> dict[str, Any]:
+    """위험 도형 하나(shapely 또는 None)에 대한 고립 판정.
+
+    반환: isolated_idx(도로가 끊겨 고립된 건물 인덱스), direct_idx(위험영역에 겹친 건물),
+    rescue_limited_idx(주민은 갈 수 있지만 구조차량은 못 들어가는 건물), removed_edges,
+    usable_shelters, reachable, stats{unmapped, preexisting}.
+    """
+    usable = [s for s in shelters if hazard is None or not hazard.contains(shapely.geometry.Point(*s))]
+    closed = list(closed_edges)
+
+    # 기준 도달성은 통제·위험 적용 **전**이다. 통제 때문에 끊긴 건물이 "원래 끊겨 있던
+    # 건물"로 숨으면 안 된다.
+    baseline = reachable_from_shelters(ctx.graph, usable, ctx.index)
+    removed: list[tuple] = []
+    if hazard is not None and ctx.edge_tree is not None:
+        removed = [ctx.edges[k] for k in ctx.edge_tree.query(hazard, predicate="intersects")]
+    cut = nx.restricted_view(ctx.graph, [], closed + removed)
+    reach = reachable_from_shelters(cut, usable, ctx.index)
+    if ctx.vehicle_blocked:
+        reach_vehicle = reachable_from_shelters(
+            nx.restricted_view(ctx.graph, [], closed + removed + ctx.vehicle_blocked), usable, ctx.index)
+    else:
+        reach_vehicle = reach
+
+    direct: set[int] = set()
+    if hazard is not None and ctx.building_tree is not None:
+        direct = {int(k) for k in ctx.building_tree.query(hazard, predicate="intersects")}
+
+    isolated, rescue_limited = [], []
+    stats = {"unmapped": 0, "preexisting": 0}
+    for k, node in enumerate(ctx.node_of):
+        if k in direct:
+            continue
+        if ctx.dist_m[k] > ISOLATION_MAX_SNAP_M:
+            stats["unmapped"] += 1
+            continue
+        if node not in baseline:
+            stats["preexisting"] += 1
+            continue
+        if node not in reach:
+            isolated.append(k)
+        elif node not in reach_vehicle:
+            rescue_limited.append(k)
+    return {
+        "isolated_idx": isolated,
+        "direct_idx": sorted(direct),
+        "rescue_limited_idx": rescue_limited,
+        "removed_edges": removed,
+        "usable_shelters": usable,
+        "reachable": reach,
+        "stats": stats,
+    }
+
+
+def _points(ctx: IsolationContext, idx: list[int]) -> list[tuple[float, float]]:
+    return [(float(ctx.centroids[k][0]), float(ctx.centroids[k][1])) for k in idx]
+
+
+def _point_fc(points: list[tuple[float, float]], **props) -> dict[str, Any]:
+    return {
+        "type": "FeatureCollection",
+        "features": [
+            {"type": "Feature", "geometry": {"type": "Point", "coordinates": [lon, lat]}, "properties": dict(props)}
+            for lon, lat in points
+        ],
+    }
+
+
 def check_isolation(
     bbox: tuple[float, float, float, float],
     shelter_candidates_lonlat: list[tuple[float, float]],
@@ -387,7 +511,7 @@ def check_isolation(
     """§7 /isolation-check의 핵심 로직.
 
     반환: {isolated_areas, isolated_buildings, isolated_building_count,
-           blocked_roads, warnings}
+           blocked_roads, rescue_limited_buildings, rescue_limited_count, warnings}
     """
     warnings: list[str] = []
     road_features = fetch_roads(bbox)
@@ -396,37 +520,32 @@ def check_isolation(
                 "isolated_buildings": {"type": "FeatureCollection", "features": []},
                 "isolated_building_count": 0,
                 "blocked_roads": {"type": "FeatureCollection", "features": []},
+                "rescue_limited_buildings": {"type": "FeatureCollection", "features": []},
+                "rescue_limited_count": 0,
                 "warnings": ["해당 영역에 도로 데이터 없음"]}
 
-    # 위험영역 안에 있는 대피소는 후보에서 뺀다 — 물에 잠기는 곳으로 대피시킬 수 없다.
     hazard = hazard_shape(hazard_polygon)
-    if hazard is not None:
-        usable = [s for s in shelter_candidates_lonlat if not hazard.contains(shapely.geometry.Point(*s))]
-        if len(usable) != len(shelter_candidates_lonlat):
-            warnings.append(f"위험영역 안에 든 대피소 {len(shelter_candidates_lonlat) - len(usable)}곳은 후보에서 제외")
-        shelter_candidates_lonlat = usable
+    ctx = build_context(road_features, fetch_buildings(bbox))
+    ev = evaluate(ctx, shelter_candidates_lonlat, hazard)
 
-    graph = build_road_graph(road_features)
-    baseline_reachable = reachable_from_shelters(graph, shelter_candidates_lonlat)
-    removed_edges = remove_hazard_edges(graph, hazard_polygon)
-    blocked_roads = blocked_road_features(removed_edges)
+    # 위험영역 안에 있는 대피소는 후보에서 뺀다 — 물에 잠기는 곳으로 대피시킬 수 없다.
+    excluded = len(shelter_candidates_lonlat) - len(ev["usable_shelters"])
+    if excluded:
+        warnings.append(f"위험영역 안에 든 대피소 {excluded}곳은 후보에서 제외")
+    removed_edges = ev["removed_edges"]
+    blocked_roads = blocked_road_features(removed_edges, ctx.graph)
     if removed_edges:
         warnings.append(f"위험지역과 겹치는 도로 {len(removed_edges)}개 구간 제거")
-
-    reachable = reachable_from_shelters(graph, shelter_candidates_lonlat)
-    if not reachable:
+    if not ev["reachable"]:
         warnings.append("대피소 근처에서 도로 그래프를 찾지 못함 — 도달가능성 계산 불가")
 
-    centroids, touches = _building_centroids(fetch_buildings(bbox), hazard)
     # 위험영역(침수)에 조금이라도 겹치는 건물은 도로 연결 여부와 무관하게 "대피소 도달 불가"로 센다 —
     # 건물 자체가 물에 잠기는데, 도로 데이터가 성겨서 가장 가까운 노드가 멀리 있는 마른 도로에
     # 이어져 있다는 이유로 안전해 보이면 안 된다(2026-09-21 산청 실측: 침수 건물 805채 중 179채가
     # 이 이유로 "도달 가능"으로 빠졌다). 도로 끊김으로 인한 고립과는 성격이 달라 개수를 따로 적는다.
-    direct_points: list[tuple[float, float]] = []
-    if touches.any():
-        direct_points = [(float(x), float(y)) for x, y in centroids[touches]]
-        centroids = centroids[~touches]
-    isolated_points, stats = find_isolated_buildings(centroids, graph, reachable, baseline_reachable)
+    isolated_points = _points(ctx, ev["isolated_idx"])
+    direct_points = _points(ctx, ev["direct_idx"])
+    stats = ev["stats"]
     if direct_points:
         warnings.append(f"위험영역에 조금이라도 겹치는 건물 {len(direct_points)}채는 도로 연결과 무관하게 직접 피해로 포함(길이 끊겨서가 아니라 건물이 잠기는 경우)")
         isolated_points = isolated_points + direct_points
@@ -434,8 +553,15 @@ def check_isolation(
         warnings.append(f"도로에서 {int(ISOLATION_MAX_SNAP_M)}m 넘게 떨어진 건물 {stats['unmapped']}개는 도로 데이터 밖이라 판정 제외")
     if stats["preexisting"]:
         warnings.append(f"위험과 무관하게 원래 대피소와 도로가 이어지지 않던 건물 {stats['preexisting']}개는 제외(도로 데이터 끊김 가능성)")
-    clusters = cluster_isolated_buildings(isolated_points)
 
+    rescue_points = _points(ctx, ev["rescue_limited_idx"])
+    if rescue_points:
+        warnings.append(f"주민은 대피소까지 갈 수 있지만 구조차량이 들어가기 어려운 건물 {len(rescue_points)}동(높이 제한·현장 보정 기록 기준)")
+    if ctx.override_links:
+        warnings.append(f"현장 보정 기록 {len(ctx.override_links)}개 링크 반영")
+    warnings.append(RESCUE_LIMIT_NOTE)
+
+    clusters = cluster_isolated_buildings(isolated_points)
     features = []
     building_point_features = []
     for cluster_id, c in enumerate(clusters):
@@ -467,5 +593,7 @@ def check_isolation(
         # 위험영역과 겹쳐 그래프에서 제거된 도로 구간. 고립 판정의 부산물이지만
         # "어느 도로가 끊기는가"는 그 자체로 대피 의사결정 정보라 함께 내보낸다.
         "blocked_roads": blocked_roads,
+        "rescue_limited_buildings": _point_fc(rescue_points, kind="rescue_limited"),
+        "rescue_limited_count": len(rescue_points),
         "warnings": warnings,
     }
